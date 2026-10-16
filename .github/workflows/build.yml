@@ -38,6 +38,17 @@ jobs:
       - run: docker build --output build-ci-psp .
       - run: test -f build-ci-psp/EBOOT.PBP
 
+  # SH-4 -> C emitter: hand-written snippets assembled, recompiled, compiled
+  # with the host compiler and executed.  Needs no game data.
+  emitter-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tests/emitter/run_tests.py
+
   # Desktop target with clang + Ninja, then run the hello-world.
   desktop:
     runs-on: windows-latest
