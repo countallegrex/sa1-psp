@@ -281,8 +281,9 @@ Each one has a single exit test. Do not start the next before the test passes.
 - [ ] **M7 Launcher.** One executable: pick dump → EBOOT + Memory Stick
       folder, with toolchain and recompiler fetched on first run and every
       step resumable. Exit: a fresh Windows machine with only the launcher
-      and a dump produces a working `PSP/GAME/SA1PSP/`. The repo is made
-      public after this passes `tools/check_clean.py --all`.
+      and a dump produces a working `PSP/GAME/SA1PSP/`. The GitHub repo stays
+      **private** until this passes `tools/check_clean.py --all`, and it is
+      made public only after the maintainer explicitly says so at that point.
 
 ## 9. Risks, ranked
 
