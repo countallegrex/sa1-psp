@@ -252,9 +252,10 @@ structure makes tractable.
 
 Each one has a single exit test. Do not start the next before the test passes.
 
-- [ ] **M-1 Toolchain.** Windows: git, CMake, Ninja, LLVM/clang or MSVC,
+- [x] **M-1 Toolchain.** Windows: git, CMake, Ninja, LLVM/clang or MSVC,
       Python deps. PSP: pspsdk (`pspdev`), PPSSPP for iteration. Exit: a
       hello-world builds for both desktop and PSP from one CMake tree.
+      *Passed 2026-10-16; see `docs/m-1-toolchain.md`.*
 - [ ] **M0 Function map.** Run Dream-Recomp discovery on `1ST_READ.BIN`;
       trace a Flycast playthrough (title → Station Square → Emerald Coast) to
       list every executed function; identify SDK entry points. Exit: a
@@ -355,9 +356,12 @@ sa1-psp/                      this repo (public)
 - Dump extracted at `..\private\dump\sa1_us_1005\`, `1ST_READ.BIN` descrambled.
 - `..\private\archives\EBOOT_skeleton.PBP` is a 176 KB skeleton titled
   "SA1 PSP", no game code.
-- Installed: Git 2.55, GitHub CLI 2.102, Python 3.14, CMake 4.4.4,
-  Ninja 1.13.2, LLVM 23.1.3, VS 2022 Build Tools 17.14 (C++), PPSSPP 1.20.4.
-  Details and build commands: `docs/m-1-toolchain.md`.
-- M-1: desktop hello-world builds and runs. PSP half waits on WSL + Ubuntu,
-  because pspdev ships no Windows build; steps in `docs/m-1-toolchain.md`,
-  "Resume after reboot". **Still missing:** WSL, pspsdk, Flycast.
+- Installed on Windows: Git 2.55, GitHub CLI 2.102, Python 3.14,
+  CMake 4.4.4, Ninja 1.13.2, LLVM 23.1.3, VS 2022 Build Tools 17.14 (C++),
+  PPSSPP 1.20.4, WSL 2.7.13.
+- Installed in WSL (Ubuntu 26.04.1, everything as root): pspdev v20261001
+  at `/opt/pspdev` (psp-gcc 15.2.0), cmake 4.2.3, ninja 1.13.2. The PSP build
+  runs in WSL because pspdev ships no Windows build.
+- M-1 passed: desktop hello runs; `build-psp/EBOOT.PBP` (858 KB, unstripped)
+  boots in PPSSPP, and its 16 MB malloc succeeds. Build commands are in
+  `docs/m-1-toolchain.md`. **Still missing:** Flycast (needed for M0).
