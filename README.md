@@ -355,5 +355,9 @@ sa1-psp/                      this repo (public)
 - Dump extracted at `..\private\dump\sa1_us_1005\`, `1ST_READ.BIN` descrambled.
 - `..\private\archives\EBOOT_skeleton.PBP` is a 176 KB skeleton titled
   "SA1 PSP", no game code.
-- Installed: Git 2.55, GitHub CLI 2.102, Python 3.14. **Still missing:**
-  CMake, Ninja, a C compiler, pspsdk, PPSSPP, Flycast. M-1 is the first real step.
+- Installed: Git 2.55, GitHub CLI 2.102, Python 3.14, CMake 4.4.4,
+  Ninja 1.13.2, LLVM 23.1.3, VS 2022 Build Tools 17.14 (C++), PPSSPP 1.20.4.
+  Details and build commands: `docs/m-1-toolchain.md`.
+- M-1: desktop hello-world builds and runs. PSP half waits on WSL + Ubuntu,
+  because pspdev ships no Windows build; steps in `docs/m-1-toolchain.md`,
+  "Resume after reboot". **Still missing:** WSL, pspsdk, Flycast.
