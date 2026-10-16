@@ -1,0 +1,74 @@
+# ---- game-derived material: never committed ----
+# disc images and extracted disc files
+*.gdi
+*.cdi
+*.bin
+*.BIN
+*.raw
+*.RAW
+*.prs
+*.PRS
+*.pvr
+*.PVR
+*.pvm
+*.PVM
+*.adx
+*.ADX
+*.afs
+*.AFS
+*.mlt
+*.MLT
+*.sfd
+*.SFD
+*.aif
+*.AIF
+# anything built from the game
+*.pbp
+*.PBP
+*.prx
+*.PRX
+EBOOT*
+recomp/out/
+recomp/**/generated/
+assets_out/
+ms0/
+# the private side of the project (lives one level up, but belt and braces)
+private/
+../private/
+
+# ---- build and tooling ----
+build/
+build-*/
+out/
+cmake-build-*/
+*.o
+*.obj
+*.a
+*.lib
+*.elf
+*.exe
+*.dll
+*.pdb
+*.ilk
+.cache/
+compile_commands.json
+
+# ---- third-party tools fetched at build/launch time ----
+recomp/dream-recomp/
+recomp/dcrecomp/
+toolchain/
+launcher/downloads/
+
+# ---- editors / OS ----
+.vs/
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- python ----
+__pycache__/
+*.pyc
+.venv/
