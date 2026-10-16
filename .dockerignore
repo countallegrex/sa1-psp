@@ -1,0 +1,9 @@
+# Keep the build context to sources only.
+.git/
+build/
+build-*/
+out/
+cmake-build-*/
+.vs/
+.vscode/
+.idea/
