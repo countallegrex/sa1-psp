@@ -339,6 +339,11 @@ sa1-psp/                      this repo (public)
   (coverage, code size, frame time, RAM high-water).
 - Scratch and generated files never go in `port/`; disc data never leaves the
   dump folder.
+- CI (`.github/workflows/build.yml`) builds the PSP target in the pinned
+  pspdev image and the desktop target on Windows, and runs
+  `tools/check_clean.py --all` on every push and pull request. Keep it green.
+  No CI job may ever need game data. Local Docker build:
+  `docker build --output build-ci-psp .` (see `docs/m-1-toolchain.md`).
 
 ## 12. Reference points (checked 2026-10-16)
 
