@@ -14,7 +14,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(SA1_RECOMP_OUT "${CMAKE_SOURCE_DIR}/recomp/out" CACHE PATH
     "Directory holding recompiled game code (generated, never committed)")
 
-if(TARGET STREQUAL "psp")
+if("${TARGET}" STREQUAL "psp")
   if(NOT DEFINED ENV{PSPDEV})
     message(FATAL_ERROR "PSPDEV is not set; install pspsdk (M-1).")
   endif()
