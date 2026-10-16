@@ -70,6 +70,51 @@ Produces `build-psp/EBOOT.PBP`. Run it in PPSSPP (Windows):
 PPSSPPWindows64.exe build-psp\EBOOT.PBP
 ```
 
+## Docker and CI (reproducible PSP build)
+
+The PSP build also runs in the official pspdev image, pinned to the same
+release (`pspdev/pspdev:v20261001`, plus its digest, in `Dockerfile` and
+`.github/workflows/build.yml`). `tools/build_psp.sh` holds the configure and
+build commands, and both the Dockerfile and CI call it. Docker builds go to
+`build-ci-psp/` so they never touch the WSL build in `build-psp/`.
+
+Any machine with Docker (Docker Desktop, or Docker Engine inside WSL), from
+`sa1-psp/`:
+
+```
+docker build --output build-ci-psp .
+```
+
+This leaves `build-ci-psp/EBOOT.PBP` on the host and nothing else.
+
+**Where the checkout lives matters.** Files under `/mnt/c/...` reach WSL and
+Docker through a slow file-sharing layer, so every build first copies the
+sources over it. Clone into the WSL filesystem instead, for example
+`git clone https://github.com/CountAllegrex/sa1-psp ~/sa1-psp`, and build
+there. For an interactive shell in the image, keep the sources in a named
+volume, not in a bind mount from `C:`:
+
+```
+docker volume create sa1psp-src
+docker run --rm -it -v sa1psp-src:/src -w /src pspdev/pspdev:v20261001 sh
+```
+
+Inside the container, run `git clone https://github.com/CountAllegrex/sa1-psp .`
+(once), then `sh tools/build_psp.sh`. Git needs `gh auth` or a token while
+the repo is private.
+
+CI (`.github/workflows/build.yml`) runs on every push and pull request:
+
+| Job | Runner | What it checks |
+|---|---|---|
+| `check-clean` | ubuntu-latest | `python3 tools/check_clean.py --all`; fails if anything game-derived is tracked |
+| `psp` | ubuntu-latest, in the pspdev image | builds the PSP target; uploads `EBOOT.PBP` as artifact `EBOOT-psp` |
+| `psp-docker` | ubuntu-latest | `docker build --output build-ci-psp .`, so the command above keeps working |
+| `desktop` | windows-latest | clang + Ninja build, runs the hello-world and checks its output |
+
+No job needs game data. Every job passed on the first push (run
+38952181011, commit `c947e11`).
+
 ## PSP hello-world notes
 
 - `PSP_MODULE_INFO("SA1PSP", PSP_MODULE_USER, 0, 1)`, main thread
