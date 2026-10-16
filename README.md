@@ -244,7 +244,7 @@ Two different problems:
 | Region | Budget | Note |
 |---|---|---|
 | Guest RAM | 16 MB | Can shrink to the measured high-water mark of the game heap. |
-| Recompiled code | **≤ 4.7 MB target; 13.1 MB measured with Dream-Recomp's emitter** | Measured at M0 (`docs/m0-report.md`): the game block is 0.94 MB of SH-4 (not 2–3 MB; the SDK block, 0.47 MB, is replaced). Dream-Recomp's LLE-shaped emission compiles to 13.1 MB of MIPS at `-Os` (13.9x), driven by register traffic through a context struct and a virtual call per load/store. Our own emitter (README §4) targets ≤ 5x; measured in M1. Further levers: drop never-executed functions found by tracing, per-level code paging. |
+| Recompiled code | **3.66 MB measured (M1, own emitter), 3.88x the SH-4 bytes; target was ≤ 4.7 MB** | Measured at M1 (`docs/m1-emitter-report.md`): block A (0.94 MB of SH-4; the SDK block is replaced) compiles to 3,655,809 B of MIPS `.text` at `-Os` with `recomp/emitter/`, against 13.1 MB (13.9x) for Dream-Recomp's LLE-shaped output at M0. Registers are C locals, RAM is one array, and call sites sync only the registers the callee reads or writes (0.38 memory operations per instruction). Further levers: drop never-executed functions found by tracing, trust the SH ABI for r8–r15 at every call, per-level code paging. |
 | Textures (main RAM) | 4–8 MB | Offline downscale; CLUT8 or DXT1. |
 | Audio buffers + SFX | 2–3 MB | |
 | Runtime, stacks, I/O | 2 MB | |
@@ -276,6 +276,13 @@ Each one has a single exit test. Do not start the next before the test passes.
       (memory, files from the card layout, pad, vsync, timers) + Ninja stubs
       that log. Exit: the game initialises, loads the title screen data, then
       loads Station Square without crashing, visible in the log.
+      *In progress (2026-10-16): the emitter is done (`recomp/emitter/`,
+      `docs/m1-emitter-report.md`): block A becomes 5,295 C functions, 3.66 MB
+      of MIPS at `-Os` (3.88x, target ≤ 5x), compiles with clang and psp-gcc,
+      51 snippet tests pass locally and run in CI, 408 indirect sites go through the function
+      table, no non-local returns needed. `hle/seam.h` holds the 289 seam
+      prototypes with logging stubs. Still to do: the Shinobi HLE bodies, a
+      boot `main`, and the Flycast executed-function trace.*
 - [ ] **M2 Desktop graphics.** Ninja HLE on OpenGL fixed function, reading
       models and textures from guest RAM. Exit: Emerald Coast completed with
       a controller, draw order correct, no desktop-only features.
@@ -385,3 +392,7 @@ sa1-psp/                      this repo (public)
   see `recomp/sa1_us_1005/README.md` for the two local patches it needs.
   **Still missing:** Flycast (not on winget; needs a manual download) for
   the executed-function trace.
+- M1 emitter done: `python recomp/emitter/emit_sa1.py --bin <1ST_READ.BIN>
+  --functions recomp/out/dream/sa1_us_1005.functions.json` writes
+  `recomp/out/emitter/` (26.8 MB of C, 32 chunks) in about a minute;
+  `python tests/emitter/run_tests.py` is the emitter's test suite.
