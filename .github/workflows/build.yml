@@ -47,7 +47,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - run: python3 tests/emitter/run_tests.py
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python tests/emitter/run_tests.py
 
   # Desktop target with clang + Ninja, then run the hello-world.
   desktop:
