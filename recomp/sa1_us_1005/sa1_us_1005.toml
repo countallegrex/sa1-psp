@@ -1,0 +1,27 @@
+# Sonic Adventure (USA) v1.005, per-title configuration for dream-translate
+# (recomp/dream-recomp/docs/game-config.md). Addresses only; nothing from the
+# disc is in this file. The binary path points outside the repository at the
+# user's own extracted dump (README §0).
+
+[game]
+id = "sa1_us_1005"
+title = "Sonic Adventure"
+region = "USA"
+product = "MK-51000"
+
+[disc]
+# SHA-1 is what dream-translate records; the SHA-256 is in README.md next to this file.
+sha1_1st_read = ""
+
+[binary]
+path = "../../../private/dump/sa1_us_1005/data/1ST_READ.BIN"   # descrambled, 6,735,488 bytes
+load_address = 0x8C010000          # where the BIOS loads the file
+link_address = 0x0C010000          # what the literal pools assume (P0 alias of the same RAM)
+entry = 0x8C010000
+
+[functions]
+pointers = true
+sweep = true
+# Seeds static discovery cannot reach; filled in as runs report them (M0: none yet).
+extra = []
+exclude = []
