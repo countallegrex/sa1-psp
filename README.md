@@ -182,10 +182,16 @@ because either can force us to own the emitter:
   native symbol instead" mechanism. If it only supports whole-program
   hardware emulation, we patch it.
 
-Fallback: write our own SH-4 → C emitter. SH-4 has ~200 instructions, fixed
-16-bit encoding; `sp00nznet/dcrecomp` (MIT, plain C11) is a readable
-reference and `Dream-Recomp` a second one. This is a known quantity, not a
-research problem.
+**Decided at M0 (2026-10-16, `docs/m0-report.md` §5): we write our own
+emitter.** Dream-Recomp stays in use for discovery only (function list,
+switch tables, coverage report), run as a separate process. Its emitted
+code is 32-bit clean and psp-gcc compiles it, but it `#include`s four GPLv2
+runtime headers that carry the instruction semantics and the call ABI, has
+no native-call hook in the emitter, routes every guest load/store through a
+virtual call, and comes out at 13.9x the SH-4 size on MIPS. SH-4 has ~200
+instructions, fixed 16-bit encoding; `sp00nznet/dcrecomp` (MIT, plain C11)
+is a readable reference and `Dream-Recomp` a second one. This is a known
+quantity, not a research problem.
 
 ### Interrupts and timing
 
@@ -238,7 +244,7 @@ Two different problems:
 | Region | Budget | Note |
 |---|---|---|
 | Guest RAM | 16 MB | Can shrink to the measured high-water mark of the game heap. |
-| Recompiled code | **unknown, the #1 risk** | SH-4 code is dense (16-bit opcodes). Naive emission is 4–8x bigger. 2–3 MB of SH-4 code could become 10–20 MB of MIPS. Mitigations: `-Os`, drop SDK code (it is replaced), drop never-executed functions found by tracing, keep per-function emission simple. Measure in M0. |
+| Recompiled code | **≤ 4.7 MB target; 13.1 MB measured with Dream-Recomp's emitter** | Measured at M0 (`docs/m0-report.md`): the game block is 0.94 MB of SH-4 (not 2–3 MB; the SDK block, 0.47 MB, is replaced). Dream-Recomp's LLE-shaped emission compiles to 13.1 MB of MIPS at `-Os` (13.9x), driven by register traffic through a context struct and a virtual call per load/store. Our own emitter (README §4) targets ≤ 5x; measured in M1. Further levers: drop never-executed functions found by tracing, per-level code paging. |
 | Textures (main RAM) | 4–8 MB | Offline downscale; CLUT8 or DXT1. |
 | Audio buffers + SFX | 2–3 MB | |
 | Runtime, stacks, I/O | 2 MB | |
@@ -256,12 +262,16 @@ Each one has a single exit test. Do not start the next before the test passes.
       Python deps. PSP: pspsdk (`pspdev`), PPSSPP for iteration. Exit: a
       hello-world builds for both desktop and PSP from one CMake tree.
       *Passed 2026-10-16; see `docs/m-1-toolchain.md`.*
-- [ ] **M0 Function map.** Run Dream-Recomp discovery on `1ST_READ.BIN`;
+- [x] **M0 Function map.** Run Dream-Recomp discovery on `1ST_READ.BIN`;
       trace a Flycast playthrough (title → Station Square → Emerald Coast) to
       list every executed function; identify SDK entry points. Exit: a
       report with discovered-vs-executed coverage ≥ 95 %, a named list of SDK
       entry points, and a measured emitted-code size. Decide here whether to
       keep Dream-Recomp's emitter or write ours.
+      *Static half passed 2026-10-16: 9,568 functions, 88.4 % of code bytes
+      decoded, 289 SDK entry points, 13.1 MB MIPS measured, decision: own
+      emitter (`docs/m0-report.md`, `docs/seam.md`). The Flycast
+      executed-function trace is still outstanding and is M1's first task.*
 - [ ] **M1 Desktop boot, no graphics.** Recompiled code + Shinobi HLE
       (memory, files from the card layout, pad, vsync, timers) + Ninja stubs
       that log. Exit: the game initialises, loads the title screen data, then
@@ -369,4 +379,9 @@ sa1-psp/                      this repo (public)
   runs in WSL because pspdev ships no Windows build.
 - M-1 passed: desktop hello runs; `build-psp/EBOOT.PBP` (858 KB, unstripped)
   boots in PPSSPP, and its 16 MB malloc succeeds. Build commands are in
-  `docs/m-1-toolchain.md`. **Still missing:** Flycast (needed for M0).
+  `docs/m-1-toolchain.md`.
+- M0 static work done: Dream-Recomp cloned and built in
+  `recomp/dream-recomp/` (ignored), its output in `recomp/out/` (ignored);
+  see `recomp/sa1_us_1005/README.md` for the two local patches it needs.
+  **Still missing:** Flycast (not on winget; needs a manual download) for
+  the executed-function trace.
