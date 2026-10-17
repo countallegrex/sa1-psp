@@ -4,6 +4,7 @@
 #include <pspkernel.h>
 #include <pspdebug.h>
 #include <pspdisplay.h>
+#include <pspsysmem.h>
 #include <stdlib.h>
 
 PSP_MODULE_INFO("SA1PSP", PSP_MODULE_USER, 0, 1);
@@ -47,9 +48,25 @@ int main(void)
     pspDebugScreenInit();
     pspDebugScreenPrintf("sa1-psp: hello from the PSP backend\n\n");
 
+    /* The numbers README section 7 budgets against: what this firmware
+     * actually leaves a user-mode EBOOT with MEMSIZE=1 in PARAM.SFO. */
+    pspDebugScreenPrintf("kernel: total free %u KB, largest block %u KB\n\n",
+                         (unsigned)sceKernelTotalFreeMemSize() / 1024u,
+                         (unsigned)sceKernelMaxFreeMemSize() / 1024u);
+
     void *guest_ram = malloc(GUEST_RAM_BYTES);
     pspDebugScreenPrintf("16 MB guest RAM allocation: %s\n", guest_ram ? "ok" : "FAILED");
     free(guest_ram);
+
+    /* Largest single malloc, by halving search, in 256 KB steps. */
+    unsigned lo = 0, hi = 64u * 1024u * 1024u;
+    while (hi - lo > 256u * 1024u) {
+        unsigned mid = lo + (hi - lo) / 2u;
+        void *p = malloc(mid);
+        if (p) { free(p); lo = mid; } else hi = mid;
+    }
+    pspDebugScreenPrintf("largest single malloc: %u KB\n", lo / 1024u);
+    pspDebugScreenPrintf("\nPress HOME to exit.\n");
 
     sceKernelSleepThread();
     return 0;
