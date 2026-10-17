@@ -25,6 +25,8 @@ MD5 for cross-checking against other tools: `060cad2ceefc07c7429085f30a356046`.
 |---|---|
 | `sa1_us_1005.toml` | Title config for `dream-translate game` (Dream-Recomp). Load/link/entry addresses, seeds, excludes. |
 | `sdk_entry_points.tsv` | The 289 SDK addresses that game code calls through literal pools, ranked by call sites, with behavioural names where known. Start of the seam table. |
+| `trace_seeds.txt` | The 68 executed call/tail-jump targets M0 discovery missed, from the Flycast trace (`tools/trace_diff.py`, `docs/m0-trace.md`). Also in `sa1_us_1005.toml` `extra`. |
+| `executed_entries.txt` | The 3,661 function entries (seeded list) executed on the M0 route: title → Station Square → Emerald Coast → Station Square. Addresses only. |
 
 ## Code layout of the binary (see `docs/seam.md`)
 
