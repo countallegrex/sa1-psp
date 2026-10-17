@@ -12,9 +12,11 @@ the seven overlay files the M0 route executed on the way to Station Square:
 | `SONICADV/EV0001.PRS`, `EV0002`, `EV0003`, `EV0006`, `EV002B` | event, `0x8CB80000` | opening events |
 | `SONICADV/SUMMARY.PRS` | area, `0x8C900000` | file select after the character select (added during the M1 boot, `docs/m1-boot-report.md`) |
 
-Not covered yet: `B_CHAOS0`, `STG01` (same slot, later on the route), the
-movie player `MOVIE.BIN` (`0x8CEB0000`, skipped by a native entry at boot),
-and the other ~290 overlay files on the disc. The same steps apply to each.
+Not covered here: the movie player `MOVIE.BIN` (`0x8CEB0000`, skipped by a
+native entry at boot) and the other overlay files on the disc. Sonic's
+story (stages, bosses, Sky Chase, the other fields, events `EV0001`–`EV002B`)
+is covered by `docs/overlays-sonic.md`, which also replaces the manual steps
+below with `tools/overlays.py new` / `build`.
 
 ## 1. Extraction
 
@@ -214,7 +216,8 @@ produces 5,343 C functions and 441,670 instructions (was 5,295 / 440,850
 from the unseeded list). Trace coverage is still 100.00 % of executed call
 targets.
 
-**Rule for every further overlay:** run `emit_overlay.py`, then add any
+**Rule for every further overlay** (`tools/overlays.py build` does the
+first and last step and prints the second's list): run `emit_overlay.py`, then add any
 "external target without a function" it prints to the main config. These are
 main-image entries that only overlays reach. Then run
 `python -I tools/gen_overlay_registry.py` so the loader hook knows the file
