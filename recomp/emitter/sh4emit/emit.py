@@ -266,11 +266,14 @@ class Program:
                 f.write("void %s(sh4_ctx *c);  /* %-40s %5d sites */\n" % (self.seam_name(addr), name or "-", sites))
         with open(os.path.join(out_dir, "seam_stubs.c"), "w", newline="\n") as f:
             f.write("/* generated: logging stubs for every seam entry point.  Replace one by\n"
-                    " * one with real HLE in hle/; the linker takes the real definition when\n"
-                    " * this file is excluded from the build. */\n")
-            f.write("#include \"seam.h\"\n\nvoid sa1_seam_stub(sh4_ctx *c, uint32_t addr, const char *name);\n\n")
+                    " * one with real HLE in hle/: the stubs are weak symbols, so a strong\n"
+                    " * definition anywhere in the link replaces the stub. */\n")
+            f.write("#include \"seam.h\"\n\nvoid sa1_seam_stub(sh4_ctx *c, uint32_t addr, const char *name);\n\n"
+                    "/* Weak, so a real definition in hle/ wins at link time without editing\n"
+                    " * this file (clang/COFF, gcc/ELF and psp-gcc all honour it). */\n"
+                    "#define SA1_WEAK __attribute__((weak))\n\n")
             for addr, (name, sites) in items:
-                f.write("void %s(sh4_ctx *c) { sa1_seam_stub(c, 0x%08xu, \"%s\"); c->r[0] = 0; }\n" % (
+                f.write("SA1_WEAK void %s(sh4_ctx *c) { sa1_seam_stub(c, 0x%08xu, \"%s\"); c->r[0] = 0; }\n" % (
                     self.seam_name(addr), addr | 0x80000000, name or ""))
             f.write("\nconst sa1_fn_entry sa1_seam_table[] = {\n")
             for addr in sorted(self.seam):

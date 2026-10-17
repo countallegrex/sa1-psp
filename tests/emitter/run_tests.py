@@ -541,6 +541,55 @@ case("indirect_call", """
  rts
  nop
 """, {"r6": None, "r15": DATA + 0x100}, {"r0": 3, "r1": 5}, calls=["callee"])
+# A callee-saved register held across a call to a function that itself makes
+# an unknown indirect call: mid's summary says "may write anything", so the
+# outer function reloads r10 after the call; the reload is only correct if the
+# outer function stored r10 first (M1 boot bug: SHC's sprintf lost its stream
+# struct pointer this way).
+case("callee_saved_across_indirect", """
+ mov.l r10,@-r15
+ sts.l pr,@-r15
+ mov #7,r10
+ bsr mid
+ nop
+ mov r10,r0
+ lds.l @r15+,pr
+ rts
+ mov.l @r15+,r10
+ .align 4
+mid:
+ sts.l pr,@-r15
+ mov #1,r4
+ jsr @r6
+ mov #2,r5
+ lds.l @r15+,pr
+ rts
+ nop
+""", {"r6": None, "r15": DATA + 0x100}, {"r0": 7}, calls=["callee"], extra=(0x14,))
+# An argument passed through untouched: outer sets r4, mid never mentions r4
+# and calls callee, which reads it.  r4 must be live-in of mid so that outer
+# stores it before the call (M1 boot bug: file names reached the loader
+# wrappers as stale garbage).
+case("passthrough_arg", """
+ sts.l pr,@-r15
+ mov #1,r4
+ bsr mid
+ nop
+ lds.l @r15+,pr
+ rts
+ nop
+ .align 4
+mid:
+ sts.l pr,@-r15
+ mov.l fn,r1
+ jsr @r1
+ mov #2,r5
+ lds.l @r15+,pr
+ rts
+ nop
+ .align 4
+fn: .long FNADDR
+""", {"r4": 100, "r15": DATA + 0x100}, {"r0": 3}, calls=["callee"], extra=(0x10,))
 case("tail_call", """
  mov.l fn,r1
  jmp @r1
@@ -673,7 +722,7 @@ def resolve_case_refs():
         for callee in c["calls"]:
             addr = BASE + index[callee] * STRIDE
             c["asm"] = c["asm"].replace("FNADDR", "%#x" % addr)
-            if c["name"] == "indirect_call":
+            if c["setup"].get("r6", 0) is None:
                 c["setup"]["r6"] = addr
 
 

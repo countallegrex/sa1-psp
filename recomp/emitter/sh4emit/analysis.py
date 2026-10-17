@@ -359,7 +359,13 @@ class FunctionAnalysis:
                     ci = self.calls[s]
                     live_after = live
                     live &= ~ci.may_write
-                    live |= ci.live_in & self.dirty_before_call(s)
+                    # The callee reads its live-in registers from the context:
+                    # a dirty one is stored at the site (read here), a clean one
+                    # must already be right in the context, which makes it
+                    # live-in of this function too (pass-through arguments).
+                    # Registers reloaded after the call are read here only
+                    # when dirty (sync_at_call stores them).
+                    live |= ci.live_in | (live_after & ci.may_write & self.dirty_before_call(s))
                     if ci.kind == "indirect" and b.call_reg is not None:
                         live |= bit(b.call_reg)
                 for (u, d) in reversed(self.ud[s]):
@@ -398,10 +404,17 @@ class FunctionAnalysis:
 
     # ------------------------------------------------------ emitter queries
     def sync_at_call(self, s):
-        """(store_set, reload_set) for the call ending block s."""
+        """(store_set, reload_set) for the call ending block s.
+
+        Stored: dirty registers the callee may read, plus dirty registers we
+        reload afterwards.  may_write is a may-set, so a reloaded register the
+        callee happened not to write must already hold our value in the
+        context; without that a callee-saved register held across a call to
+        a function containing an unknown indirect call came back stale
+        (tests/emitter: callee_saved_across_indirect)."""
         ci = self.calls[s]
-        store = self.dirty_before_call(s) & ci.live_in & ~bit(regs.PR)
         reload = self.live_out[s] & ci.may_write & ~bit(regs.PR)
+        store = self.dirty_before_call(s) & (ci.live_in | reload) & ~bit(regs.PR)
         return store, reload
 
     def store_at_exit(self, s):
