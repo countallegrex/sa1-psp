@@ -15,6 +15,57 @@ the US v1.005 dump and the `SONICADV` tree, on a GeForce GTX 1070 Ti.
 
 *(Screenshots of the running game are not included in the public repository.)*
 
+## 0. Are the bytes right? (texture review, 2026-10-17)
+
+Before more decode work, the question the maintainer asked: are the texture bytes
+correct before our decoder touches them? Two checks, both scripted and
+repeatable, neither commits game data:
+
+- **The extracted dump against the disc image.** `tools/verify_dump.py
+  ..\private\dump\sa1_us_1005` reads the high-density track's ISO9660
+  volume straight from `track03.bin` (2352-byte raw sectors, absolute
+  LBAs from 45000) and hashes every file against the extracted tree:
+  2,832 files, 1,020 MB, all identical, none missing.
+- **The archives in guest RAM against an independent decompression.** The
+  game reads each `.PRS` into its staging buffer at `0x8CD00000` and
+  decompresses it with its own, recompiled, routine; with
+  `SA1_PVM_SAVE_DIR=<dir>` the HLE writes every archive exactly as
+  `njLoadTexturePvmMemory` found it in RAM, and `tools/pvm_ram_check.py
+  <log> <dir> <data root>` decompresses the source file on the PC with
+  `tools/prs.py` (a clean-room PRS decoder) and compares byte for byte.
+  On the scripted route: 86 archive loads from 66 files (characters,
+  menus, Station Square, Emerald Coast, the sky dome's `BG_BEACH.PRS`,
+  `OBJ_BEACH.PRS`, ...), all identical. Loose `.PVR` files never pass
+  through guest RAM (the HLE reads them from disc itself).
+
+So the extraction, the loader and the recompiled decompressor are clean,
+and any texture fault is in the decoder (`hle/ninja/pvr_decode.c`), which
+is where the sky-dome fault turned out to be (§8 item 1).
+
+**Review aids, for pointing at broken textures instead of hunting them:**
+
+- `--texdump DIR` writes every texture the HLE decodes as
+  `DIR/<index>_<gbix>_<fmt>_<flags>_<w>x<h>_<mips>.ppm` (fmt = 1555, 565,
+  4444, yuv, pal4, pal8; flags = tw, twmip, vq, vqmip, svq, svqmip, rect,
+  stride, twrect, pal4tw, ...; mips 0/1), and logs
+  `texture: dump <index> = <name>` so an index maps back to the texture's
+  name and archive.
+- `python tools/texsheet.py DIR OUT` tiles a dump directory into labelled
+  contact sheets (8x8 tiles of 96 px, label = index, format, flags, size)
+  as `OUT/sheet_NNN.png` with an `index.txt`.
+- F9 in the window (or `--mark FRAME` from a script) saves
+  `DIR/mark_<frame>.ppm` and logs the indices and formats of every texture
+  bound in that frame (`mark:` lines), so a broken thing on screen can be
+  named by index.
+
+The scripted route's dump and sheets are in `..\private\texreview\`
+(`dump\`, 2,514 textures; `sheets\`, 40 sheets; `pvm\`, the 86
+archives; `marks\`, frames 3000 and 6000 with their bound-texture lists
+in the log). To review: look through the sheets, note the index of every
+tile that looks wrong, and group the indices by the format and flags in
+their labels; each group names one decode path to fix and one synthetic
+case to add to `tests/ninja/pvr_decode_test.c`.
+
 ## 1. What draws, and how
 
 The design question of M2 was answered by reading the game's renderer
@@ -161,7 +212,10 @@ task lists' parent/prev links; logs the first broken one with the task's
 main), `SA1_HANG_DUMP=FILE` (guest RAM when the watchdog fires),
 `SA1_KAMUI_DUMP=<frame>` (every header, pointer hand-off and writer call of
 that frame), `SA1_MODEL_DEBUG=1`, `SA1_NOVSYNC=1`, `SA1_REPORT_TOP=N`,
-`SA1_TEX_LOG=1` / `SA1_TEX_DUMP_DIR=<dir>` (every texture decode, as PPM).
+`SA1_TEX_LOG=1` / `SA1_TEX_DUMP_DIR=<dir>` (every texture decode, as PPM;
+`--texdump DIR` is the same with the review names of §0, plus F9 /
+`--mark FRAME`), `SA1_PVM_SAVE_DIR=<dir>` (every texture archive as found
+in guest RAM, for `tools/pvm_ram_check.py`).
 Debug builds (`CMAKE_BUILD_TYPE=Debug`, or `-DSA1_RAM_CHECK=ON`) check
 every guest access in the flat-RAM macros against the RAM window
 (`sh4_rt.h`, §8 item 4): an address outside it is logged once with the
