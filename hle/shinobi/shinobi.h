@@ -18,6 +18,7 @@ void shinobi_memory_init(void);
 /* gdfs.c: the GD-ROM file system over the data root */
 void shinobi_gdfs_init(void);
 void shinobi_gdfs_path(char *out, unsigned n, const char *name);
+const char *shinobi_last_opened_file(void);   /* path of the last gdFs open, "" before any */
 /* timer.c: syTmr up-counter, 1.28 counts per microsecond */
 uint32_t shinobi_timer_count(void);
 uint64_t shinobi_time_us(void);          /* virtual guest microseconds */

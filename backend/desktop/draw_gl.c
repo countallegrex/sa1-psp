@@ -432,6 +432,10 @@ int draw_screenshot(const char *path) {
 }
 
 /* ---- input --------------------------------------------------------------------- */
+static int mark_pressed;
+/* The mark key (F9) since the last call (desktop only; main.c). */
+int draw_gl_mark_pressed(void) { int m = mark_pressed; mark_pressed = 0; return m; }
+
 int draw_poll_input(struct hle_pad *p, int *quit) {
     *quit = 0;
 #ifndef SA1_NO_SDL
@@ -440,6 +444,7 @@ int draw_poll_input(struct hle_pad *p, int *quit) {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) *quit = 1;
         if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) *quit = 1;
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F9 && !e.key.repeat) mark_pressed = 1;
         if (e.type == SDL_CONTROLLERDEVICEADDED && !pad) pad = SDL_GameControllerOpen(e.cdevice.which);
     }
     uint32_t b = 0; int x = 0, y = 0, lt = 0, rt = 0;

@@ -26,6 +26,7 @@
 #include "ninja.h"
 #include "../shinobi/shinobi.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -89,6 +90,9 @@ static uint32_t clear_color = 0xFF000000u;
 static float fog_near = 1.0f, fog_far = 65535.0f;
 static uint32_t fog_color = 0xFF808080u;
 static const char *screenshot_path;
+static char mark_path[512];               /* the mark key: screenshot + bound-texture list */
+static int mark_active;
+static uint32_t mark_tex[512], mark_ntex;
 static uint32_t dump_frame;        /* SA1_KAMUI_DUMP=<frame>: log every header, pointer handoff and writer call of that frame */
 static int ptr_trace(void) { return dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2; }
 int kamui_ptr_trace(void) { return ptr_trace(); }
@@ -539,6 +543,11 @@ static int grow(void **p, uint32_t *cap, uint32_t need, size_t elem) {
 static void state_from_header(draw_state *s, uint32_t pcw, uint32_t isp, uint32_t tsp, uint32_t tcw, int list) {
     memset(s, 0, sizeof *s);
     s->texture = (pcw & 8) ? texture_from_tcw(tcw) : 0;
+    if (mark_active && s->texture) {
+        uint32_t i = 0;
+        while (i < mark_ntex && mark_tex[i] != s->texture) i++;
+        if (i == mark_ntex && mark_ntex < 512) mark_tex[mark_ntex++] = s->texture;
+    }
     if ((pcw & 8) && !s->texture) {
         static uint32_t logged[16], nlogged;
         int seen = 0;
@@ -752,6 +761,8 @@ static void render_lists(void) {
 }
 
 /* ---- the frame ------------------------------------------------------------- */
+static void mark_finish(void);
+
 /* 0x8C642440: kmRender-like, called once per frame after the game drew:
  * render the lists.  0x8C641F00: flip; the buffers restart. */
 void sdk_8c642440(sh4_ctx *c) {
@@ -772,6 +783,7 @@ void sdk_8c641f00(sh4_ctx *c) {
             else sa1_log("screenshot: cannot write %s (headless?)", screenshot_path);
             screenshot_path = NULL;
         }
+        mark_finish();
         draw_end_frame();
         frame_rendered = 0;
         frame_rendered_count++;
@@ -788,6 +800,25 @@ void sdk_8c6433e0(sh4_ctx *c) {         /* no-draw frame: keep the picture, drop
 }
 
 void kamui_set_screenshot(const char *path) { screenshot_path = path; }
+
+void kamui_mark_frame(const char *dir) {
+    snprintf(mark_path, sizeof mark_path, "%s/mark_%u.ppm", dir && *dir ? dir : ".", hle_frame_count());
+    screenshot_path = mark_path;
+    mark_active = 1; mark_ntex = 0;
+}
+static void mark_finish(void) {
+    if (!mark_active) return;
+    mark_active = 0;
+    sa1_log("mark: frame %u, %u textures bound (%s):", hle_frame_count(), mark_ntex, mark_path);
+    char line[256], one[64]; unsigned used = 0;
+    line[0] = 0;
+    for (uint32_t i = 0; i < mark_ntex; i++) {
+        texture_describe(mark_tex[i], one, sizeof one);
+        if (used + strlen(one) + 4 > sizeof line) { sa1_log("mark:   %s", line); line[0] = 0; used = 0; }
+        used += (unsigned)snprintf(line + used, sizeof line - used, "%s[%s]", used ? "  " : "", one);
+    }
+    if (used) sa1_log("mark:   %s", line);
+}
 
 void kamui_report(void) {
     sa1_log("render: %u frames presented; last frame %u draw calls, %u triangles, polygons op %u tr %u pt %u; "

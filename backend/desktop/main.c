@@ -4,6 +4,8 @@
  *          [--watch ADDR[:OFF...]]... [--press FRAME:BUTTONS[:HOLD]]... [--trace-funcs FILE]
  *          [--headless] [--scale N] [--screenshot FRAME:FILE.ppm]... [--stats N]
  *          [--stick FRAME:X:Y[:HOLD]]... [--poke FRAME:ADDR:VALUE[:SIZE]]... [--dump FRAME:FILE]...
+ *          [--texdump DIR]  (every decoded texture as PPM; F9 in the window, or --mark FRAME, saves a
+ *                            screenshot there and logs the textures bound in that frame)
  *          [--aspect wide|4:3] [--no-pad]
  *
  * Without --headless an SDL2 window opens at 480x272 times --scale (2 by
@@ -76,6 +78,11 @@ static struct { uint32_t frame, addr; int len; } hwwatch;   /* --hwwatch FRAME:A
 static struct { uint32_t frame, addr, value, size; } pokes[SHOT_MAX];
 static int npokes;
 void kamui_report(void);            /* hle/ninja/kamui.c: renderer counters */
+void kamui_mark_frame(const char *dir);
+void texture_set_dump_dir(const char *dir, unsigned min_w);
+int draw_gl_mark_pressed(void);     /* draw_gl.c: F9 */
+static const char *texdump_dir;     /* --texdump DIR: every decoded texture, and the F9 marks */
+static uint32_t mark_frames[SHOT_MAX]; static int nmarks;   /* --mark FRAME: the F9 mark from a script */
 void kamui_set_screenshot(const char *path);
 
 static void log_sink(const char *line) {
@@ -167,10 +174,12 @@ static void on_frame(uint32_t frame) {
     int quit = 0;
     if (!headless && draw_poll_input(&live, &quit) == 0) {
         if (quit) { sa1_log("window closed"); report_and_exit(0); }
+        if (draw_gl_mark_pressed()) kamui_mark_frame(texdump_dir);
         if (no_pad) { live = (hle_pad){0}; }
         if (!scripted) { hle_pad_state = live; b = live.buttons; }
         else { hle_pad_state.x = live.x; hle_pad_state.y = live.y; hle_pad_state.ltrig = live.ltrig; hle_pad_state.rtrig = live.rtrig; }
     }
+    for (int i = 0; i < nmarks; i++) if (mark_frames[i] == frame) { kamui_mark_frame(texdump_dir); break; }
     if (stick_scripted || headless) { hle_pad_state.x = (int8_t)sx; hle_pad_state.y = (int8_t)sy; }
     b = input_tape_pad(frame, b, scripted);
     if (b != hle_pad_state.buttons) sa1_log("pad: buttons 0x%x", b);
@@ -219,6 +228,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--trace-funcs") && i + 1 < argc) trace_path = argv[++i];
         else if (!strcmp(argv[i], "--headless")) headless = 1;
         else if (!strcmp(argv[i], "--no-pad")) no_pad = 1;
+        else if (!strcmp(argv[i], "--texdump") && i + 1 < argc) { texdump_dir = argv[++i]; texture_set_dump_dir(texdump_dir, 0); }
+        else if (!strcmp(argv[i], "--mark") && i + 1 < argc && nmarks < SHOT_MAX) mark_frames[nmarks++] = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--aspect") && i + 1 < argc) { const char *a = argv[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; }
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--stats") && i + 1 < argc) stats_every = atoi(argv[++i]);

@@ -20,6 +20,9 @@
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
 
+static char last_opened[200];           /* the last file opened (debug aids name their source by it) */
+const char *shinobi_last_opened_file(void) { return last_opened; }
+
 #include <stdio.h>
 #include <string.h>
 
@@ -139,6 +142,7 @@ void sdk_8c6016d6(sh4_ctx *c) {
     hle_wr16(h + H_INUSE, 1);
     hle_wr16(h + H_STATUS, 0);
     sa1_log("gdFs: open \"%s\" (%u bytes) -> handle %d", path, size, i);
+    snprintf(last_opened, sizeof last_opened, "%s", path);
     RET(h);
 }
 

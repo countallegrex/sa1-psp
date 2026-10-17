@@ -51,6 +51,11 @@ int kamui_select_texture(uint32_t n);
 void texture_init(void);
 /* Resolves a TCW to a backend texture handle (0 when none). */
 uint32_t texture_from_tcw(uint32_t tcw);
+void texture_set_dump_dir(const char *dir, unsigned min_w);   /* --texdump: every decode as PPM */
+int texture_describe(uint32_t handle, char *buf, unsigned n);
+/* The mark key (F9): screenshot of the next rendered frame into dir, and
+ * the textures bound in it listed in the log. */
+void kamui_mark_frame(const char *dir);
 int texture_select_gindex(uint32_t gbix);
 uint32_t texture_memory_bytes(void);
 int texture_count(void);

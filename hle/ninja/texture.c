@@ -39,7 +39,7 @@
 #define MAX_ENTRIES 0x800
 
 static uint32_t memlist_base, memlist_count;
-typedef struct { uint32_t handle; uint32_t bytes; int used; uint32_t gbix; } mem_slot;
+typedef struct { uint32_t handle; uint32_t bytes; int used; uint32_t gbix; uint32_t index; uint16_t w, h; uint8_t pixfmt, datafmt; } mem_slot;
 static mem_slot slots[MAX_ENTRIES];
 static uint32_t total_bytes;
 static int ntex;
@@ -62,6 +62,27 @@ static int log2u(uint32_t v) { int n = 0; while ((1u << n) < v && n < 12) n++; r
 /* Decodes the PVR-T at p (length n) into a 16-bit PSP-order image.
  * Returns the backend handle, 0 on failure; *w, *h, *fmt describe it. */
 static const char *decode_name = "";      /* the texture being decoded, for the debug log and dumps */
+static uint32_t decode_index;              /* running number of decodes (the review index) */
+static int decode_datafmt;
+/* Review aid (--texdump DIR / SA1_TEX_DUMP_DIR): every decoded texture as
+ * <index>_<gbix>_<fmt>_<flags>_<w>x<h>_<mips>.ppm; tools/texsheet.py tiles
+ * a directory of them into labelled contact sheets. */
+static const char *dump_dir;
+static unsigned dump_min_w = 128;
+void texture_set_dump_dir(const char *dir, unsigned min_w) { dump_dir = dir; dump_min_w = min_w; }
+static const char *pixfmt_name(int f) {
+    static const char *n[] = {"1555", "565", "4444", "yuv", "bump", "pal4", "pal8"};
+    return f >= 0 && f < 7 ? n[f] : "fmt?";
+}
+static const char *datafmt_name(int f) {
+    switch (f) {
+    case 1: return "tw"; case 2: return "twmip"; case 3: return "vq"; case 4: return "vqmip";
+    case 5: return "pal4tw"; case 6: return "pal4mip"; case 7: return "pal8tw"; case 8: return "pal8mip";
+    case 9: return "rect"; case 0xB: return "stride"; case 0xD: return "twrect"; case 0x10: return "svq"; case 0x11: return "svqmip";
+    default: return "data?";
+    }
+}
+static int datafmt_mips(int f) { return f == 2 || f == 4 || f == 6 || f == 8 || f == 0x11; }
 static uint32_t decode_pvrt(const uint8_t *p, uint32_t n, int *out_w, int *out_h, int *out_fmt, uint32_t *out_bytes, uint32_t *gbix_out) {
     pvr_info info;
     int r = pvr_parse(p, n, &info);
@@ -85,11 +106,16 @@ static uint32_t decode_pvrt(const uint8_t *p, uint32_t n, int *out_w, int *out_h
         return 0;
     }
     uint32_t handle = draw_texture_create((int)w, (int)h, fmt, img, 0, NULL);
-    const char *dump_dir = getenv("SA1_TEX_DUMP_DIR");      /* debug aid: every decoded texture as PPM, 16-bit expanded */
-    if (dump_dir && w >= (uint32_t)(getenv("SA1_TEX_DUMP_MIN") ? atoi(getenv("SA1_TEX_DUMP_MIN")) : 128)) {
+    decode_index++; decode_datafmt = datafmt;
+    if (!dump_dir && getenv("SA1_TEX_DUMP_DIR")) {
+        dump_dir = getenv("SA1_TEX_DUMP_DIR");
+        if (getenv("SA1_TEX_DUMP_MIN")) dump_min_w = (unsigned)atoi(getenv("SA1_TEX_DUMP_MIN"));
+    }
+    if (dump_dir && w >= dump_min_w) {
         char path[512]; FILE *o;
-        static unsigned dump_seq;
-        snprintf(path, sizeof path, "%s/tex_%03u_%s_%ux%u_p%d_d%x.ppm", dump_dir, dump_seq++, decode_name, w, h, pixfmt, datafmt);
+        snprintf(path, sizeof path, "%s/%04u_%u_%s_%s_%ux%u_%d.ppm", dump_dir, decode_index, info.gbix == PVR_NO_GINDEX ? 0 : info.gbix,
+                 pixfmt_name(pixfmt), datafmt_name(datafmt), w, h, datafmt_mips(datafmt));
+        sa1_log("texture: dump %04u = %s (%s %s %ux%u, gbix %u)", decode_index, decode_name, pixfmt_name(pixfmt), datafmt_name(datafmt), w, h, info.gbix);
         if ((o = fopen(path, "wb")) != NULL) {
             fprintf(o, "P6\n%u %u\n255\n", w, h);
             for (uint32_t i = 0; i < w * h; i++) {
@@ -144,6 +170,7 @@ static int load_entry(const uint8_t *p, uint32_t n, uint32_t gbix_hint, const ch
     int i = find_free();
     if (i < 0) { draw_texture_destroy(handle); sa1_log("texture: memory list full (%u entries)", memlist_count); return -1; }
     slots[i].used = 1; slots[i].handle = handle; slots[i].bytes = bytes; slots[i].gbix = gbix;
+    slots[i].index = decode_index; slots[i].w = (uint16_t)w; slots[i].h = (uint16_t)h; slots[i].pixfmt = (uint8_t)pixfmt; slots[i].datafmt = (uint8_t)decode_datafmt;
     total_bytes += bytes; ntex++;
     uint32_t e = entry_addr((uint32_t)i);
     hle_wr32(e + 0, gbix); hle_wr32(e + 4, 0);
@@ -180,6 +207,16 @@ int texture_select_gindex(uint32_t gbix) {
     hle_wr32(KM_CTX_TSP, (hle_rd32(KM_CTX_TSP) & ~63u) | (hle_rd32(e + 8) & 63));
     hle_wr32(KM_CTX_TCW, hle_rd32(e + 12));
     return 1;
+}
+
+/* "<index> <fmt> <flags> <w>x<h>" of a live texture handle (the mark key). */
+int texture_describe(uint32_t handle, char *buf, unsigned n) {
+    for (uint32_t i = 0; i < memlist_count; i++) if (slots[i].used && slots[i].handle == handle) {
+        snprintf(buf, n, "%04u %s %s %ux%u", slots[i].index, pixfmt_name(slots[i].pixfmt), datafmt_name(slots[i].datafmt), slots[i].w, slots[i].h);
+        return 1;
+    }
+    snprintf(buf, n, "handle %u?", handle);
+    return 0;
 }
 
 uint32_t texture_from_tcw(uint32_t tcw) {
@@ -318,6 +355,14 @@ void sdk_8c608134(sh4_ctx *c) {
         off = chunk_end;
     }
     sa1_log("njLoadTexturePvm(0x%08x -> 0x%08x names 0x%08x): %u textures (flags 0x%x, first gbix %u)%s, %d live, %u bytes", data, tl, names, count, flags, count ? ents[0].gbix : 0, fail ? " (some failed)" : "", ntex, total_bytes);
+    const char *save_dir = getenv("SA1_PVM_SAVE_DIR");    /* tools/pvm_ram_check.py: the archive as found in guest RAM */
+    if (save_dir && off <= avail) {
+        static unsigned seq; char path[512], fname[64]; FILE *o;
+        snprintf(fname, sizeof fname, "pvm_%03u_%08x.bin", seq++, data);
+        snprintf(path, sizeof path, "%s/%s", save_dir, fname);
+        if ((o = fopen(path, "wb")) != NULL) { fwrite(p, 1, off, o); fclose(o); }
+        sa1_log("pvm: saved %s (%u bytes at 0x%08x) from \"%s\"", fname, off, data, shinobi_last_opened_file());
+    }
     free(ents);
     RET(fail ? -1 : 1);
 }
