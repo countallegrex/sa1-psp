@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -15,6 +16,7 @@
 #else
 #include <dirent.h>
 #include <sys/stat.h>
+#include <ucontext.h>
 #endif
 
 static char data_root[1024] = ".";
@@ -88,3 +90,85 @@ int sa1_plat_dir_list(const char *dir, void (*cb)(const char *name, uint32_t siz
     return 0;
 #endif
 }
+
+/* ---- coroutines: Windows fibers, or ucontext elsewhere ---------------------- */
+struct sa1_coro {
+    void (*fn)(void *);
+    void *arg;
+#ifdef _WIN32
+    LPVOID fiber;
+#else
+    ucontext_t uc;
+    void *stack;
+#endif
+};
+
+static sa1_coro main_coro;
+
+#ifdef _WIN32
+static VOID CALLBACK coro_start(LPVOID p) {
+    sa1_coro *co = (sa1_coro *)p;
+    co->fn(co->arg);
+    sa1_log("coroutine: entry function returned; back to main");
+    for (;;) SwitchToFiber(main_coro.fiber);
+}
+
+sa1_coro *sa1_plat_coro_main(void) {
+    if (!main_coro.fiber) main_coro.fiber = ConvertThreadToFiber(NULL);
+    return &main_coro;
+}
+
+sa1_coro *sa1_plat_coro_create(void (*fn)(void *arg), void *arg, unsigned stack_bytes) {
+    sa1_plat_coro_main();
+    sa1_coro *co = calloc(1, sizeof *co);
+    if (!co) return NULL;
+    co->fn = fn; co->arg = arg;
+    co->fiber = CreateFiber(stack_bytes, coro_start, co);
+    if (!co->fiber) { free(co); return NULL; }
+    return co;
+}
+
+void sa1_plat_coro_switch(sa1_coro *to) { SwitchToFiber(to->fiber); }
+
+void sa1_plat_coro_destroy(sa1_coro *co) {
+    if (co == &main_coro || !co) return;
+    DeleteFiber(co->fiber);
+    free(co);
+}
+#else
+static sa1_coro *running = &main_coro;
+
+static void coro_start(void) {
+    sa1_coro *co = running;
+    co->fn(co->arg);
+    sa1_log("coroutine: entry function returned; back to main");
+    for (;;) sa1_plat_coro_switch(&main_coro);
+}
+
+sa1_coro *sa1_plat_coro_main(void) { return &main_coro; }
+
+sa1_coro *sa1_plat_coro_create(void (*fn)(void *arg), void *arg, unsigned stack_bytes) {
+    sa1_coro *co = calloc(1, sizeof *co);
+    if (!co) return NULL;
+    co->fn = fn; co->arg = arg;
+    co->stack = malloc(stack_bytes);
+    getcontext(&co->uc);
+    co->uc.uc_stack.ss_sp = co->stack;
+    co->uc.uc_stack.ss_size = stack_bytes;
+    co->uc.uc_link = NULL;
+    makecontext(&co->uc, coro_start, 0);
+    return co;
+}
+
+void sa1_plat_coro_switch(sa1_coro *to) {
+    sa1_coro *from = running;
+    running = to;
+    swapcontext(&from->uc, &to->uc);
+}
+
+void sa1_plat_coro_destroy(sa1_coro *co) {
+    if (co == &main_coro || !co) return;
+    free(co->stack);
+    free(co);
+}
+#endif

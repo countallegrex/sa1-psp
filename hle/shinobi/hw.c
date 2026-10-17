@@ -35,7 +35,7 @@ static uint32_t tmu_rate_hz(void) {
 
 static uint32_t tmu_tcnt1(void) {
     if (!(tmu_tstr & 2)) return tmu_tcnt1_start;
-    uint64_t el = sa1_plat_time_us() - tmu_tcnt1_t0;
+    uint64_t el = shinobi_time_us() - tmu_tcnt1_t0;
     uint64_t ticks = el * tmu_rate_hz() / 1000000u;
     uint64_t period = (uint64_t)tmu_tcor1 + 1;
     uint64_t start = tmu_tcnt1_start;
@@ -64,12 +64,12 @@ static void hw_wr(uint32_t addr, int size, uint32_t v, int *handled) {
     *handled = 1;
     switch (addr) {
     case 0xFFD80004u:
-        if ((v & 2) && !(tmu_tstr & 2)) tmu_tcnt1_t0 = sa1_plat_time_us();
+        if ((v & 2) && !(tmu_tstr & 2)) tmu_tcnt1_t0 = shinobi_time_us();
         else if (!(v & 2) && (tmu_tstr & 2)) tmu_tcnt1_start = tmu_tcnt1();
         tmu_tstr = v;
         break;
     case 0xFFD80014u: tmu_tcor1 = v; break;
-    case 0xFFD80018u: tmu_tcnt1_start = v; tmu_tcnt1_t0 = sa1_plat_time_us(); break;
+    case 0xFFD80018u: tmu_tcnt1_start = v; tmu_tcnt1_t0 = shinobi_time_us(); break;
     case 0xFFD8001Cu: tmu_tcr1 = v; break;
     case 0xFF00001Cu: case 0xFF000038u: case 0xFF00003Cu: case 0xA05F78BCu: break;
     default: *handled = 0; break;

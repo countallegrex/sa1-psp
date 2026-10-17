@@ -77,15 +77,45 @@ sa1_fn sa1_fn_lookup(uint32_t addr) {
 }
 
 uint32_t sa1_watch_addr;
-static uint32_t watch_last, watch_init;
+#define WATCH_MAX 8
+typedef struct { uint32_t base; int32_t off[4]; int noff; uint32_t last; int init; char spec[48]; } sa1_watch;
+static sa1_watch watches[WATCH_MAX];
+static int nwatches;
+
+int sa1_watch_add(const char *spec) {
+    if (nwatches >= WATCH_MAX) return -1;
+    sa1_watch *w = &watches[nwatches];
+    memset(w, 0, sizeof *w);
+    strncpy(w->spec, spec, sizeof w->spec - 1);
+    char *end;
+    w->base = (uint32_t)strtoul(spec, &end, 0);
+    while (*end == ':' && w->noff < 4) w->off[w->noff++] = (int32_t)strtol(end + 1, &end, 0);
+    nwatches++;
+    return 0;
+}
+
+static int watch_value(const sa1_watch *w, uint32_t *out) {
+    uint32_t a = w->base;
+    for (int i = 0; i < w->noff; i++) {
+        if ((a & 0x1F000000u) != 0x0C000000u) return 0;      /* chain broken: not in RAM */
+        a = RD32(a, 0) + (uint32_t)w->off[i];
+    }
+    if ((a & 0x1F000000u) != 0x0C000000u) return 0;
+    *out = RD32(a, 0);
+    return 1;
+}
 
 void sa1_watch_check(const char *where) {
-    if (!sa1_watch_addr) return;
-    uint32_t v = RD32(sa1_watch_addr, 0);
-    if (!watch_init) { watch_init = 1; watch_last = v; return; }
-    if (v != watch_last) {
-        sa1_log("watch: 0x%08x changed 0x%08x -> 0x%08x (%s)", sa1_watch_addr, watch_last, v, where);
-        watch_last = v;
+    if (sa1_watch_addr && nwatches == 0) { char b[16]; snprintf(b, sizeof b, "0x%x", sa1_watch_addr); sa1_watch_add(b); sa1_watch_addr = 0; nwatches = 1; sa1_watch_addr = 1; }
+    for (int i = 0; i < nwatches; i++) {
+        sa1_watch *w = &watches[i];
+        uint32_t v;
+        if (!watch_value(w, &v)) continue;
+        if (!w->init) { w->init = 1; w->last = v; continue; }
+        if (v != w->last) {
+            sa1_log("watch: %s changed 0x%08x -> 0x%08x (%s)", w->spec, w->last, v, where);
+            w->last = v;
+        }
     }
 }
 
@@ -215,4 +245,41 @@ void sa1_seam_report(int top) {
     sa1_log("seam report: %u distinct entries called", n);
     for (uint32_t i = 0; i < n && (int)i < top; i++)
         sa1_log("  %10u  0x%08x  %s", sorted[i]->hits, sorted[i]->addr | 0x80000000u, sorted[i]->name);
+}
+
+/* ---- function-execution trace (-finstrument-functions) ------------------ */
+#define TRACE_BUCKETS 65536
+typedef struct { void *fn; uint32_t first, hits; } trace_rec;
+static trace_rec *trace_tab;
+static uint32_t trace_n;
+uint32_t (*sa1_trace_frame)(void);
+
+__attribute__((no_instrument_function))
+void __cyg_profile_func_enter(void *fn, void *callsite) {
+    (void)callsite;
+    if (!trace_tab) {
+        trace_tab = (trace_rec *)calloc(TRACE_BUCKETS, sizeof(trace_rec));
+        if (!trace_tab) return;
+    }
+    uint32_t i = (uint32_t)(((uintptr_t)fn >> 4) * 2654435761u) & (TRACE_BUCKETS - 1);
+    for (;;) {
+        trace_rec *r = &trace_tab[i];
+        if (r->fn == fn) { r->hits++; return; }
+        if (r->fn == NULL) {
+            if (trace_n + 1 >= TRACE_BUCKETS) return;
+            r->fn = fn; r->hits = 1; r->first = sa1_trace_frame ? sa1_trace_frame() : 0;
+            trace_n++;
+            return;
+        }
+        i = (i + 1) & (TRACE_BUCKETS - 1);
+    }
+}
+
+__attribute__((no_instrument_function))
+void __cyg_profile_func_exit(void *fn, void *callsite) { (void)fn; (void)callsite; }
+
+void sa1_trace_dump(void (*cb)(void *fn, uint32_t first_frame, uint32_t hits, void *arg), void *arg) {
+    if (!trace_tab) return;
+    for (uint32_t i = 0; i < TRACE_BUCKETS; i++)
+        if (trace_tab[i].fn) cb(trace_tab[i].fn, trace_tab[i].first, trace_tab[i].hits, arg);
 }

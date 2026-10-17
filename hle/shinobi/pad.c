@@ -42,8 +42,8 @@ void sdk_8c601e2a(sh4_ctx *c) {
     HLE_ENTER(0x8c601e2au, "pdExecPeripheralServer");
     uint32_t r = PAD_TABLE;
     uint32_t on = hle_pad_state.buttons;
-    hle_wr32(r + 0, 1);                              /* a standard controller on A0 */
-    hle_wr32(r + 4, 0x000FE060u);                    /* support: digital, analog, triggers */
+    hle_wr32(r + 0, 0x01000000u);                    /* Maple function: controller, on A0 */
+    hle_wr32(r + 4, 0x000CFE0Eu);                    /* support bits; the game tests 0x000C000E (0x8C050C2E) */
     hle_wr32(r + 8, on);
     hle_wr32(r + 12, ~on);
     hle_wr32(r + 16, on & ~prev_on);

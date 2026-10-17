@@ -1,7 +1,14 @@
 /* main.c - desktop boot of the recompiled game (M1: no graphics, no audio).
  *
  *   sa1psp <1ST_READ.BIN> <data root> [--frames N] [--seconds S] [--log FILE]
- *          [--watch ADDR]
+ *          [--watch ADDR[:OFF...]]... [--press FRAME:BUTTONS[:HOLD]]... [--trace-funcs FILE]
+ *
+ * --trace-funcs writes, at exit, every host function that ran with the frame
+ * it first ran in (needs a build with -DSA1_TRACE_FUNCS=ON).
+ *
+ * --press scripts the controller: at guest frame FRAME the buttons (hex
+ * mask, hle.h: Start 8, A 4, B 2, Up 0x10 ...) are held for HOLD frames
+ * (default 2).  This is how the boot test walks the title and menus.
  *
  * The data root is the directory that holds SONICADV/ (the disc's file
  * tree, which is also what the Memory Stick carries).  Nothing is built in:
@@ -23,8 +30,13 @@
 void fn_8c010000(sh4_ctx *c);
 void plat_set_data_root(const char *root);
 void plat_backtrace(void);
+void plat_trace_dump(const char *path);
+static const char *trace_path;
 
 static FILE *log_file;
+#define PRESS_MAX 64
+static struct { uint32_t frame, buttons, hold; } presses[PRESS_MAX];
+static int npresses;
 static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
@@ -39,6 +51,7 @@ static void log_sink(const char *line) {
 static void report_and_exit(int code) {
     sa1_log("exit: %u frames, %.3f s", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6);
     sa1_seam_report(30);
+    if (trace_path) plat_trace_dump(trace_path);
     if (log_file) fclose(log_file);
     exit(code);
 }
@@ -48,11 +61,17 @@ static void on_trap(sh4_ctx *c, uint32_t pc, const char *what) {
     plat_backtrace();
     sa1_log("exit: trap after %u frames, %.3f s", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6);
     sa1_seam_report(30);
+    if (trace_path) plat_trace_dump(trace_path);
     if (log_file) fclose(log_file);
 }
 
 static void on_frame(uint32_t frame) {
     sa1_watch_check("frame");
+    uint32_t b = 0;
+    for (int i = 0; i < npresses; i++)
+        if (frame >= presses[i].frame && frame < presses[i].frame + presses[i].hold) b |= presses[i].buttons;
+    if (b != hle_pad_state.buttons) sa1_log("pad: buttons 0x%x", b);
+    hle_pad_state.buttons = b;
     if (frame_limit && frame >= frame_limit) {
         sa1_log("frame limit %u reached", frame_limit);
         report_and_exit(0);
@@ -79,7 +98,15 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) frame_limit = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) time_limit_us = (uint64_t)(atof(argv[++i]) * 1e6);
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log_file = fopen(argv[++i], "w");
-        else if (!strcmp(argv[i], "--watch") && i + 1 < argc) sa1_watch_addr = (uint32_t)strtoul(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--watch") && i + 1 < argc) { sa1_watch_add(argv[++i]); sa1_watch_addr = 1; }
+        else if (!strcmp(argv[i], "--trace-funcs") && i + 1 < argc) trace_path = argv[++i];
+        else if (!strcmp(argv[i], "--press") && i + 1 < argc && npresses < PRESS_MAX) {
+            char *spec = argv[++i], *end;
+            presses[npresses].frame = (uint32_t)strtoul(spec, &end, 0);
+            presses[npresses].buttons = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 16) : 0;
+            presses[npresses].hold = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : 2;
+            npresses++;
+        }
         else if (!bin) bin = argv[i];
         else if (!root) root = argv[i];
         else { fprintf(stderr, "unexpected argument %s\n", argv[i]); return 2; }
@@ -92,6 +119,7 @@ int main(int argc, char **argv) {
     sa1_set_log_sink(log_sink);
     sa1_trap_hook = on_trap;
     hle_frame_hook = on_frame;
+    sa1_trace_frame = hle_frame_count;
 
     sa1_ram = calloc(SA1_RAM_SIZE + SA1_RAM_SLACK, 1);
     if (!sa1_ram) { fprintf(stderr, "cannot allocate guest RAM\n"); return 1; }

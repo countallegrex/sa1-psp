@@ -7,3 +7,8 @@ address	hle	what
 8c099872	hle/overlay/overlay_loader.c	PRS texture-archive loader that decompresses through 0x8C900000
 8c10be0c	hle/shinobi/hw.c	syRtc read (A-tail Katana piece): polls the G2 bus for the RTC; r0 = seconds since 1950-01-01, or -1
 8c051790	hle/shinobi/vsync.c	game frame wait: spins while the VBlank handler 0x8C051810 has not yet brought 0x8C754EC0 to zero; the wrapper advances guest frames instead
+8c099a00	hle/game/tasks.c	game task system init: root task record at 0x8C7A0A0C, current task pointer 0x8C7A0A08
+8c099a50	hle/game/tasks.c	task yield: saves the register context on the task's stack and switches to the next task (native coroutine switch)
+8c099bba	hle/game/tasks.c	task start (task, fn, arg): builds the initial frame on the task's stack (native coroutine create)
+8c099b2c	hle/game/tasks.c	task kill-and-switch (task): kills it and, if it was the current one, resumes the next task
+8c099ab2	hle/game/tasks.c	task kill (task): recursive; the wrapper releases the native coroutine

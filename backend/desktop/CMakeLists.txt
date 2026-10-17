@@ -11,6 +11,7 @@ if(SA1_GAME_SRCS)
        "${CMAKE_SOURCE_DIR}/hle/*.c"
        "${CMAKE_SOURCE_DIR}/hle/bios/*.c"
        "${CMAKE_SOURCE_DIR}/hle/shinobi/*.c"
+       "${CMAKE_SOURCE_DIR}/hle/game/*.c"
        "${CMAKE_SOURCE_DIR}/hle/ninja/*.c"
        "${CMAKE_SOURCE_DIR}/hle/sound/*.c"
        "${CMAKE_SOURCE_DIR}/hle/overlay/*.c")
@@ -37,7 +38,12 @@ if(SA1_GAME_SRCS)
   target_compile_options(sa1psp PRIVATE
     -fno-strict-aliasing -ffp-contract=off -Wall
     -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable -Wno-parentheses)
-  set_source_files_properties(${SA1_GAME_SRCS} ${SA1_OVERLAY_SRCS} PROPERTIES COMPILE_OPTIONS "${SA1_GAME_OPT}")
+  option(SA1_TRACE_FUNCS "Instrument the recompiled code for --trace-funcs (debug)" OFF)
+  set(SA1_GAME_FLAGS "${SA1_GAME_OPT}")
+  if(SA1_TRACE_FUNCS)
+    list(APPEND SA1_GAME_FLAGS -finstrument-functions)
+  endif()
+  set_source_files_properties(${SA1_GAME_SRCS} ${SA1_OVERLAY_SRCS} PROPERTIES COMPILE_OPTIONS "${SA1_GAME_FLAGS}")
   list(LENGTH SA1_GAME_SRCS n_game)
   list(LENGTH SA1_OVERLAY_SRCS n_ovl)
   message(STATUS "sa1psp: ${n_game} game chunks, ${n_ovl} overlay chunks from ${SA1_RECOMP_OUT}")

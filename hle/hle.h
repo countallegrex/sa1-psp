@@ -49,6 +49,17 @@ int sa1_plat_file_read(const char *path, uint32_t off, void *dst, uint32_t n);
  * as on the disc), one callback per entry.  Returns 0 on success. */
 int sa1_plat_dir_list(const char *dir, void (*cb)(const char *name, uint32_t size, void *arg), void *arg);
 
+/* ---- coroutines ------------------------------------------------------------ */
+/* The game's own task system switches guest stacks (hle/game/tasks.c); each
+ * guest task runs on a host execution context the backend provides: fibers
+ * or ucontext on desktop, threads handed a baton on the PSP.  Only one runs
+ * at a time; a switch returns when another context switches back. */
+typedef struct sa1_coro sa1_coro;
+sa1_coro *sa1_plat_coro_main(void);                 /* the context main() runs on */
+sa1_coro *sa1_plat_coro_create(void (*fn)(void *arg), void *arg, unsigned stack_bytes);
+void sa1_plat_coro_switch(sa1_coro *to);            /* from the running context */
+void sa1_plat_coro_destroy(sa1_coro *co);           /* never the running one */
+
 /* ---- input ---------------------------------------------------------------- */
 /* Dreamcast controller state, active-high: C 1, B 2, A 4, Start 8, Up 0x10,
  * Down 0x20, Left 0x40, Right 0x80, Z 0x100, Y 0x200, X 0x400, D 0x800.

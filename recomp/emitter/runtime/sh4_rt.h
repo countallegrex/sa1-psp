@@ -91,8 +91,16 @@ void sa1_register_fn(uint32_t addr, sa1_fn fn);
  * change) whenever the 32-bit word there differs from its last value.  The
  * runtime calls it at every seam hit and indirect call; the backend may
  * call it per frame. */
-extern uint32_t sa1_watch_addr;
+extern uint32_t sa1_watch_addr;          /* set directly: one plain address, or use sa1_watch_add */
+/* Up to 8 watches; a spec is "addr[:off[:off...]]": the chain of 32-bit
+ * loads *(…*(*(addr) + off) + off…), logged whenever its value changes. */
+int sa1_watch_add(const char *spec);
 void sa1_watch_check(const char *where);
+/* Function-execution trace (debug builds compiled with -finstrument-functions):
+ * records every host function entered, with the guest frame it was first
+ * seen in and a hit count.  sa1_trace_dump calls back once per function. */
+void sa1_trace_dump(void (*cb)(void *fn, uint32_t first_frame, uint32_t hits, void *arg), void *arg);
+extern uint32_t (*sa1_trace_frame)(void);
 /* Called by sa1_trap before abort(), if set (the backend prints its report). */
 extern void (*sa1_trap_hook)(sh4_ctx *c, uint32_t pc, const char *what);
 extern const sa1_fn_entry sa1_fn_table[];
