@@ -28,22 +28,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TAPES = os.path.join(ROOT, "tests", "replay")
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import tape_expect  # noqa: E402
+import tape_io  # noqa: E402
 
 
 def tape_end(path):
-    """The last frame a tape defines (its 'end' line, else its last record)."""
-    end = 0
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            p = line.split()
-            if not p or p[0].startswith("#"):
-                continue
-            if p[0] == "end":
-                end = max(end, int(p[1], 0))
-            elif p[0].isdigit():
-                count = int(p[6]) if len(p) > 6 else 1
-                end = max(end, int(p[0]) + count - 1)
-    return end
+    """The last frame a tape defines."""
+    return tape_io.read(path).end
 
 
 def find_exe(arg):

@@ -62,6 +62,29 @@ jobs:
             hle/overlay/overlay_loader.c recomp/emitter/runtime/sh4_rt.c -o loader_test
           ./loader_test
 
+  # Replay harness on synthetic data (tests/replay/README.md): tape format
+  # round trip through backend/desktop/input_tape.c and tools/tape_io.py,
+  # tools/tape_expect.py, the check evaluation, and tools/replay_test.py's
+  # skip path.  Needs no game data.
+  replay-harness:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build the tape test
+        shell: bash
+        run: |
+          ${{ matrix.os == 'windows-latest' && 'clang' || 'cc' }} -std=c11 -Wall -D_CRT_SECURE_NO_WARNINGS \
+            -Ihle -Irecomp/emitter/runtime -Ibackend/desktop tests/replay/tape_format_test.c \
+            backend/desktop/input_tape.c recomp/emitter/runtime/sh4_rt.c \
+            ${{ matrix.os == 'windows-latest' && ' ' || '-lm' }} -o tape_format_test
+      - run: python tests/replay/run_synthetic.py ./tape_format_test
+
   # Desktop target with clang + Ninja, then run the hello-world.
   desktop:
     runs-on: windows-latest

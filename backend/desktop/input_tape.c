@@ -314,7 +314,7 @@ int input_tape_start(const char *title_path) {
     if (watch_trace_path) {
         if (!watch_list_path) { fprintf(stderr, "--watch-trace needs --watch-list\n"); return -1; }
         if (load_watches(watch_list_path) != 0) return -1;
-        wtrace = fopen(watch_trace_path, "w");
+        wtrace = fopen(watch_trace_path, "wb");
         if (!wtrace) { fprintf(stderr, "watch: cannot write %s\n", watch_trace_path); return -1; }
         fprintf(wtrace, "frame");
         for (int i = 0; i < nwatches; i++) fprintf(wtrace, "\t%s", watches[i].name);
@@ -327,7 +327,7 @@ int input_tape_start(const char *title_path) {
     if (replay_path && load_tape(replay_path) != 0) return -1;
     if (check_path && load_checks(check_path) != 0) return -1;
     if (record_path) {
-        rec = fopen(record_path, "w");
+        rec = fopen(record_path, "wb");
         if (!rec) { fprintf(stderr, "record: cannot write %s\n", record_path); return -1; }
         fprintf(rec, "sa1psp-tape %d\ntitle-sha256 %s\nepoch %lld\ntool %s\n", TAPE_FORMAT, title_sha, (long long)epoch, TAPE_TOOL);
         fprintf(rec, "# FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]\n");
