@@ -7,10 +7,11 @@
  *   +0x4C..+0x54 direction (set by njSetLightDirection, normalised; copy at +0x9C)
  *   +0x68 near^2, +0x6C far^2, +0x70 cos^2 inner, +0x74 cos^2 outer,
  *   +0x78 1/(far-near), +0x7C far/(far-near), +0x8C inner|outer<<16
- *   +0xB4..+0xF0 premultiplied colours (intensity x colour)
+ *   +0x80 1/|cos^2 inner - cos^2 outer|, +0x84 intensity (1.0), +0x88 int(global 0x8C8EA3D0)
+ *   +0xB4..+0xF0 premultiplied colours (see premultiply)
  *   +0x124 type, +0x128 ambient, +0x12C diffuse, +0x130 specular
  *   +0x134 near, +0x138 far, +0x140 inner angle, +0x144 outer angle
- *   +0x14C r, +0x150 g, +0x154 b
+ *   +0x148 a (0.0), +0x14C r, +0x150 g, +0x154 b
  *
  * Part of sa1-psp (MIT). */
 #include "ninja.h"
@@ -22,14 +23,20 @@
 #define FARG(i) (c->fr[4 + (i)])
 static const float TURN = (float)(6.283185307179586 / 65536.0);
 
+/* The premultiplied colours, as njCreateLight / njSetLightColor /
+ * njSetLightIntensity (0x8C63AEC8 scales four floats) lay them out:
+ *   +0xB4  colour (a, r, g, b at +0x148..+0x154) x the light's intensity (+0x84)
+ *   +0xC4  that x ambient (+0x128)   +0xD4  x diffuse (+0x12C)   +0xE4  x specular (+0x130)
+ * (The first M2 body had ambient/diffuse/specular at +0xB4/+0xC4/+0xD4 and
+ * r,g,b,1 instead of a,r,g,b: anything reading the diffuse colour got the
+ * specular-scaled one.) */
 static void premultiply(uint32_t l) {
-    float r = hle_rdf(l + 0x14C), g = hle_rdf(l + 0x150), b = hle_rdf(l + 0x154);
-    float amb = hle_rdf(l + 0x128), dif = hle_rdf(l + 0x12C), spe = hle_rdf(l + 0x130);
-    const float k[4] = {amb, dif, spe, amb + dif};
-    for (int i = 0; i < 4; i++) {
-        uint32_t a = l + 0xB4 + 16u * (uint32_t)i;
-        hle_wrf(a, k[i] * r); hle_wrf(a + 4, k[i] * g); hle_wrf(a + 8, k[i] * b); hle_wrf(a + 12, 1.0f);
-    }
+    float k = hle_rdf(l + 0x84);
+    float base[4];
+    for (int i = 0; i < 4; i++) { base[i] = hle_rdf(l + 0x148 + 4u * (uint32_t)i) * k; hle_wrf(l + 0xB4 + 4u * (uint32_t)i, base[i]); }
+    const float f[3] = {hle_rdf(l + 0x128), hle_rdf(l + 0x12C), hle_rdf(l + 0x130)};   /* ambient, diffuse, specular */
+    for (int j = 0; j < 3; j++)
+        for (int i = 0; i < 4; i++) hle_wrf(l + 0xC4 + 16u * (uint32_t)j + 4u * (uint32_t)i, base[i] * f[j]);
 }
 static void ranges(uint32_t l) {
     float n = hle_rdf(l + 0x134), f = hle_rdf(l + 0x138);
@@ -42,6 +49,11 @@ static void angles(uint32_t l) {
     float ci = cosf((float)in * TURN), co = cosf((float)out * TURN);
     hle_wrf(l + 0x70, ci * ci); hle_wrf(l + 0x74, co * co);
     hle_wr32(l + 0x8C, in | out << 16);
+    /* +0x80: 1 / |cos^2 inner - cos^2 outer| for the spot types (0x88, 0xC8);
+     * the other types derive it from a helper (0x8C63AA04) not modelled here,
+     * the same value is used (no game code on the route reads it). */
+    float d = ci * ci - co * co;
+    hle_wrf(l + 0x80, d != 0.0f ? 1.0f / sqrtf(d * d) : 0.0f);
 }
 
 void sdk_8c63aa94(sh4_ctx *c) {         /* njCreateLight(light, type) */
@@ -58,8 +70,9 @@ void sdk_8c63aa94(sh4_ctx *c) {         /* njCreateLight(light, type) */
     hle_wrf(l + 0x128, 0.2f); hle_wrf(l + 0x12C, 1.0f); hle_wrf(l + 0x130, 0.3f);
     hle_wrf(l + 0x134, 1.0f); hle_wrf(l + 0x138, 65535.0f);
     hle_wr32(l + 0x140, 0x071C); hle_wr32(l + 0x144, 0x1555); hle_wr32(l + 0x148, 0);
-    hle_wrf(l + 0x14C, 1.0f); hle_wrf(l + 0x150, 1.0f); hle_wrf(l + 0x154, 1.0f);
-    hle_wrf(l + 0x84, 1.0f); hle_wr32(l + 0x88, 0);
+    hle_wrf(l + 0x148, 0.0f); hle_wrf(l + 0x14C, 1.0f); hle_wrf(l + 0x150, 1.0f); hle_wrf(l + 0x154, 1.0f);
+    hle_wrf(l + 0x84, 1.0f); hle_wr32(l + 0x88, (uint32_t)(int32_t)hle_rdf(0x8C8EA3D0u));
+    if (ARG0 != 0 && hle_rd32(LIGHT_COUNT) <= 4) sa1_log("njCreateLight: light %u at 0x%08x type 0x%x", n, l, ARG1);
     ranges(l); angles(l); premultiply(l);
 }
 void sdk_8c63ac14(sh4_ctx *c) {         /* njDeleteLight(light) */

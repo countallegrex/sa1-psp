@@ -93,7 +93,7 @@ static uint32_t dump_frame;        /* SA1_KAMUI_DUMP=<frame>: log every header, 
 static int ptr_trace(void) { return dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2; }
 int kamui_ptr_trace(void) { return ptr_trace(); }
 static int frame_rendered;
-static uint32_t stat_frames, stat_polys[3], stat_strips[3], stat_modvols, stat_overflow, stat_sprites;
+static uint32_t stat_frames, stat_polys[3], stat_strips[3], stat_modvols, stat_overflow, stat_sprites, stat_fogmode[4];
 static uint32_t last_tris, last_calls, frame_rendered_count, last_polys[3], frame_polys[3];
 
 /* ---- strip head access --------------------------------------------------- */
@@ -424,44 +424,100 @@ void sdk_8c608d14(sh4_ctx *c) {
 /* ---- background / border / fog ---------------------------------------------- */
 void sdk_8c60526a(sh4_ctx *c) { HLE_ENTER(0x8c60526au, "njSetBackColor"); clear_color = ARG0; }
 void sdk_8c605c10(sh4_ctx *c) { HLE_ENTER(0x8c605c10u, "njSetBorderColor"); (void)c; }
-void sdk_8c63fe20(sh4_ctx *c) { HLE_ENTER(0x8c63fe20u, "njFogColor"); fog_color = ARG0; draw_set_fog(fog_color, fog_near, fog_far); }
-void sdk_8c63fe3c(sh4_ctx *c) { HLE_ENTER(0x8c63fe3cu, "njSetFogDensity (ignored)"); (void)c; }
-void sdk_8c63fdc0(sh4_ctx *c) {         /* njGenerateFogTable(table): the default curve */
-    HLE_ENTER(0x8c63fdc0u, "njGenerateFogTable");
-    for (uint32_t i = 0; i < 128; i++) hle_wrf(ARG0 + 4 * i, 16.0f / (float)((16 + (i & 15)) << (i >> 4)));
+
+/* Table fog, as the hardware does it (PowerVR FOG_TABLE / FOG_DENSITY, what
+ * Flycast's fog_mode2 implements): the 128-entry table is indexed by
+ * z = density * (1/w), clamped to [1, 256): entry i covers
+ * z from (16 + (i & 15)) / 16 * 2^(i >> 4), so entry 0 is the farthest
+ * (w = density) and entry 127 the nearest (w = density / 248); beyond
+ * either end the end entry applies.  FOG_DENSITY holds an 8-bit float:
+ * mantissa (128..255, /128) in bits 15..8, signed exponent in bits 7..0.
+ * The Ninja entries: njSetFogDensity (0x8C63FE3C -> 0x8C652E38) writes
+ * that register word as given; njGenerateFogTable3 (0x8C63FB48) computes it
+ * from |far| and writes a linear table (below); njGenerateFogTable
+ * (0x8C63FDC0) writes the default curve 1/z (fog = w / density); njSetFogTable
+ * (0x8C652DD0) uploads the 128 floats as bytes.  The backends have linear
+ * fog only (sceGuFog), so a table is reduced to the w where it passes 0.02
+ * and 0.98. */
+static float fog_density = 1.0f;          /* FOG_DENSITY as a float: the w of entry 0 */
+static uint32_t fog_density_reg = 0x8000u;
+static float fog_table[128];
+static int fog_table_set;
+
+static float fog_entry_z(int i) { return (float)(16 + (i & 15)) / 16.0f * ldexpf(1.0f, i >> 4); }
+static void fog_apply(const char *why) {
+    if (fog_table_set) {
+        float wn = -1.0f, wf = -1.0f;
+        for (int i = 127; i >= 0; i--) {    /* from nearest to farthest */
+            float w = fog_density / fog_entry_z(i), d = fog_table[i];
+            if (wn < 0.0f && d > 0.02f) wn = w;
+            if (wf < 0.0f && d > 0.98f) wf = w;
+        }
+        if (wn < 0.0f) wn = 65535.0f;
+        if (wf < 0.0f) wf = 65535.0f;
+        if (wf <= wn) wf = wn + 1.0f;
+        fog_near = wn; fog_far = wf;
+    }
+    draw_set_fog(fog_color, fog_near, fog_far);
+    sa1_log("fog: %s: density %g (reg 0x%04x), colour 0x%08x -> linear near %.1f far %.1f (table[0] %.3f [64] %.3f [127] %.3f)", why,
+            fog_density, fog_density_reg, fog_color, fog_near, fog_far, fog_table[0], fog_table[64], fog_table[127]);
 }
-void sdk_8c63fb48(sh4_ctx *c) {         /* njGenerateFogTable3(table, near, far): linear */
+static void fog_set_density_reg(uint32_t reg) {
+    fog_density_reg = reg & 0xFFFFu;
+    fog_density = (float)((reg >> 8) & 255) / 128.0f * ldexpf(1.0f, (int)(int8_t)(reg & 255));
+}
+/* |far| as the FOG_DENSITY word: 8 mantissa bits of far / 2^e with far / 2^e in [1, 2). */
+static uint32_t fog_density_word(float afar) {
+    int e; float m = frexpf(afar, &e);    /* afar = m * 2^e, m in [0.5, 1) */
+    if (afar <= 0.0f) return 0x8000u;
+    m *= 2.0f; e -= 1;
+    uint32_t mant = (uint32_t)(m * 128.0f);
+    if (mant > 255) mant = 255;
+    return (mant & 0xFF) << 8 | ((uint32_t)e & 0xFF);
+}
+
+void sdk_8c63fe20(sh4_ctx *c) { HLE_ENTER(0x8c63fe20u, "njFogColor"); fog_color = ARG0; fog_apply("njFogColor"); }
+void sdk_8c63fe3c(sh4_ctx *c) {         /* njSetFogDensity(register word) -> kmSetFogDensity 0x8C652E38 */
+    HLE_ENTER(0x8c63fe3cu, "njSetFogDensity");
+    fog_set_density_reg(ARG0);
+    fog_apply("njSetFogDensity");
+    RET(0);
+}
+void sdk_8c63fdc0(sh4_ctx *c) {         /* njGenerateFogTable(table): the default curve, 1/z */
+    HLE_ENTER(0x8c63fdc0u, "njGenerateFogTable");
+    for (int i = 0; i < 128; i++) hle_wrf(ARG0 + 4u * (uint32_t)i, 1.0f / fog_entry_z(i));
+}
+/* njGenerateFogTable3(table, near, far), near and far negative (view z):
+ * density = |far| (so the table spans w up to |far|); with |near| within the
+ * table's range the table is 0 at the first entry nearer than |near| and
+ * rises linearly in w to 1 at |far|; otherwise it is the default curve. */
+void sdk_8c63fb48(sh4_ctx *c) {
     HLE_ENTER(0x8c63fb48u, "njGenerateFogTable3");
     float n = c->fr[4], f = c->fr[5];
-    if (n < -65535.0f) n = -65535.0f;
-    if (f < -65535.0f) f = -65535.0f;
-    n = -n; f = -f;
-    for (uint32_t i = 0; i < 128; i++) {
-        /* entry i covers 1/w = (16 + (i & 15)) / 16 * 2^((i >> 4) - 7): w = ... */
-        float invw = (float)(16 + (i & 15)) / 16.0f * ldexpf(1.0f, (int)(i >> 4) - 7);
-        float w = 1.0f / invw;
-        float d = (f - n) != 0.0f ? (w - n) / (f - n) : 1.0f;
-        if (d < 0.0f) d = 0.0f;
-        if (d > 1.0f) d = 1.0f;
-        hle_wrf(ARG0 + 4 * i, d);
+    uint32_t reg = n < -65535.0f ? 0x8010u : fog_density_word(-f);
+    fog_set_density_reg(reg);
+    float afar = -f, anear = -n;
+    if (anear > afar / 256.0f) {
+        int r7 = 0;
+        for (int i = 0; i < 128; i++) if (afar / fog_entry_z(i) > anear) r7++;
+        float wr = afar / fog_entry_z(r7 < 128 ? r7 : 127);   /* z of entry 128 would be 256 */
+        if (r7 == 128) wr = afar / 256.0f;
+        float span = afar - wr;
+        for (int i = 0; i < 128; i++) {
+            float d = 0.0f;
+            if (i < r7) d = 1.0f - (afar - afar / fog_entry_z(i)) / span;
+            hle_wrf(ARG0 + 4u * (uint32_t)i, d);
+        }
+    } else {
+        for (int i = 0; i < 128; i++) hle_wrf(ARG0 + 4u * (uint32_t)i, 1.0f / fog_entry_z(i));
     }
+    sa1_log("njGenerateFogTable3(0x%08x, near %.1f, far %.1f): density reg 0x%04x = %g", ARG0, n, f, reg, fog_density);
 }
-void sdk_8c63fe48(sh4_ctx *c) {         /* njSetFogTable(table): derive linear near/far */
+void sdk_8c63fe48(sh4_ctx *c) {         /* njSetFogTable(table) -> kmSetFogTable 0x8C652DD0 */
     HLE_ENTER(0x8c63fe48u, "njSetFogTable");
-    float wn = -1.0f, wf = -1.0f;
-    for (int i = 127; i >= 0; i--) {    /* from nearest to farthest */
-        float invw = (float)(16 + (i & 15)) / 16.0f * ldexpf(1.0f, (i >> 4) - 7);
-        float w = 1.0f / invw, d = hle_rdf(ARG0 + 4u * (uint32_t)i);
-        if (wn < 0.0f && d > 0.02f) wn = w;
-        if (wf < 0.0f && d > 0.98f) wf = w;
-    }
-    if (wn < 0.0f) wn = 65535.0f;
-    if (wf < 0.0f) wf = 65535.0f;
-    if (wf <= wn) wf = wn + 1.0f;
-    fog_near = wn; fog_far = wf;
-    draw_set_fog(fog_color, fog_near, fog_far);
-    sa1_log("fog: table 0x%08x -> linear near %.1f far %.1f (colour 0x%08x; table[0..7] %.3f %.3f %.3f %.3f, [64] %.3f, [96] %.3f, [127] %.3f)", ARG0, wn, wf, fog_color,
-            hle_rdf(ARG0), hle_rdf(ARG0 + 4), hle_rdf(ARG0 + 8), hle_rdf(ARG0 + 12), hle_rdf(ARG0 + 256), hle_rdf(ARG0 + 384), hle_rdf(ARG0 + 508));
+    for (int i = 0; i < 128; i++) fog_table[i] = hle_rdf(ARG0 + 4u * (uint32_t)i);
+    fog_table_set = 1;
+    fog_apply("njSetFogTable");
 }
 
 /* ---- the parser: TA parameters in guest RAM -> backend ------------------- */
@@ -502,6 +558,7 @@ static void state_from_header(draw_state *s, uint32_t pcw, uint32_t isp, uint32_
     s->filter = (uint8_t)((tsp >> 13) & 3);
     s->shade = (uint8_t)((tsp >> 6) & 3);
     s->fog = (uint8_t)((tsp >> 22) & 3);
+    stat_fogmode[s->fog]++;
     s->gouraud = (pcw >> 1) & 1;
     if (list == 0) s->use_alpha = 0;
 }
@@ -740,6 +797,7 @@ void kamui_report(void) {
             stat_frames ? stat_strips[0] / stat_frames : 0, stat_frames ? stat_strips[1] / stat_frames : 0);
     sa1_log("render: textures %d (%u bytes); TA buffer high-water op %u tr %u pt %u bytes, %u overflows; %u modifier volumes skipped, %u sprites",
             texture_count(), texture_memory_bytes(), buf_high[0], buf_high[1], buf_high[2], stat_overflow, stat_modvols, stat_sprites);
+    sa1_log("render: polygon headers by fog mode: table %u, per-vertex %u, none %u, table2 %u", stat_fogmode[0], stat_fogmode[1], stat_fogmode[2], stat_fogmode[3]);
 }
 
 /* ---- helpers for the native draw entries (draw2d.c) ------------------------ */
