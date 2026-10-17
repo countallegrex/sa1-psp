@@ -295,3 +295,5 @@ void sdk_8c5fba6c(sh4_ctx *c);  /* -                                            
 void sdk_8c5fba68(sh4_ctx *c);  /* -                                            1 sites */
 void sdk_8c5fba64(sh4_ctx *c);  /* -                                            1 sites */
 void sdk_8c5fb8a8(sh4_ctx *c);  /* -                                            1 sites */
+void sdk_8c5ff2e8(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c603384(sh4_ctx *c);  /* -                                            0 sites */

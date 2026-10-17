@@ -235,6 +235,11 @@ Consequences, carried to M1 (`docs/m0-report.md` §6):
    `ADVERTISE.PRS` and `ADV00.PRS` recompiled, plus the `EV*` files for the
    opening events or a way to skip them.
 
+Done for those seven files in `docs/m1-overlays.md`: per-overlay discovery
+and emission, 100 % of the 406 executed overlay call targets found with 12
+seeds. The four unexplained runs in §4 turned out to be main-image entries
+that only overlays call.
+
 ## 6. Exit test verdict
 
 - Discovered vs executed, `1ST_READ.BIN`: **97.76 %** of executed call

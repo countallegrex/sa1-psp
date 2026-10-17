@@ -2,7 +2,7 @@
 """Recompile the game block of Sonic Adventure US v1.005 to C.
 
     python recomp/emitter/emit_sa1.py --bin ../private/dump/sa1_us_1005/data/1ST_READ.BIN \
-        --functions recomp/out/dream/sa1_us_1005.functions.json \
+        --functions recomp/out/dream_seeded/sa1_us_1005.functions.json \
         --out recomp/out/emitter
 
 Inputs: the user's own 1ST_READ.BIN (never committed), the function list

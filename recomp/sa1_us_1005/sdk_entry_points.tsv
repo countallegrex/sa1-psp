@@ -292,3 +292,5 @@ address	sites	callers	is_entry	name	confidence	evidence
 8C5FBA68	1	1	0	-	-	-
 8C5FBA64	1	1	0	-	-	-
 8C5FB8A8	1	1	0	-	-	-
+8C5FF2E8	0	0	1	-	-	called only from ADVERTISE.PRS (code overlay), not from block A
+8C603384	0	0	1	-	-	called only from ADVERTISE.PRS (code overlay), not from block A

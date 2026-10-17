@@ -97,6 +97,9 @@ class FunctionAnalysis:
                 li, mw, fp = self.prog.summaries.get(t)
                 pres = self.prog.summaries.preserved.get(t, 0)
                 return CallInfo("direct", t, self.prog.fn_name(t), li & ~pres, mw & ~pres, fp)
+            if t in self.prog.extern:
+                # emitted in another unit (overlay -> main image): no summary here
+                return CallInfo("direct", t, self.prog.extern[t], regs.ALL, regs.ALL, IDENTITY)
             if t in self.prog.seam:
                 return CallInfo("seam", t, self.prog.seam_name(t), regs.SEAM_IN, regs.SEAM_OUT, IDENTITY)
             if self.prog.in_sdk(t):

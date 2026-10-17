@@ -24,23 +24,38 @@ static void sa1_log(const char *fmt, ...) {
     else fprintf(stderr, "%s\n", buf);
 }
 
-sa1_fn sa1_fn_lookup(uint32_t addr) {
-    uint32_t key = addr & 0x1FFFFFFFu;
-    uint32_t lo = 0, hi = sa1_fn_count;
+static const sa1_overlay *sa1_slots[SA1_SLOT_COUNT];
+
+void sa1_overlay_set(int slot, const sa1_overlay *ov) {
+    if (slot < 0 || slot >= SA1_SLOT_COUNT) return;
+    sa1_slots[slot] = ov;
+    sa1_log("overlay slot %d: %s", slot, ov ? ov->name : "(empty)");
+}
+
+const sa1_overlay *sa1_overlay_get(int slot) {
+    return slot >= 0 && slot < SA1_SLOT_COUNT ? sa1_slots[slot] : NULL;
+}
+
+static sa1_fn sa1_table_find(const sa1_fn_entry *t, uint32_t n, uint32_t key) {
+    uint32_t lo = 0, hi = n;
     while (lo < hi) {
         uint32_t mid = (lo + hi) >> 1;
-        uint32_t a = sa1_fn_table[mid].addr;
-        if (a == key) return sa1_fn_table[mid].fn;
-        if (a < key) lo = mid + 1; else hi = mid;
-    }
-    lo = 0; hi = sa1_seam_count;
-    while (lo < hi) {
-        uint32_t mid = (lo + hi) >> 1;
-        uint32_t a = sa1_seam_table[mid].addr;
-        if (a == key) return sa1_seam_table[mid].fn;
+        uint32_t a = t[mid].addr;
+        if (a == key) return t[mid].fn;
         if (a < key) lo = mid + 1; else hi = mid;
     }
     return NULL;
+}
+
+sa1_fn sa1_fn_lookup(uint32_t addr) {
+    uint32_t key = addr & 0x1FFFFFFFu;
+    for (int s = 0; s < SA1_SLOT_COUNT; s++) {
+        const sa1_overlay *ov = sa1_slots[s];
+        if (ov && key >= ov->code_lo && key < ov->code_hi)
+            return sa1_table_find(ov->fns, ov->count, key);
+    }
+    sa1_fn fn = sa1_table_find(sa1_fn_table, sa1_fn_count, key);
+    return fn ? fn : sa1_table_find(sa1_seam_table, sa1_seam_count, key);
 }
 
 void sa1_call(sh4_ctx *c, uint32_t addr) {

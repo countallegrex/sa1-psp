@@ -4,15 +4,23 @@
 Usage:
   trace_diff.py TRACE FUNCTIONS_JSON [--md OUT.md] [--seeds OUT.txt]
                 [--executed OUT.txt]
+                [--overlay FILE --base ADDR [--code-end ADDR]]
 
 TRACE           text file written by the patched Flycast (docs/m0-trace.md):
                   B vaddr size type branch   one line per distinct compiled block
                   D site target              one line per distinct dynamic jump/call
                 Several sessions may be appended to the same file.
 FUNCTIONS_JSON  Dream-Recomp's <id>.functions.json (entry/end in link space).
+--overlay FILE  diff a run-time-loaded overlay instead of 1ST_READ.BIN: FILE is
+                the decompressed overlay (outside the repo), loaded at --base.
+                Several files share a slot over a run, so trace blocks inside
+                the slot count only when their "M" bytes match FILE; the
+                image range becomes [base, base + len(FILE)) and the code
+                block [base, --code-end) (default: end of the last function).
 
-Nothing is read from the game binary. Addresses are normalised to the P0
-link-space spelling (0x0Cxxxxxx) that the function list uses.
+Without --overlay nothing is read from the game binary. Addresses are
+normalised to the P0 link-space spelling (0x0Cxxxxxx) that the function list
+uses.
 """
 from __future__ import annotations
 
@@ -34,6 +42,12 @@ BET_STATIC_JUMP, BET_STATIC_CALL = 0, 2
 BET_DYNAMIC_JUMP, BET_DYNAMIC_CALL = 8, 10
 
 
+def set_region(lo: int, hi: int, blocks: dict[str, tuple[int, int]]) -> None:
+    """Point the analysis at another image (an overlay) instead of 1ST_READ.BIN."""
+    global IMAGE_LO, IMAGE_HI, BLOCKS
+    IMAGE_LO, IMAGE_HI, BLOCKS = lo, hi, blocks
+
+
 def norm(a: int) -> int:
     """P0/P1/P2/P3 spelling -> the 29-bit physical address (0x0Cxxxxxx for RAM)."""
     return a & 0x1FFFFFFF
@@ -50,9 +64,11 @@ def block_of(a: int) -> str:
     return "data" if in_image(a) else "outside"
 
 
-def read_trace(path: str):
+def read_trace(path: str, keep=None):
+    """keep(vaddr, words) -> bool filters blocks by their M record (overlay mode)."""
     blocks: dict[int, tuple[int, int, int]] = {}   # vaddr -> (size, type, branch)
     edges: set[tuple[int, int]] = set()
+    mem: dict[int, list[int]] = {}
     sessions = 0
     with open(path, encoding="ascii", errors="replace") as f:
         for line in f:
@@ -70,7 +86,17 @@ def read_trace(path: str):
                     blocks[va] = (size, typ, norm(br))
             elif parts[0] == "D" and len(parts) == 3:
                 edges.add((norm(int(parts[1], 16)), norm(int(parts[2], 16))))
-    return blocks, edges, sessions
+            elif parts[0] == "M" and keep is not None and len(parts) >= 3:
+                va = norm(int(parts[1], 16))
+                words = [int(p, 16) for p in parts[2:]]
+                if len(words) > len(mem.get(va, [])):
+                    mem[va] = words
+    drop = []
+    if keep is not None:
+        drop = [va for va in blocks if in_image(va) and not keep(va, mem.get(va, []))]
+        for va in drop:
+            del blocks[va]
+    return blocks, edges, sessions, len(drop)
 
 
 def read_functions(path: str):
@@ -132,8 +158,8 @@ class FnIndex:
             k -= 1
 
 
-def analyse(trace_path: str, fn_path: str):
-    blocks, edges, sessions = read_trace(trace_path)
+def analyse(trace_path: str, fn_path: str, keep=None):
+    blocks, edges, sessions, dropped = read_trace(trace_path, keep)
     fns = read_functions(fn_path)
     idx = FnIndex(fns)
 
@@ -221,6 +247,7 @@ def analyse(trace_path: str, fn_path: str):
 
     return {
         "sessions": sessions,
+        "dropped": dropped,
         "blocks": len(blocks),
         "blocks_in_image": sum(1 for va in blocks if in_image(va)),
         "edges": len(edges),
@@ -259,7 +286,7 @@ def h(a: int) -> str:
     return f"0x{a:08X}"
 
 
-def report(r) -> str:
+def report(r, overlay: bool = False) -> str:
     L = []
     L.append(f"Trace: {r['sessions']} session(s), {r['blocks']:,} distinct blocks "
              f"({r['blocks_in_image']:,} in the image), {r['edges']:,} distinct dynamic edges "
@@ -270,18 +297,22 @@ def report(r) -> str:
     L.append(f"| Distinct call targets executed (in image) | {r['calls']:,} |")
     L.append(f"| of which in the static list | {r['called_known']:,} |")
     L.append(f"| **Coverage, call targets found statically** | **{100*r['call_ratio']:.2f} %** |")
-    L.append(f"| Distinct call targets executed in run-time-loaded overlays (above the image) | {r['calls_ovl']:,} |")
-    L.append(f"| Coverage, call targets found statically, image + overlays | {100*r['all_ratio']:.2f} % |")
-    L.append(f"| Distinct call targets executed below the image (IP.BIN, syscall glue) | {r['calls_low']:,} |")
+    if not overlay:
+        L.append(f"| Distinct call targets executed in run-time-loaded overlays (above the image) | {r['calls_ovl']:,} |")
+        L.append(f"| Coverage, call targets found statically, image + overlays | {100*r['all_ratio']:.2f} % |")
+        L.append(f"| Distinct call targets executed below the image (IP.BIN, syscall glue) | {r['calls_low']:,} |")
     L.append(f"| Executed code bytes (in image) | {r['exec_bytes']:,} |")
-    L.append(f"| Executed code bytes in overlays / below the image | {r['ovl_bytes']:,} / {r['low_bytes']:,} |")
+    if not overlay:
+        L.append(f"| Executed code bytes in overlays / below the image | {r['ovl_bytes']:,} / {r['low_bytes']:,} |")
     L.append(f"| of which inside discovered functions | {r['exec_in_known']:,} |")
     L.append(f"| **Coverage, executed bytes inside discovered functions** | **{100*r['byte_ratio']:.2f} %** |")
+    by_exec = ", ".join(f"{n} {r['exec_by_block'].get(n, 0):,}" for n in BLOCKS)
+    by_never = "; ".join(f"{n} {r['never_by_block'].get(n, 0):,} = {r['never_bytes_by_block'].get(n, 0):,} bytes"
+                         for n in BLOCKS)
     L.append(f"| Discovered functions executed (called or any block inside) | {r['executed_known']:,} of {r['functions']:,} "
-             f"(A {r['exec_by_block'].get('A', 0):,}, B {r['exec_by_block'].get('B', 0):,}) |")
+             f"({by_exec}) |")
     L.append(f"| Discovered functions never executed | {r['never']:,} "
-             f"(A {r['never_by_block'].get('A', 0):,} = {r['never_bytes_by_block'].get('A', 0):,} bytes; "
-             f"B {r['never_by_block'].get('B', 0):,} = {r['never_bytes_by_block'].get('B', 0):,} bytes not shared with an executed function) |")
+             f"({by_never} not shared with an executed function) |")
     L.append(f"| Executed call targets inside a discovered function, not at its entry | {len(r['new_call_mid']):,} |")
     L.append(f"| Executed call targets outside every discovered function | {len(r['new_call_gap']):,} |")
     L.append(f"| Executed jump targets outside every discovered function | {len(r['tail_gap']):,} |")
@@ -290,7 +321,10 @@ def report(r) -> str:
              f"({sum(b - a for a, b in r['gap_runs']):,} B) |")
     L.append(f"| of which with no seed inside | {len(r['unseeded_runs']):,} |")
     L.append(f"| Blocks executed in the data region of the image | {len(r['in_data']):,} |")
-    L.append(f"| Blocks executed outside the image | {len(r['outside']):,} |")
+    if overlay:
+        L.append(f"| Blocks in the slot dropped (another file's bytes) | {r['dropped']:,} |")
+    else:
+        L.append(f"| Blocks executed outside the image | {len(r['outside']):,} |")
     L.append("")
     if r["unseeded_runs"]:
         L.append("Executed runs outside discovered functions with no seed (first 40):")
@@ -298,7 +332,7 @@ def report(r) -> str:
         for a, b in r["unseeded_runs"][:40]:
             L.append(f"- {h(a)}-{h(b)} ({b - a} B, block {block_of(a)})")
         L.append("")
-    if r["outside"]:
+    if r["outside"] and not overlay:
         lo, hi = r["outside"][0], r["outside"][-1]
         L.append(f"Blocks outside the image span {h(lo)}-{h(hi)}.")
         L.append("")
@@ -312,10 +346,28 @@ def main(argv=None) -> int:
     ap.add_argument("--md", help="write the summary table here as well as stdout")
     ap.add_argument("--seeds", help="write new seed addresses here, one per line")
     ap.add_argument("--executed", help="write executed function entries (known + new) here")
+    ap.add_argument("--overlay", help="decompressed overlay file (outside the repo); diff it instead of 1ST_READ.BIN")
+    ap.add_argument("--base", type=lambda x: int(x, 16), help="overlay load address (hex)")
+    ap.add_argument("--code-end", type=lambda x: int(x, 16), help="end of the overlay's code (hex, exclusive)")
     a = ap.parse_args(argv)
 
-    r = analyse(a.trace, a.functions_json)
-    text = report(r)
+    keep = None
+    if a.overlay:
+        if a.base is None:
+            ap.error("--overlay needs --base")
+        with open(a.overlay, "rb") as f:
+            data = f.read()
+        lo = norm(a.base)
+        code_end = norm(a.code_end) if a.code_end else max(x for _, x, _ in read_functions(a.functions_json))
+        set_region(lo, lo + len(data), {"code": (lo, code_end)})
+
+        def keep(va: int, words: list[int]) -> bool:
+            o = va - lo
+            got = b"".join(w.to_bytes(2, "little") for w in words)
+            return bool(got) and data[o:o + len(got)] == got
+
+    r = analyse(a.trace, a.functions_json, keep)
+    text = report(r, overlay=bool(a.overlay))
     print(text)
     if a.md:
         with open(a.md, "w", encoding="utf-8", newline="\n") as f:

@@ -294,6 +294,8 @@ void sdk_8c5fba6c(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fba6cu, ""); c->r[0] = 0; 
 void sdk_8c5fba68(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fba68u, ""); c->r[0] = 0; }
 void sdk_8c5fba64(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fba64u, ""); c->r[0] = 0; }
 void sdk_8c5fb8a8(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fb8a8u, ""); c->r[0] = 0; }
+void sdk_8c5ff2e8(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5ff2e8u, ""); c->r[0] = 0; }
+void sdk_8c603384(sh4_ctx *c) { sa1_seam_stub(c, 0x8c603384u, ""); c->r[0] = 0; }
 
 const sa1_fn_entry sa1_seam_table[] = {
     {0x0c5fb8a4u, sdk_8c5fb8a4},
@@ -323,6 +325,7 @@ const sa1_fn_entry sa1_seam_table[] = {
     {0x0c5fc81cu, sdk_8c5fc81c},
     {0x0c5ff2ccu, sdk_8c5ff2cc},
     {0x0c5ff2deu, sdk_8c5ff2de},
+    {0x0c5ff2e8u, sdk_8c5ff2e8},
     {0x0c5ff31eu, sdk_8c5ff31e},
     {0x0c5ff39cu, sdk_8c5ff39c},
     {0x0c5ff8b8u, sdk_8c5ff8b8},
@@ -365,6 +368,7 @@ const sa1_fn_entry sa1_seam_table[] = {
     {0x0c602f5cu, sdk_8c602f5c},
     {0x0c602fb8u, sdk_8c602fb8},
     {0x0c602fe6u, sdk_8c602fe6},
+    {0x0c603384u, sdk_8c603384},
     {0x0c6033e4u, sdk_8c6033e4},
     {0x0c603474u, sdk_8c603474},
     {0x0c603508u, sdk_8c603508},
@@ -586,4 +590,4 @@ const sa1_fn_entry sa1_seam_table[] = {
     {0x0c65c2a8u, sdk_8c65c2a8},
     {0x0c65e3c6u, sdk_8c65e3c6},
 };
-const uint32_t sa1_seam_count = 289;
+const uint32_t sa1_seam_count = 291;

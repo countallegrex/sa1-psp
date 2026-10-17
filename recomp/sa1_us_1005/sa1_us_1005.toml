@@ -38,5 +38,13 @@ extra = [
     0x0C0EF3CE, 0x0C0F0700, 0x0C0F0786, 0x0C0F0B80, 0x0C0F0B8E, 0x0C0F0C2A,
     0x0C0F1BC4, 0x0C0FBB00, 0x0C603C2E, 0x0C64409C, 0x0C644794, 0x0C65C208,
     0x0C65E0DC, 0x0C65E3B8,
+    # Entries in block A that only the code overlays call (recomp/emitter/emit_overlay.py
+    # over ADVERTISE, ADV00 and the opening EV files; list in overlay_main_seeds.txt,
+    # docs/m1-overlays.md). Some were found as branch targets and would otherwise
+    # be merged into their parent; the rest were not found at all.
+    0x0C019360, 0x0C04A480, 0x0C053338, 0x0C0533C4, 0x0C05499E, 0x0C054D5A,
+    0x0C055B30, 0x0C05F00C, 0x0C07D226, 0x0C07D250, 0x0C07D628, 0x0C07EF6E,
+    0x0C090410, 0x0C090686, 0x0C091B70, 0x0C0A5A64, 0x0C0A5AC4, 0x0C0A5C3A,
+    0x0C0A6696, 0x0C0A6730, 0x0C0A684A, 0x0C0A6874, 0x0C107AF6,
 ]
 exclude = []

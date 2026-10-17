@@ -27,6 +27,9 @@ MD5 for cross-checking against other tools: `060cad2ceefc07c7429085f30a356046`.
 | `sdk_entry_points.tsv` | The 289 SDK addresses that game code calls through literal pools, ranked by call sites, with behavioural names where known. Start of the seam table. |
 | `trace_seeds.txt` | The 68 executed call/tail-jump targets M0 discovery missed, from the Flycast trace (`tools/trace_diff.py`, `docs/m0-trace.md`). Also in `sa1_us_1005.toml` `extra`. |
 | `executed_entries.txt` | The 3,661 function entries (seeded list) executed on the M0 route: title → Station Square → Emerald Coast → Station Square. Addresses only. |
+| `overlay_main_seeds.txt` | The 23 block-A entries that only the code overlays call (discovery cannot see them from the image). Also in `sa1_us_1005.toml` `extra`. `docs/m1-overlays.md` §6. |
+| `overlays/<name>.toml` | One Dream-Recomp config per code overlay (`ADVERTISE`, `ADV00`, `EV0001`/`0002`/`0003`/`0006`/`002B` so far): slot address, code range, SHA-256 of the decompressed file (`tools/extract_overlays.py`, under `../private/`). |
+| `overlays/<name>_seeds.txt` | Executed call targets in that overlay that discovery missed, from `tools/trace_diff.py --overlay`. |
 
 ## Code layout of the binary (see `docs/seam.md`)
 
@@ -57,8 +60,11 @@ cd recomp/dream-recomp
 cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DDREAM_DEV_INTERPRETER=ON -DDREAM_RENDERER=OFF -DDREAM_WERROR=OFF -DDREAM_BUILD_TESTS=OFF
 cmake --build build --target dream-translate
 DREAM_CODE_RANGES=0C010000:0C111200,0C5FA000:0C66C000 DREAM_ASSUME_ENTRY_FPSCR=1 \
-  ./build/translator/dream-translate.exe game --config ../sa1_us_1005/sa1_us_1005.toml --out-dir ../out/dream
+  ./build/translator/dream-translate.exe game --config ../sa1_us_1005/sa1_us_1005.toml --out-dir ../out/dream_seeded
 ```
+
+The emitter reads `../out/dream_seeded/` (the list with the trace and
+overlay seeds). Overlays: `docs/m1-overlays.md` §3.
 
 `DREAM_CODE_RANGES` is needed: without it the pointer pass seeds 42,000
 bogus functions inside model data (which decodes as valid SH-4), the sweep

@@ -8,10 +8,17 @@ code from any other recompiler. MIT like the rest of the repository.
 ```
 python recomp/emitter/emit_sa1.py \
     --bin ../private/dump/sa1_us_1005/data/1ST_READ.BIN \
-    --functions recomp/out/dream/sa1_us_1005.functions.json \
+    --functions recomp/out/dream_seeded/sa1_us_1005.functions.json \
     --out recomp/out/emitter [--update-hle]
+python recomp/emitter/emit_overlay.py recomp/sa1_us_1005/overlays/adv00.toml
 python tests/emitter/run_tests.py          # no game data needed
 ```
+
+`emit_overlay.py` recompiles one code overlay (a decompressed `SONICADV/*.PRS`)
+into `recomp/out/overlays/emitter/<name>/`. Functions are named
+`ovl_<name>_8c9xxxxx`, and calls into the main image become direct calls with
+a full register sync. The output also holds one `sa1_overlay` table, which the
+loader hook installs with `sa1_overlay_set` (see `docs/m1-overlays.md` §5).
 
 Inputs: the user's own binary (never committed), the function list from the
 discovery step (`recomp/sa1_us_1005/README.md`, Dream-Recomp run as a
@@ -37,6 +44,7 @@ Measured results are in `docs/m1-emitter-report.md`.
 | `runtime/sh4_rt.h` | the ABI: `sh4_ctx`, RAM macros, arithmetic/FP helper macros |
 | `runtime/sh4_rt.c` | function-table dispatch, traps, MMIO and seam-stub logging |
 | `emit_sa1.py` | the SA1-specific command line (block ranges, SHA-256 check, seam TSV) |
+| `emit_overlay.py` | the same for one code overlay: reads `recomp/sa1_us_1005/overlays/<name>.toml` and the main image's `game_table.c` |
 
 ## ABI
 

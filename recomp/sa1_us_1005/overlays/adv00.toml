@@ -1,0 +1,36 @@
+# Sonic Adventure (USA) v1.005, code overlay SONICADV/ADV00.PRS (Station Square),
+# for dream-translate (discovery only). Addresses only; nothing from the disc
+# is in this file. The game decompresses the file (SEGA PRS) to the area slot
+# at 0x8C900000; tools/extract_overlays.py writes the same bytes to
+# ../private/overlays/sa1_us_1005/ADV00.bin. Run with
+#   DREAM_CODE_RANGES=0C900000:0C913220
+# (the code part; data follows it). See docs/m1-overlays.md.
+
+[game]
+id = "sa1_ovl_adv00"
+title = "Sonic Adventure overlay ADV00"
+region = "USA"
+
+[binary]
+path = "../../../../private/overlays/sa1_us_1005/ADV00.bin"   # decompressed, 2,328,347 bytes
+load_address = 0x8C900000
+link_address = 0x0C900000
+entry = 0x8C900000
+
+[functions]
+pointers = true
+sweep = true
+# Header entry pointers, then executed call targets discovery missed
+# (tools/trace_diff.py --overlay; also in adv00_seeds.txt).
+extra = [0x0C900732, 0x0C90B26A, 0x0C90BA04, 0x0C90F620]
+exclude = []
+
+# Read by recomp/emitter/emit_overlay.py and tools/extract_overlays.py;
+# dream-translate ignores this table.
+[sa1_overlay]
+file = "SONICADV/ADV00.PRS"
+slot = 0x8C900000
+code_lo = 0x8C900000
+code_hi = 0x8C913220
+size = 2328347
+sha256 = "bac5bcd53a8e8b95e6a9e536d1ae5d7cd3ed63056c027366390c645d2d74c94d"

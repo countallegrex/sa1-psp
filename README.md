@@ -288,10 +288,14 @@ Each one has a single exit test. Do not start the next before the test passes.
       of MIPS at `-Os` (3.88x, target ≤ 5x), compiles with clang and psp-gcc,
       51 snippet tests pass locally and run in CI, 408 indirect sites go through the function
       table, no non-local returns needed. `hle/seam.h` holds the 289 seam
-      prototypes with logging stubs. Still to do: the Shinobi HLE bodies, a
-      boot `main`, and discovery + emission for the overlays the title
-      screen and Station Square load (`ADVERTISE.PRS`, `ADV00.PRS`, the
-      opening `EV*.PRS`; `docs/m0-trace.md` §5).*
+      prototypes with logging stubs. Overlays done for the exit route
+      (`docs/m1-overlays.md`): `ADVERTISE`, `ADV00` and five opening `EV*`
+      files have their own discovery config, 100 % of the 406 executed
+      overlay call targets found (97.04 % without the 12 seeds), and 1,070 C
+      functions in one table per slot. That C compiles with clang and
+      psp-gcc and links against the main image. Still to do: the Shinobi
+      HLE bodies, a boot `main`, and the loader hook that installs an
+      overlay's table when the game loads the file.*
 - [ ] **M2 Desktop graphics.** Ninja HLE on OpenGL fixed function, reading
       models and textures from guest RAM. Exit: Emerald Coast completed with
       a controller, draw order correct, no desktop-only features.
@@ -404,6 +408,6 @@ sa1-psp/                      this repo (public)
   started with `run_trace.bat`. The M0 trace is
   `..\flycast\trace-2.7\sa1trace.txt`; method in `docs/m0-trace.md`.
 - M1 emitter done: `python recomp/emitter/emit_sa1.py --bin <1ST_READ.BIN>
-  --functions recomp/out/dream/sa1_us_1005.functions.json` writes
+  --functions recomp/out/dream_seeded/sa1_us_1005.functions.json` writes
   `recomp/out/emitter/` (26.8 MB of C, 32 chunks) in about a minute;
   `python tests/emitter/run_tests.py` is the emitter's test suite.

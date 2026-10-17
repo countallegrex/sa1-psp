@@ -78,6 +78,23 @@ extern const uint32_t sa1_fn_count;
 extern const sa1_fn_entry sa1_seam_table[];
 extern const uint32_t sa1_seam_count;
 
+/* ---- code overlays (docs/m1-overlays.md) --------------------------------
+ * The game loads code from disc into fixed slots, one file at a time per
+ * slot.  Each recompiled overlay has its own function table; the loader hook
+ * installs it when the game copies the file in and clears it (NULL) when the
+ * slot is reused.  sa1_fn_lookup checks the installed overlays (by their code
+ * range) before the main table. */
+typedef struct sa1_overlay {
+    const char *name;            /* disc file, e.g. "ADV00" */
+    uint32_t code_lo, code_hi;   /* physical range of the overlay's code */
+    const sa1_fn_entry *fns;     /* sorted by addr */
+    uint32_t count;
+} sa1_overlay;
+
+enum { SA1_SLOT_AREA, SA1_SLOT_EVENT, SA1_SLOT_COUNT };   /* 0x8C900000, 0x8CB80000 */
+void sa1_overlay_set(int slot, const sa1_overlay *ov);
+const sa1_overlay *sa1_overlay_get(int slot);
+
 /* ---- integer helpers (operate on the caller's locals by name) ---------- */
 #define ADDC(n, m) do { uint32_t t0_ = (n) + (m); uint32_t c_ = t0_ < (n); \
     (n) = t0_ + t; t = c_ | ((n) < t0_); } while (0)
