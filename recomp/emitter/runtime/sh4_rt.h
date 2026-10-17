@@ -35,10 +35,21 @@ typedef struct sa1_fn_entry {
     sa1_fn fn;
 } sa1_fn_entry;
 
-/* ---- guest RAM: one flat array, guest 0x?C000000 + off -> sa1_ram[off] --- */
+/* ---- guest RAM: one flat array, guest 0x?C000000 + off -> sa1_ram[off] ---
+ * The console's 16 MB are followed by SA1_RAM_EXTRA bytes the HLE uses for
+ * the KAMUI vertex buffers (guest addresses 0x8D000000 + off, which the
+ * game never forms itself; on the console they mirror 0x8C000000).  The
+ * mask therefore keeps 25 bits; an access above 16 MB + EXTRA is
+ * undefined, as it would be on the console. */
 #define SA1_RAM_SIZE  0x01000000u
+#define SA1_RAM_EXTRA 0x00200000u
 #define SA1_RAM_SLACK 0x00010000u   /* so base-masked + small disp never overruns */
-#define SA1_RAM_MASK  0x00FFFFFFu
+#define SA1_RAM_MASK  0x01FFFFFFu
+/* The desktop allocates the whole 32 MB window the mask can reach (untouched
+ * pages cost nothing there): a few game accesses to control registers
+ * (0xFFxxxxxx) through a register, not a constant, mask into its top.  The
+ * PSP backend must wrap those (M4) or allocate SIZE + EXTRA only. */
+#define SA1_RAM_ALLOC (2u * SA1_RAM_SIZE + SA1_RAM_SLACK)
 extern uint8_t *sa1_ram;
 
 typedef uint8_t  __attribute__((may_alias)) sa1_u8a;

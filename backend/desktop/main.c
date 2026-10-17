@@ -1,7 +1,15 @@
-/* main.c - desktop boot of the recompiled game (M1: no graphics, no audio).
+/* main.c - desktop boot of the recompiled game (M2: graphics, no audio).
  *
  *   sa1psp <1ST_READ.BIN> <data root> [--frames N] [--seconds S] [--log FILE]
  *          [--watch ADDR[:OFF...]]... [--press FRAME:BUTTONS[:HOLD]]... [--trace-funcs FILE]
+ *          [--headless] [--scale N] [--screenshot FRAME:FILE.ppm]... [--stats N]
+ *
+ * Without --headless an SDL2 window opens at 480x272 times --scale (2 by
+ * default) with an OpenGL 1.x fixed-function context (backend/draw.h), and
+ * the controller or keyboard drives the pad whenever no --press is active.
+ * --headless keeps the deterministic M1 behaviour for CI.  --screenshot
+ * writes the frame buffer after guest frame FRAME; --stats N logs the
+ * renderer counters every N frames.
  *
  * --trace-funcs writes, at exit, every host function that ran with the frame
  * it first ran in (needs a build with -DSA1_TRACE_FUNCS=ON).
@@ -22,10 +30,15 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
+#include "../draw.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 void fn_8c010000(sh4_ctx *c);
 void plat_set_data_root(const char *root);
@@ -41,6 +54,14 @@ static int npresses;
 static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
+static int headless, scale = 2, stats_every;
+#define SHOT_MAX 16
+static struct { uint32_t frame; const char *path; } shots[SHOT_MAX], dumps[SHOT_MAX];
+static int nshots, ndumps;
+static struct { uint32_t frame, addr, value, size; } pokes[SHOT_MAX];
+static int npokes;
+void kamui_report(void);            /* hle/ninja/kamui.c: renderer counters */
+void kamui_set_screenshot(const char *path);
 
 static void log_sink(const char *line) {
     uint64_t t = sa1_plat_time_us() - t0;
@@ -49,9 +70,28 @@ static void log_sink(const char *line) {
     if (log_file) fflush(log_file);
 }
 
+#ifdef _WIN32
+/* A host crash (an out-of-range guest access, usually) prints where the
+ * recompiled code was before the process dies. */
+static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
+    sa1_log("crash: exception 0x%08lx at %p (guest frame %u)", ep->ExceptionRecord->ExceptionCode,
+            ep->ExceptionRecord->ExceptionAddress, hle_frame_count());
+    if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+        sa1_log("crash: %s of host address %p (sa1_ram is %p, so guest offset 0x%llx)",
+                ep->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
+                (void *)ep->ExceptionRecord->ExceptionInformation[1], (void *)sa1_ram,
+                (unsigned long long)((uint8_t *)ep->ExceptionRecord->ExceptionInformation[1] - sa1_ram));
+    plat_backtrace();
+    if (log_file) fflush(log_file);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
 static void report_and_exit(int code) {
     sa1_log("exit: %u frames, %.3f s", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6);
-    sa1_seam_report(30);
+    kamui_report();
+    sa1_seam_report(getenv("SA1_REPORT_TOP") ? atoi(getenv("SA1_REPORT_TOP")) : 30);
+    draw_shutdown();
     if (trace_path) plat_trace_dump(trace_path);
     if (log_file) fclose(log_file);
     exit(code);
@@ -69,10 +109,30 @@ static void on_trap(sh4_ctx *c, uint32_t pc, const char *what) {
 static void on_frame(uint32_t frame) {
     sa1_watch_check("frame");
     uint32_t b = 0;
+    int scripted = 0;
     for (int i = 0; i < npresses; i++)
-        if (frame >= presses[i].frame && frame < presses[i].frame + presses[i].hold) b |= presses[i].buttons;
+        if (frame >= presses[i].frame && frame < presses[i].frame + presses[i].hold) { b |= presses[i].buttons; scripted = 1; }
+    hle_pad live = {0};
+    int quit = 0;
+    if (!headless && draw_poll_input(&live, &quit) == 0) {
+        if (quit) { sa1_log("window closed"); report_and_exit(0); }
+        if (!scripted) { hle_pad_state = live; b = live.buttons; }
+        else { hle_pad_state.x = live.x; hle_pad_state.y = live.y; hle_pad_state.ltrig = live.ltrig; hle_pad_state.rtrig = live.rtrig; }
+    }
     if (b != hle_pad_state.buttons) sa1_log("pad: buttons 0x%x", b);
     hle_pad_state.buttons = b;
+    for (int i = 0; i < nshots; i++) if (shots[i].frame == frame) kamui_set_screenshot(shots[i].path);
+    for (int i = 0; i < npokes; i++) if (pokes[i].frame == frame) {       /* debug: write a guest word */
+        if (pokes[i].size == 1) hle_wr8(pokes[i].addr, pokes[i].value);
+        else if (pokes[i].size == 2) hle_wr16(pokes[i].addr, pokes[i].value);
+        else hle_wr32(pokes[i].addr, pokes[i].value);
+        sa1_log("poke: [0x%08x] = 0x%x (%u bytes)", pokes[i].addr, pokes[i].value, pokes[i].size);
+    }
+    for (int i = 0; i < ndumps; i++) if (dumps[i].frame == frame) {      /* debug: guest RAM to a file */
+        FILE *o = fopen(dumps[i].path, "wb");
+        if (o) { fwrite(sa1_ram, 1, SA1_RAM_SIZE, o); fclose(o); sa1_log("dump: %s", dumps[i].path); }
+    }
+    if (stats_every && frame % (uint32_t)stats_every == 0) kamui_report();
     if (frame_limit && frame >= frame_limit) {
         sa1_log("frame limit %u reached", frame_limit);
         report_and_exit(0);
@@ -101,6 +161,29 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log_file = fopen(argv[++i], "w");
         else if (!strcmp(argv[i], "--watch") && i + 1 < argc) { sa1_watch_add(argv[++i]); sa1_watch_addr = 1; }
         else if (!strcmp(argv[i], "--trace-funcs") && i + 1 < argc) trace_path = argv[++i];
+        else if (!strcmp(argv[i], "--headless")) headless = 1;
+        else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--stats") && i + 1 < argc) stats_every = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--poke") && i + 1 < argc && npokes < SHOT_MAX) {   /* FRAME:ADDR:VALUE[:SIZE] */
+            char *spec = argv[++i], *end;
+            pokes[npokes].frame = (uint32_t)strtoul(spec, &end, 0);
+            pokes[npokes].addr = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 16) : 0;
+            pokes[npokes].value = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : 0;
+            pokes[npokes].size = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : 4;
+            npokes++;
+        }
+        else if (!strcmp(argv[i], "--dump") && i + 1 < argc && ndumps < SHOT_MAX) {
+            char *spec = argv[++i], *end;
+            dumps[ndumps].frame = (uint32_t)strtoul(spec, &end, 0);
+            dumps[ndumps].path = *end == ':' ? end + 1 : "ram.bin";
+            ndumps++;
+        }
+        else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc && nshots < SHOT_MAX) {
+            char *spec = argv[++i], *end;
+            shots[nshots].frame = (uint32_t)strtoul(spec, &end, 0);
+            shots[nshots].path = *end == ':' ? end + 1 : "frame.ppm";
+            nshots++;
+        }
         else if (!strcmp(argv[i], "--press") && i + 1 < argc && npresses < PRESS_MAX) {
             char *spec = argv[++i], *end;
             presses[npresses].frame = (uint32_t)strtoul(spec, &end, 0);
@@ -118,16 +201,20 @@ int main(int argc, char **argv) {
     }
     t0 = sa1_plat_time_us();
     sa1_set_log_sink(log_sink);
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(on_crash);
+#endif
     sa1_trap_hook = on_trap;
     hle_frame_hook = on_frame;
     sa1_trace_frame = hle_frame_count;
     plat_watchdog_start(hle_frame_count, 10);   /* a guest loop with no frame progress is a bug */
 
-    sa1_ram = calloc(SA1_RAM_SIZE + SA1_RAM_SLACK, 1);
+    sa1_ram = calloc(SA1_RAM_ALLOC, 1);
     if (!sa1_ram) { fprintf(stderr, "cannot allocate guest RAM\n"); return 1; }
     if (load_image(bin) != 0) return 1;
     plat_set_data_root(root);
     hle_init();
+    if (draw_init(scale, headless) != 0 && !headless) { sa1_log("no window; running headless"); headless = 1; }
 
     memset(&ctx, 0, sizeof ctx);
     ctx.r[15] = 0x8C00F400u;

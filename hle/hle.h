@@ -22,8 +22,11 @@ static inline float hle_rdf(uint32_t a) { return RDF(a, 0); }
 static inline void hle_wrf(uint32_t a, float v) { WRF(a, 0, v); }
 /* Copies a NUL-terminated guest string into buf (at most n - 1 chars). */
 void hle_guest_string(uint32_t addr, char *buf, unsigned n);
-/* Is a guest address inside RAM (any of the P0/P1/P2 spellings)? */
-static inline int hle_in_ram(uint32_t a) { return ((a & 0x1F000000u) == 0x0C000000u); }
+/* Is a guest address inside RAM (any of the P0/P1/P2 spellings), including
+ * the HLE's extra area above the 16 MB (0x?D000000..)? */
+static inline int hle_in_ram(uint32_t a) { return ((a & 0x1F000000u) == 0x0C000000u) || ((a & 0x1FE00000u) == 0x0D000000u); }
+/* Guest address of the extra area (SA1_RAM_EXTRA bytes). */
+#define HLE_EXTRA_BASE 0x8D000000u
 
 /* ---- call-site conventions ---------------------------------------------- */
 /* Arguments r4..r7 (SH ABI) and the return register. */

@@ -327,19 +327,6 @@ void sdk_8c64036c(sh4_ctx *c) {         /* njClipZ(near, far) */
     hle_wrf(G_CLIPN, -n); hle_wrf(G_CLIPF, -f);
 }
 
-/* 0x8C604702: njInitSystem(mode, frame, count).  No display here; the
- * globals game logic reads get the 640x480 values the console had. */
-void sdk_8c604702(sh4_ctx *c) {
-    HLE_ENTER(0x8c604702u, "njInitSystem (no display)");
-    hle_wr32(G_SCREEN_W, 640); hle_wr32(G_SCREEN_H, 480);
-    hle_wrf(G_W, 640.0f); hle_wrf(G_H, 480.0f);
-    hle_wrf(G_CX, 320.0f); hle_wrf(G_CY, 240.0f);
-    hle_wrf(G_DIST, 320.0f);
-    hle_wrf(G_AX, 1.0f); hle_wrf(G_AY, 1.0f);
-    hle_wrf(G_CLIPN, 1.0f); hle_wrf(G_CLIPF, 65535.0f);
-    sa1_log("njInitSystem: mode 0x%x, frame %u, count %u (no graphics)", ARG0, ARG1, ARG2);
-}
-
 /* ---- camera (game-owned struct: matrix +0, pos +64, dir +76, roll +88,
  *      base copies +92 / +104 / +116) ------------------------------------- */
 #define CAM_POS 64

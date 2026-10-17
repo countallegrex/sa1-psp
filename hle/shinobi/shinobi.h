@@ -17,11 +17,15 @@ void shinobi_run_vblank_callbacks(sh4_ctx *c);
 void shinobi_memory_init(void);
 /* gdfs.c: the GD-ROM file system over the data root */
 void shinobi_gdfs_init(void);
+void shinobi_gdfs_path(char *out, unsigned n, const char *name);
 /* timer.c: syTmr up-counter, 1.28 counts per microsecond */
 uint32_t shinobi_timer_count(void);
 uint64_t shinobi_time_us(void);          /* virtual guest microseconds */
 /* memory.c */
 uint32_t shinobi_heap_peak(void);
+uint32_t shinobi_heap_used(void);
+uint32_t shinobi_malloc(uint32_t size);   /* native allocation from the game heap, 0 when full */
+void shinobi_free(uint32_t addr);
 /* chain.c */
 uint32_t shinobi_chain_add(uint32_t type, uint32_t fn, uint32_t prio, uint32_t arg);
 int shinobi_chain_delete(uint32_t handle);

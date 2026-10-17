@@ -61,6 +61,10 @@ static void make_path(char *out, unsigned n, const char *name) {
     else snprintf(out, n, "%s/%s", cur_dir, p);
 }
 
+/* For other HLE modules (texture files by name): the data-root-relative
+ * path of a name in the current directory. */
+void shinobi_gdfs_path(char *out, unsigned n, const char *name) { make_path(out, n, name); }
+
 static int handle_index(uint32_t h) {
     if (!initialised || h < handles_base || h >= handles_base + GD_MAX_OPEN * H_SIZE) return -1;
     if ((h - handles_base) % H_SIZE) return -1;

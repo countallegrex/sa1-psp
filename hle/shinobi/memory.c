@@ -81,6 +81,15 @@ static int heap_free(uint32_t addr) {
 }
 
 uint32_t shinobi_heap_peak(void) { return heap_peak; }
+uint32_t shinobi_heap_used(void) { return heap_used; }
+/* Native allocation from the same heap (the SDK took its vertex buffers
+ * from it too); returns 0 when exhausted. */
+uint32_t shinobi_malloc(uint32_t size) {
+    uint32_t p = heap_alloc(size);
+    if (!p) sa1_log("shinobi_malloc(%u) failed: %u of %u bytes in use", size, heap_used, heap_size);
+    return p;
+}
+void shinobi_free(uint32_t addr) { if (addr) heap_free(addr); }
 
 void sdk_8c602128(sh4_ctx *c) {
     HLE_ENTER(0x8c602128u, "syMallocInit");
