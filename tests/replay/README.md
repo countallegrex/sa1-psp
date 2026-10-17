@@ -154,6 +154,54 @@ faster load). Secondary rows sample the `exact` watches every 600 frames
 and at the last frame. It reads a `--watch-trace` file (exact to the
 frame) or a set of `--dump` files.
 
+## Flycast differential (the oracle)
+
+```
+SA1_DUMP=..\private\dump\sa1_us_1005 python tools/flycast/run_oracle.py tests/replay/title_menu.tape
+```
+
+replays a tape on the desktop build and in Flycast 2.7 and reports the
+first game frame where they disagree. Flycast's Lua API can inject the
+controller every frame (`flycast.input.pressButtons`/`releaseButtons`
+write the active-low button word, `setAxis` the 16-bit stick and trigger
+values, from a `vblank` callback on the emulation thread), so
+`tools/flycast/tape_oracle.lua` drives the console side; `run_oracle.py`
+runs Flycast from its own copy (`../flycast/oracle-2.7`, made from
+`../flycast/release-2.7`, VMUs unplugged like the desktop build) with
+`-config config:LuaFileName=tape_oracle.lua`.
+
+Alignment is by the game's frame counter (`game_frame`), not by vblank:
+Flycast emulates GD-ROM load times and the desktop loads instantly. The
+desktop build also skips whole phases the console plays, so the alignment
+is re-anchored at each game-mode change both runs share
+(`tools/tape_diff.py gpad` writes the desktop's mode changes as `sync`
+lines; the Lua script matches Flycast's mode changes to them and writes the
+aligned game frame as an `oracle_g` column). In a mode the desktop never
+entered the pad is neutral, with Start tapped every 60 vblanks after 120
+(console-only prompts). `tools/tape_diff.py diff` compares the watched
+values at the last vblank of each aligned game frame, within the watch
+list's tolerances; a value the other run has within `--slip` (default 2)
+game frames is reported as a slip, not a divergence.
+
+What the console does that the desktop build does not, found this way:
+
+| Game mode | Console (Flycast) | Desktop |
+|---|---|---|
+| 12, 13 | from about vblank 166, before the logos; 13 waits for a button (without one Flycast stayed there 15,000 vblanks; the oracle's Start tap passes it) | never entered |
+| 8 (intro movie) | about 6,900 vblanks, game frame counter stopped | skipped in 2 vblanks (`hle/overlay/movie.c`) |
+| 10 | about 46 vblanks between the movie and the title | never entered |
+
+First result, `title_menu`: with those phases skipped, the runs agree on
+every watched value for all 1,497 compared game frames (title, menus, file
+select, Station Square: game mode, level, act, rings, lives, player
+position), with one slip: the opening event moves Sonic to (362.5, 1450.7)
+one game frame later on Flycast (game frame 1232).
+
+Limits: the console clock and the RTC are Flycast's (host time), not the
+tape's epoch; Flycast's own flash (HLE BIOS) stands in for the desktop's
+erased one; and the counter alignment assumes the game frame counter only
+counts up (true on the routes traced so far).
+
 ## Watched addresses (`watch.txt`)
 
 Each was confirmed by watching it change in strict runs of the scripted

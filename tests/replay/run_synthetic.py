@@ -97,6 +97,33 @@ def main():
     code, out = replay("--check", j("manual.check"))
     expect("hand-written rows: <=N, exact, M..N with float", code == 0 and "0/3 primary failed" in out, out)
 
+    import tape_diff
+    rc = tape_diff.main(["gpad", j("t.tape"), j("trace.tsv"), "-o", j("gpad.txt")])
+    gpad = open(j("gpad.txt"), encoding="utf-8").read()
+    expect("tape_diff gpad: sync lines and one pad per game frame",
+           rc == 0 and "sync 11 50" in gpad and "\n500 " in gpad and "\n501 " not in gpad, gpad[:300])
+    expect("tape_diff diff: a trace against itself does not diverge",
+           tape_diff.main(["diff", j("trace.tsv"), j("trace.tsv"), "--watch", WATCH]) == 0)
+    lines = open(j("trace.tsv"), encoding="utf-8").read().split("\n")
+    hdr = lines[0].split("\t")
+    shifted = [lines[0]]                    # rings one game frame late from frame 300 on, x off from 700
+    for line in lines[1:]:
+        if not line:
+            continue
+        c = line.split("\t")
+        fr = int(c[0])
+        if fr >= 300:
+            c[hdr.index("rings")] = str(((fr - 2) // 50) % 7)
+        if fr >= 700:
+            c[hdr.index("player_x")] = str(float(c[hdr.index("player_x")]) + 100)
+        shifted.append("\t".join(c))
+    with open(j("other.tsv"), "w", encoding="utf-8") as f:
+        f.write("\n".join(shifted) + "\n")
+    rc = tape_diff.main(["diff", j("trace.tsv"), j("other.tsv"), "--watch", WATCH])
+    expect("tape_diff diff: a 1-frame slip is not a divergence, a real change is", rc == 1)
+    rc = tape_diff.main(["diff", j("trace.tsv"), j("other.tsv"), "--watch", WATCH, "--slip", "0", "--context", "0"])
+    expect("tape_diff diff --slip 0: the slip diverges", rc == 1)
+
     env = dict(os.environ)
     env.pop("SA1_DUMP", None)
     p = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "replay_test.py")], env=env,
