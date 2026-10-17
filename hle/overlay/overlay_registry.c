@@ -4,7 +4,7 @@
  * recomp/emitter/emit_overlay.py (recomp/out/, never committed). */
 #include "overlay_loader.h"
 
-extern const sa1_overlay sa1_ovl_adv00, sa1_ovl_advertise, sa1_ovl_ev0001, sa1_ovl_ev0002, sa1_ovl_ev0003, sa1_ovl_ev0006, sa1_ovl_ev002b;
+extern const sa1_overlay sa1_ovl_adv00, sa1_ovl_advertise, sa1_ovl_ev0001, sa1_ovl_ev0002, sa1_ovl_ev0003, sa1_ovl_ev0006, sa1_ovl_ev002b, sa1_ovl_summary;
 
 const hle_overlay_file hle_overlay_files[] = {
     {"SONICADV/ADV00.PRS",     SA1_SLOT_AREA,   2328347, "bac5bcd53a8e8b95e6a9e536d1ae5d7cd3ed63056c027366390c645d2d74c94d", &sa1_ovl_adv00},
@@ -14,5 +14,6 @@ const hle_overlay_file hle_overlay_files[] = {
     {"SONICADV/EV0003.PRS",    SA1_SLOT_EVENT,    87496, "9c53aa10e7922502b23aced8516e7b94efac5fd8d31a3330f771dca409c9b500", &sa1_ovl_ev0003},
     {"SONICADV/EV0006.PRS",    SA1_SLOT_EVENT,    31640, "9bdf1b01e15bff52b0a7ad3087982b9146541859f921df71d27945892ee49e34", &sa1_ovl_ev0006},
     {"SONICADV/EV002B.PRS",    SA1_SLOT_EVENT,   325560, "24958a1055e9aa83580f6777ba9a4e3675c44e290842f31b86375755853a985e", &sa1_ovl_ev002b},
+    {"SONICADV/SUMMARY.PRS",   SA1_SLOT_AREA,    695821, "9fc758d366c9c22730440245de2e0d058fa9c29110af1b5c2afa022ca29d60cc", &sa1_ovl_summary},
 };
-const unsigned hle_overlay_file_count = 7;
+const unsigned hle_overlay_file_count = 8;

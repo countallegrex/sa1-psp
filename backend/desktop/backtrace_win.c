@@ -6,6 +6,7 @@
 #include "sh4_rt.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -43,6 +44,65 @@ void plat_trace_dump(const char *path) {
     fclose(f);
 }
 
+/* Watchdog: a thread that, when the guest frame counter has not moved for
+ * `seconds`, suspends the main thread and walks its stack (a pure guest
+ * loop that polls memory makes no HLE call, so nothing else would report
+ * it), then exits the process. */
+static HANDLE main_thread;
+static uint32_t (*wd_frame)(void);
+static DWORD wd_seconds;
+
+static void walk_thread(HANDLE th) {
+    CONTEXT ctx;
+    memset(&ctx, 0, sizeof ctx);
+    ctx.ContextFlags = CONTEXT_FULL;
+    if (!GetThreadContext(th, &ctx)) { sa1_log("watchdog: GetThreadContext failed"); return; }
+    STACKFRAME64 fr;
+    memset(&fr, 0, sizeof fr);
+    DWORD machine = IMAGE_FILE_MACHINE_AMD64;
+    fr.AddrPC.Offset = ctx.Rip; fr.AddrPC.Mode = AddrModeFlat;
+    fr.AddrFrame.Offset = ctx.Rbp; fr.AddrFrame.Mode = AddrModeFlat;
+    fr.AddrStack.Offset = ctx.Rsp; fr.AddrStack.Mode = AddrModeFlat;
+    HANDLE proc = GetCurrentProcess();
+    char buf[sizeof(SYMBOL_INFO) + 256];
+    SYMBOL_INFO *sym = (SYMBOL_INFO *)buf;
+    sa1_log("watchdog: main thread stack:");
+    for (int i = 0; i < 48; i++) {
+        if (!StackWalk64(machine, proc, th, &fr, &ctx, NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL)) break;
+        if (fr.AddrPC.Offset == 0) break;
+        DWORD64 disp = 0;
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 255;
+        if (SymFromAddr(proc, fr.AddrPC.Offset, &disp, sym))
+            sa1_log("  #%-2d %s+0x%llx", i, sym->Name, (unsigned long long)disp);
+        else
+            sa1_log("  #%-2d 0x%llx", i, (unsigned long long)fr.AddrPC.Offset);
+    }
+}
+
+static DWORD WINAPI watchdog_main(LPVOID p) {
+    (void)p;
+    uint32_t last = wd_frame();
+    for (;;) {
+        Sleep(wd_seconds * 1000);
+        uint32_t now = wd_frame();
+        if (now != last) { last = now; continue; }
+        sa1_log("watchdog: no frame for %lu s (frame %u); the game is spinning", (unsigned long)wd_seconds, now);
+        SuspendThread(main_thread);
+        sym_init();
+        walk_thread(main_thread);
+        sa1_seam_report(30);
+        ExitProcess(3);
+    }
+    return 0;
+}
+
+void plat_watchdog_start(uint32_t (*frame)(void), unsigned seconds) {
+    wd_frame = frame; wd_seconds = seconds;
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &main_thread, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    CreateThread(NULL, 0, watchdog_main, NULL, 0, NULL);
+}
+
 void plat_backtrace(void) {
     HANDLE proc = GetCurrentProcess();
     sym_init();
@@ -65,4 +125,5 @@ void plat_backtrace(void) {
 #else
 void plat_backtrace(void) { sa1_log("host backtrace: not available on this platform"); }
 void plat_trace_dump(const char *path) { (void)path; }
+void plat_watchdog_start(uint32_t (*frame)(void), unsigned seconds) { (void)frame; (void)seconds; }
 #endif

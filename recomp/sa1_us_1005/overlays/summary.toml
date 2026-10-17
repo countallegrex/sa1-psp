@@ -1,0 +1,38 @@
+# Sonic Adventure (USA) v1.005, code overlay SONICADV/SUMMARY.PRS (file-select
+# and result summary screens), for dream-translate (discovery only). Addresses
+# only; nothing from the disc is in this file. The game decompresses the file
+# (SEGA PRS) to the area slot at 0x8C900000; tools/extract_overlays.py writes
+# the same bytes to ../private/overlays/sa1_us_1005/SUMMARY.bin. Run with
+#   DREAM_CODE_RANGES=0C900020:0C903460
+# (the code part; data follows it). See docs/m1-overlays.md.
+# The file starts with a 32-byte header of eight entry pointers; code starts
+# at +0x20. The title menu calls the first header entry (0x8C900040) after
+# loading the file (docs/m1-boot-report.md).
+
+[game]
+id = "sa1_ovl_summary"
+title = "Sonic Adventure overlay SUMMARY"
+region = "USA"
+
+[binary]
+path = "../../../../private/overlays/sa1_us_1005/SUMMARY.bin"   # decompressed, 695,821 bytes
+load_address = 0x8C900000
+link_address = 0x0C900000
+entry = 0x8C900040
+
+[functions]
+pointers = true
+sweep = true
+# The eight header entry pointers.
+extra = [0x0C900040, 0x0C900260, 0x0C900166, 0x0C900B60, 0x0C900DC0, 0x0C900C62, 0x0C901BE0, 0x0C901E20]
+exclude = []
+
+# Read by recomp/emitter/emit_overlay.py and tools/extract_overlays.py;
+# dream-translate ignores this table.
+[sa1_overlay]
+file = "SONICADV/SUMMARY.PRS"
+slot = 0x8C900000
+code_lo = 0x8C900020
+code_hi = 0x8C903460
+size = 695821
+sha256 = "9fc758d366c9c22730440245de2e0d058fa9c29110af1b5c2afa022ca29d60cc"

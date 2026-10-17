@@ -31,6 +31,7 @@ void fn_8c010000(sh4_ctx *c);
 void plat_set_data_root(const char *root);
 void plat_backtrace(void);
 void plat_trace_dump(const char *path);
+void plat_watchdog_start(uint32_t (*frame)(void), unsigned seconds);
 static const char *trace_path;
 
 static FILE *log_file;
@@ -120,6 +121,7 @@ int main(int argc, char **argv) {
     sa1_trap_hook = on_trap;
     hle_frame_hook = on_frame;
     sa1_trace_frame = hle_frame_count;
+    plat_watchdog_start(hle_frame_count, 10);   /* a guest loop with no frame progress is a bug */
 
     sa1_ram = calloc(SA1_RAM_SIZE + SA1_RAM_SLACK, 1);
     if (!sa1_ram) { fprintf(stderr, "cannot allocate guest RAM\n"); return 1; }

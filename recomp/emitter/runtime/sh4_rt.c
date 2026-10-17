@@ -8,6 +8,7 @@
 #include <stdlib.h>
 
 uint8_t *sa1_ram;
+extern uint32_t (*sa1_trace_frame)(void);
 
 static void (*sa1_log_sink)(const char *line);
 
@@ -207,10 +208,22 @@ static sa1_hit *sa1_hit_slot(uint32_t addr, const char *name) {
     }
 }
 
+/* A native body the game polls without the frame advancing is a spin too:
+ * SA1_SPIN_LIMIT consecutive hits of one entry with the frame counter
+ * unchanged trap with a backtrace. */
+static uint32_t hit_last_addr, hit_repeat, hit_frame;
+
 void sa1_seam_hit(uint32_t addr, const char *name) {
     if (sa1_watch_addr) sa1_watch_check(name);
     sa1_hit *h = sa1_hit_slot(addr, name);
     if (h) h->hits++;
+    uint32_t f = sa1_trace_frame ? sa1_trace_frame() : 0;
+    if (addr == hit_last_addr && f == hit_frame) {
+        if (++hit_repeat == SA1_SPIN_LIMIT) {
+            sh4_ctx dummy = {0};
+            sa1_trap(&dummy, addr, name);
+        }
+    } else { hit_last_addr = addr; hit_frame = f; hit_repeat = 0; }
 }
 
 static uint32_t stub_last_addr, stub_repeat;

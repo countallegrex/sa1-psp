@@ -10,10 +10,11 @@ the seven overlay files the M0 route executed on the way to Station Square:
 | `SONICADV/ADVERTISE.PRS` | area, `0x8C900000` | title screen, menus |
 | `SONICADV/ADV00.PRS` | area, `0x8C900000` | Station Square |
 | `SONICADV/EV0001.PRS`, `EV0002`, `EV0003`, `EV0006`, `EV002B` | event, `0x8CB80000` | opening events |
+| `SONICADV/SUMMARY.PRS` | area, `0x8C900000` | file select after the character select (added during the M1 boot, `docs/m1-boot-report.md`) |
 
-Not covered yet: `B_CHAOS0`, `STG01`, `SUMMARY` (same slot, later on the
-route), the movie player `MOVIE.BIN` (`0x8CEB0000`), and the other ~290
-overlay files on the disc. The same steps apply to each.
+Not covered yet: `B_CHAOS0`, `STG01` (same slot, later on the route), the
+movie player `MOVIE.BIN` (`0x8CEB0000`, skipped by a native entry at boot),
+and the other ~290 overlay files on the disc. The same steps apply to each.
 
 ## 1. Extraction
 
@@ -35,6 +36,7 @@ the dump is only read. Under a second for all seven.
 | `EV0003` | 49,216 | 87,496 | `9c53aa10e7922502b23aced8516e7b94efac5fd8d31a3330f771dca409c9b500` |
 | `EV0006` | 14,984 | 31,640 | `9bdf1b01e15bff52b0a7ad3087982b9146541859f921df71d27945892ee49e34` |
 | `EV002B` | 150,391 | 325,560 | `24958a1055e9aa83580f6777ba9a4e3675c44e290842f31b86375755853a985e` |
+| `SUMMARY` | 92,376 | 695,821 | `9fc758d366c9c22730440245de2e0d058fa9c29110af1b5c2afa022ca29d60cc` |
 
 ## 2. Code and data
 
@@ -67,6 +69,7 @@ floats or strings in every file.
 | `EV0003` | `0x20`–`0x16E0` | 5,824 | 6.7 % | `+0x9E`–`+0x166A` |
 | `EV0006` | `0x20`–`0x1660` | 5,696 | 18.0 % | `+0xBC`–`+0x1630` |
 | `EV002B` | `0x20`–`0xA260` | 41,536 | 12.8 % | `+0x40`–`+0x8FFA` |
+| `SUMMARY` | `0x20`–`0x3460` | 13,376 | 1.9 % | `+0x40`–`+0x902` (20 blocks: the no-VMU path) |
 
 The trace executed no block past any of these ends ("blocks executed in the
 data region" is 0 for every file below).
