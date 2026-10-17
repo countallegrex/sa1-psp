@@ -7,6 +7,7 @@
 /* weak: NULL when the overlay's code was not emitted into this build */
 extern const sa1_overlay sa1_ovl_adv00 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_advertise HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_b_chaos0 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_ev0001 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_ev0002 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_ev0003 HLE_OVERLAY_WEAK;
@@ -17,6 +18,7 @@ extern const sa1_overlay sa1_ovl_summary HLE_OVERLAY_WEAK;
 const hle_overlay_file hle_overlay_files[] = {
     {"SONICADV/ADV00.PRS",     SA1_SLOT_AREA,   2328347, "bac5bcd53a8e8b95e6a9e536d1ae5d7cd3ed63056c027366390c645d2d74c94d", &sa1_ovl_adv00},
     {"SONICADV/ADVERTISE.PRS", SA1_SLOT_AREA,    937008, "49e2690ab09d2802a4e0a284526a8ace18306722973fbb2ded663ad95fff4c39", &sa1_ovl_advertise},
+    {"SONICADV/B_CHAOS0.PRS",  SA1_SLOT_AREA,    392812, "3b1c4ae1b672426ca8445e7926b2aa626db1ccf048b27c89e2d0fada0e9bf9a1", &sa1_ovl_b_chaos0},
     {"SONICADV/EV0001.PRS",    SA1_SLOT_EVENT,    81596, "8386b36046abecae70bf31de35eda553e28a671ee857a7348fbeec1a0d8cdcaf", &sa1_ovl_ev0001},
     {"SONICADV/EV0002.PRS",    SA1_SLOT_EVENT,   157824, "eb20858ae2ad5d28ec772ad5e9e33062d82555625390474d99664f9206276e10", &sa1_ovl_ev0002},
     {"SONICADV/EV0003.PRS",    SA1_SLOT_EVENT,    87496, "9c53aa10e7922502b23aced8516e7b94efac5fd8d31a3330f771dca409c9b500", &sa1_ovl_ev0003},
@@ -24,4 +26,4 @@ const hle_overlay_file hle_overlay_files[] = {
     {"SONICADV/EV002B.PRS",    SA1_SLOT_EVENT,   325560, "24958a1055e9aa83580f6777ba9a4e3675c44e290842f31b86375755853a985e", &sa1_ovl_ev002b},
     {"SONICADV/SUMMARY.PRS",   SA1_SLOT_AREA,    695821, "9fc758d366c9c22730440245de2e0d058fa9c29110af1b5c2afa022ca29d60cc", &sa1_ovl_summary},
 };
-const unsigned hle_overlay_file_count = 8;
+const unsigned hle_overlay_file_count = 9;
