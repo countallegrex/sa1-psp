@@ -543,7 +543,15 @@ class FunctionCFG:
             else:
                 t = e
             t = phys(t)
-            if t & 1 or not (lo <= t < hi):
+            if t & 1:
+                break
+            if bound is not None:
+                # The compare proved the entry count: the targets may lie
+                # anywhere in the code block (a case body beyond the
+                # function's discovery end becomes a tail call to that entry).
+                if not (self.env.code_lo <= t < self.env.code_hi):
+                    break
+            elif not (lo <= t < hi):
                 break
             targets.append(t)
             addr += size

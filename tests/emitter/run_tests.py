@@ -590,6 +590,38 @@ mid:
  .align 4
 fn: .long FNADDR
 """, {"r4": 100, "r15": DATA + 0x100}, {"r0": 3}, calls=["callee"], extra=(0x10,))
+# A bounded table (the compare gives the entry count) whose last entry is a
+# function far outside this function's range: it must be kept and become a
+# tail call (M1 boot bug: a 53-entry table in the character-select code was
+# cut to 4 entries by the target-range heuristic).
+case("switch_far_target", """
+ mov r4,r0
+ mov #3,r1
+ cmp/hs r1,r0
+ bt deflt
+ shll2 r0
+ mov.l tbladdr,r1
+ mov.l @(r0,r1),r1
+ jmp @r1
+ mov #5,r5
+ .align 4
+tbladdr: .long tbl
+tbl: .long c0
+ .long c1
+ .long FNADDR
+c0:
+ mov #20,r0
+ rts
+ nop
+c1:
+ mov #21,r0
+ rts
+ nop
+deflt:
+ mov #99,r0
+ rts
+ nop
+""", {"r4": 2, "r15": DATA + 0x100}, {"r0": 7}, calls=["callee"])
 case("tail_call", """
  mov.l fn,r1
  jmp @r1
