@@ -13,3 +13,35 @@ address	hle	what
 8c099b2c	hle/game/tasks.c	task kill-and-switch (task): kills it and, if it was the current one, resumes the next task
 8c099ab2	hle/game/tasks.c	task kill (task): recursive; the wrapper releases the native coroutine
 8c0517f6	hle/shinobi/vsync.c	game frame wait, second entry: spins while the VBlank countdown 0x8C754EC0 is above r4 (the adventure field runs several logic updates per frame)
+8c037294	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c037460	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c0374d4	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c037538	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c0375b0	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c037990	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c037c3c	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c037ccc	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c037ee0	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c038516	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c038668	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c038802	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c041eaa	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c042098	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c042298	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c042416	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c0425a0	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c042880	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c04298e	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c042b22	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c0522c0	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c052518	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c0528ae	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c07e0ae	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c07e480	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c07e642	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c07e9e6	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c080fa2	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c09e778	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c09e880	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c09eb08	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c09ee44	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op

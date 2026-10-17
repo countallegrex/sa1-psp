@@ -167,6 +167,17 @@ range; what it does is an M1 question.
 No game-block function touches PowerVR registers or VRAM. Ninja and KAMUI
 own the display entirely, which is the precondition for replacing them.
 
+*M1 (2026-10-17):* the store-queue path (`0xE0000000` plus `pref`,
+configured through QACR0/1) is used by more game code than the TA FIFO
+scan found: the game's own model and landtable renderer at
+`0x8C036F00`–`0x8C038E00` (state in GBR-relative globals, GBR set at
+`0x8C036F64`), the 2D writers at `0x8C041E00`–`0x8C042C00`, and texture
+uploads at `0x8C09E778`–`0x8C09EE44`. The 32 functions that contain such
+stores (the 8 above among them) are wrapped as native no-ops for the
+no-graphics milestone (`hle/ninja/ta_stubs.c`,
+`recomp/sa1_us_1005/hle_wraps.tsv`); they are the M2 translator's input.
+The `0xA0720009` load at `0x8C053B60` was never reached on the M1 route.
+
 ## 6. What this does not yet give
 
 - **Library boundaries inside B** are page-level guesses. Byte-pattern

@@ -47,7 +47,7 @@ class Program:
         self.wrap = {phys(a) for a in (wrap or ())}
         # Entries that stay C functions even when only a branch reaches them:
         # the Flycast trace's executed entries (recomp/sa1_us_1005/
-        # executed_entries.txt), which are real call targets whatever the
+        # trace_call_targets.txt: jsr/jmp targets), which are real call targets whatever the
         # discovery origin says.
         self.keep = {phys(a) for a in (keep or ())}
         self.log = log

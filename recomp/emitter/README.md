@@ -154,13 +154,19 @@ Every entry in the discovery list is a candidate. The CFG of a function is
 everything reachable from its entry inside block A, stopping at other
 entries (tail calls). Two adjustments from measurement on SA1:
 
-- 3,024 "branch"-origin entries (discovery registered them because some
-  branch landed outside the function ranges it knew at the time) are never
-  called. They are join points, loop headers and shared tails of real
-  functions, so they are local code of whoever branches to them (one C
-  function fewer, no tail-call sync). The 1,113 of them that no emitted
-  function reaches are emitted as standalone functions anyway, in case a
-  pointer table refers to them; the Flycast trace will say which are dead.
+- "Branch"-origin entries (discovery registered them because some branch
+  landed outside the function ranges it knew at the time) that nothing
+  calls are join points, loop headers and shared tails of real functions,
+  so they are local code of whoever branches to them (one C function fewer,
+  no tail-call sync). Three kinds stay C functions anyway: those no emitted
+  function reaches (orphans, in case a pointer table refers to them), those
+  whose P1 address appears as a 32-bit word anywhere in the image (object
+  and callback tables, literal pools stored into structs), and those the
+  Flycast trace reached through a register (`--keep`, default
+  `recomp/sa1_us_1005/trace_call_targets.txt`; the M1 boot found Station
+  Square's object table, in overlay data, pointing at one). Keeping every
+  *executed* branch entry would be wrong: a switch head emitted standalone
+  loses the compare that bounds its table.
 - Call targets that are not in the list get a function of their own
   (0 in SA1: discovery had already found them all).
 

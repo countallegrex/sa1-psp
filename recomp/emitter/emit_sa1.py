@@ -68,8 +68,8 @@ def main():
     ap.add_argument("--seam", default=os.path.join(REPO, "recomp", "sa1_us_1005", "sdk_entry_points.tsv"))
     ap.add_argument("--wraps", default=os.path.join(REPO, "recomp", "sa1_us_1005", "hle_wraps.tsv"),
                     help="functions hle/ wraps; their bodies are emitted as fn_<addr>_orig")
-    ap.add_argument("--keep", default=os.path.join(REPO, "recomp", "sa1_us_1005", "executed_entries.txt"),
-                    help="entries that stay C functions even if only a branch reaches them (the trace's executed entries)")
+    ap.add_argument("--keep", default=os.path.join(REPO, "recomp", "sa1_us_1005", "trace_call_targets.txt"),
+                    help="entries that stay C functions even if only a branch reaches them (the trace's dynamic call targets)")
     ap.add_argument("--out", default=os.path.join(REPO, "recomp", "out", "emitter"))
     ap.add_argument("--chunks", type=int, default=32)
     ap.add_argument("--update-hle", action="store_true", help="copy seam.h / seam_stubs.c into hle/")

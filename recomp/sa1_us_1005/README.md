@@ -27,7 +27,8 @@ MD5 for cross-checking against other tools: `060cad2ceefc07c7429085f30a356046`.
 | `sdk_entry_points.tsv` | The 289 SDK addresses that game code calls through literal pools, ranked by call sites, with behavioural names where known. Start of the seam table. |
 | `trace_seeds.txt` | The 68 executed call/tail-jump targets M0 discovery missed, from the Flycast trace (`tools/trace_diff.py`, `docs/m0-trace.md`). Also in `sa1_us_1005.toml` `extra`. |
 | `executed_entries.txt` | The 3,661 function entries (seeded list) executed on the M0 route: title → Station Square → Emerald Coast → Station Square. Addresses only. |
-| `overlay_main_seeds.txt` | The 23 block-A entries that only the code overlays call (discovery cannot see them from the image). Also in `sa1_us_1005.toml` `extra`. `docs/m1-overlays.md` §6. |
+| `overlay_main_seeds.txt` | The 26 block-A entries that only the code overlays call (discovery cannot see them from the image; 3 are `SUMMARY.PRS`'s). Also in `sa1_us_1005.toml` `extra`. `docs/m1-overlays.md` §6. |
+| `trace_call_targets.txt` | The 655 block-A entries the M0 route reached through a register (`jsr`/`jmp`/`bsrf`/`braf`, the trace's `D` records). The emitter keeps them as C functions whatever their discovery origin (`emit_sa1.py --keep`), since object and callback tables point at them (`docs/m1-boot-report.md` §5). |
 | `overlays/<name>.toml` | One Dream-Recomp config per code overlay (`ADVERTISE`, `ADV00`, `EV0001`/`0002`/`0003`/`0006`/`002B` so far): slot address, code range, SHA-256 of the decompressed file (`tools/extract_overlays.py`, under `../private/`). |
 | `overlays/<name>_seeds.txt` | Executed call targets in that overlay that discovery missed, from `tools/trace_diff.py --overlay`. |
 

@@ -279,24 +279,21 @@ Each one has a single exit test. Do not start the next before the test passes.
       (`docs/m0-trace.md`). New scope found by the trace: 29 % of the
       executed code is in disc overlays (`STG`/`ADV`/`B_`/`EV*.PRS`,
       `MOVIE.BIN`) that M1 must recompile too.*
-- [ ] **M1 Desktop boot, no graphics.** Recompiled code + Shinobi HLE
+- [x] **M1 Desktop boot, no graphics.** Recompiled code + Shinobi HLE
       (memory, files from the card layout, pad, vsync, timers) + Ninja stubs
       that log. Exit: the game initialises, loads the title screen data, then
       loads Station Square without crashing, visible in the log.
-      *In progress (2026-10-16): the emitter is done (`recomp/emitter/`,
-      `docs/m1-emitter-report.md`): block A becomes 5,295 C functions, 3.66 MB
-      of MIPS at `-Os` (3.88x, target â‰¤ 5x), compiles with clang and psp-gcc,
-      51 snippet tests pass locally and run in CI, 408 indirect sites go through the function
-      table, no non-local returns needed. `hle/seam.h` holds the 289 seam
-      prototypes with logging stubs. Overlays done for the exit route
-      (`docs/m1-overlays.md`): `ADVERTISE`, `ADV00` and five opening `EV*`
-      files have their own discovery config, 100 % of the 406 executed
-      overlay call targets found (97.04 % without the 12 seeds), and 1,070 C
-      functions in one table per slot. That C compiles with clang and
-      psp-gcc and links against the main image. The loader hook
-      (`hle/overlay/`) wraps the game's PRS loader `0x8C09DA44` and installs
-      the table of the file the game loads. Still to do: the Shinobi HLE
-      bodies and a boot `main`.*
+      *Passed 2026-10-17 (`docs/m1-boot-report.md`). The desktop runtime
+      (`backend/desktop/`) boots `1ST_READ.BIN` with 113 native seam bodies
+      (`hle/`), the game's own coroutine task system on host coroutines, and
+      a scripted controller: Sega logo, movie skipped, title, menus, file
+      select, then `ADV00.PRS` installed and Station Square running with its
+      opening event at guest frame 2458–3000 (1.0 s host time). The run
+      ends at frame 3122 when the game loads `B_CHAOS0.PRS`, the first
+      overlay outside M1's set. Found and fixed on the way: four emitter
+      bugs (register sync at calls, switch-table bounds, pointer-table
+      entries), each with a test in `tests/emitter/`; `SUMMARY.PRS` added
+      to the overlays; the game's 32 direct TA writers wrapped as no-ops.*
 - [ ] **M2 Desktop graphics.** Ninja HLE on OpenGL fixed function, reading
       models and textures from guest RAM. Exit: Emerald Coast completed with
       a controller, draw order correct, no desktop-only features.
@@ -410,5 +407,12 @@ sa1-psp/                      this repo (public)
   `..\flycast\trace-2.7\sa1trace.txt`; method in `docs/m0-trace.md`.
 - M1 emitter done: `python recomp/emitter/emit_sa1.py --bin <1ST_READ.BIN>
   --functions recomp/out/dream_seeded/sa1_us_1005.functions.json` writes
-  `recomp/out/emitter/` (26.8 MB of C, 32 chunks) in about a minute;
-  `python tests/emitter/run_tests.py` is the emitter's test suite.
+  `recomp/out/emitter/` (26.9 MB of C, 32 chunks) in about a minute;
+  `python tests/emitter/run_tests.py` is the emitter's test suite (55 cases).
+- M1 boot: `cmake --build build-desktop` builds `sa1psp.exe` when
+  `recomp/out/emitter/` and `recomp/out/overlays/emitter/*/` exist (8
+  overlays: `ADVERTISE`, `SUMMARY`, `ADV00`, five `EV*`; each overlay is
+  `python recomp/emitter/emit_overlay.py recomp/sa1_us_1005/overlays/<name>.toml`,
+  then `python -I tools/gen_overlay_registry.py`). Run it as in
+  `docs/m1-boot-report.md` §1; `--help`-style options are listed at the top
+  of `backend/desktop/main.c`.
