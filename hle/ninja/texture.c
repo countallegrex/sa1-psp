@@ -96,6 +96,7 @@ static uint32_t yuv_to_565(int y, int u, int v) {
 
 /* Decodes the PVR-T at p (length n) into a 16-bit PSP-order image.
  * Returns the backend handle, 0 on failure; *w, *h, *fmt describe it. */
+static const char *decode_name = "";      /* the texture being decoded, for the debug log and dumps */
 static uint32_t decode_pvrt(const uint8_t *p, uint32_t n, int *out_w, int *out_h, int *out_fmt, uint32_t *out_bytes, uint32_t *gbix_out) {
     uint32_t off = 0;
     if (gbix_out) *gbix_out = 0xFFFFFFFFu;
@@ -118,12 +119,28 @@ static uint32_t decode_pvrt(const uint8_t *p, uint32_t n, int *out_w, int *out_h
     uint16_t *img = calloc((size_t)w * h, 2);
     if (!img) return 0;
     int fmt = psp_fmt(pixfmt);
+    static int tex_log = -1;
+    if (tex_log < 0) tex_log = getenv("SA1_TEX_LOG") != NULL;       /* debug aid: every decode */
+    if (tex_log) sa1_log("texture: decode %s %ux%u pixel %d data 0x%x size %u avail %u", decode_name, w, h, pixfmt, datafmt, size, n);
     int ok = 1;
     switch (datafmt) {
     case 1: case 2: case 0xD: {                        /* twiddled (+mips) */
         uint32_t base = 0;
         if (datafmt == 2) base = MIP_POINT[log2u(w)];
         if (datafmt == 2 && w != h) base = 0;             /* mips on rectangles: not a DC format */
+        if (pixfmt == 3) {
+            /* YUV422: 16-bit units twiddled like any texel; the unit at even x
+             * holds (U, Y0), the one at x+1 holds (V, Y1), low byte first. */
+            fmt = DRAW_FMT_5650;
+            for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x + 1 < w; x += 2) {
+                uint32_t i0 = base + twiddled_index(x, y, w, h) * 2, i1 = base + twiddled_index(x + 1, y, w, h) * 2;
+                uint16_t w0 = i0 + 1 < dn ? rd16le(d + i0) : 0, w1 = i1 + 1 < dn ? rd16le(d + i1) : 0;
+                int u = w0 & 255, y0 = w0 >> 8, v = w1 & 255, y1 = w1 >> 8;
+                img[y * w + x] = to_psp((uint16_t)yuv_to_565(y0, u, v), 1);
+                img[y * w + x + 1] = to_psp((uint16_t)yuv_to_565(y1, u, v), 1);
+            }
+            break;
+        }
         for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
             uint32_t i = base + twiddled_index(x, y, w, h) * 2;
             uint16_t v = i + 1 < dn ? rd16le(d + i) : 0;
@@ -199,6 +216,23 @@ static uint32_t decode_pvrt(const uint8_t *p, uint32_t n, int *out_w, int *out_h
     }
     uint32_t handle = 0;
     if (ok) handle = draw_texture_create((int)w, (int)h, fmt, img, 0, NULL);
+    const char *dump_dir = getenv("SA1_TEX_DUMP_DIR");      /* debug aid: every decoded texture as PPM, 16-bit expanded */
+    if (ok && dump_dir && w >= (uint32_t)(getenv("SA1_TEX_DUMP_MIN") ? atoi(getenv("SA1_TEX_DUMP_MIN")) : 128)) {
+        char path[512]; FILE *o;
+        static unsigned dump_seq;
+        snprintf(path, sizeof path, "%s/tex_%03u_%s_%ux%u_p%d_d%x.ppm", dump_dir, dump_seq++, decode_name, w, h, pixfmt, datafmt);
+        if ((o = fopen(path, "wb")) != NULL) {
+            fprintf(o, "P6\n%u %u\n255\n", w, h);
+            for (uint32_t i = 0; i < w * h; i++) {
+                uint16_t v = img[i]; uint8_t rgb[3];
+                if (fmt == DRAW_FMT_5650) { rgb[0] = (v & 31) << 3; rgb[1] = ((v >> 5) & 63) << 2; rgb[2] = ((v >> 11) & 31) << 3; }
+                else if (fmt == DRAW_FMT_5551) { rgb[0] = (v & 31) << 3; rgb[1] = ((v >> 5) & 31) << 3; rgb[2] = ((v >> 10) & 31) << 3; }
+                else { rgb[0] = (v & 15) << 4; rgb[1] = ((v >> 4) & 15) << 4; rgb[2] = ((v >> 8) & 15) << 4; }
+                fwrite(rgb, 1, 3, o);
+            }
+            fclose(o);
+        }
+    }
     free(img);
     if (!handle) return 0;
     *out_w = (int)w; *out_h = (int)h; *out_fmt = pixfmt; *out_bytes = w * h * 2;
@@ -227,6 +261,7 @@ static uint32_t size_code(int w, int h) {
 /* Loads the PVR-T at host memory p into a memlist entry; returns the entry index or -1. */
 static int load_entry(const uint8_t *p, uint32_t n, uint32_t gbix_hint, const char *what) {
     int w, h, pixfmt; uint32_t bytes, gbix = 0xFFFFFFFFu;
+    decode_name = what;
     uint32_t handle = decode_pvrt(p, n, &w, &h, &pixfmt, &bytes, &gbix);
     if (gbix == 0xFFFFFFFFu) gbix = gbix_hint;
     if (!handle) { sa1_log("texture: %s: decode failed", what); return -1; }
@@ -319,7 +354,7 @@ static int load_texname(uint32_t texname) {
     uint8_t *buf = malloc(size);
     if (!buf) return -1;
     int got = sa1_plat_file_read(path, 0, buf, size);
-    int r = got > 0 ? load_entry(buf, (uint32_t)got, 0xFFFFFFFFu, path) : -1;
+    int r = got > 0 ? load_entry(buf, (uint32_t)got, 0xFFFFFFFFu, name) : -1;
     free(buf);
     return r;
 }

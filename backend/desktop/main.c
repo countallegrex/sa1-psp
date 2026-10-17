@@ -4,7 +4,7 @@
  *          [--watch ADDR[:OFF...]]... [--press FRAME:BUTTONS[:HOLD]]... [--trace-funcs FILE]
  *          [--headless] [--scale N] [--screenshot FRAME:FILE.ppm]... [--stats N]
  *          [--stick FRAME:X:Y[:HOLD]]... [--poke FRAME:ADDR:VALUE[:SIZE]]... [--dump FRAME:FILE]...
- *          [--aspect wide|4:3]
+ *          [--aspect wide|4:3] [--no-pad]
  *
  * Without --headless an SDL2 window opens at 480x272 times --scale (2 by
  * default) with an OpenGL 1.x fixed-function context (backend/draw.h), and
@@ -24,7 +24,9 @@
  * mask, hle.h: Start 8, A 4, B 2, Up 0x10 ...) are held for HOLD frames
  * (default 2).  This is how the boot test walks the title and menus.
  * --stick holds the analog stick at X,Y (-128..127, y positive = down)
- * for HOLD frames, so a scripted run can walk a stage.
+ * for HOLD frames, so a scripted run can walk a stage.  --no-pad ignores
+ * the controller and keyboard, so a scripted windowed run (screenshots)
+ * is not steered by an idle controller.
  *
  * The data root is the directory that holds SONICADV/ (the disc's file
  * tree, which is also what the Memory Stick carries).  Nothing is built in:
@@ -66,7 +68,7 @@ static int nsticks;
 static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
-static int headless, scale = 2, stats_every;
+static int headless, scale = 2, stats_every, no_pad;   /* --no-pad: ignore the controller and keyboard (scripted runs) */
 #define SHOT_MAX 16
 static struct { uint32_t frame; const char *path; } shots[SHOT_MAX], dumps[SHOT_MAX];
 static int nshots, ndumps;
@@ -161,6 +163,7 @@ static void on_frame(uint32_t frame) {
     int quit = 0;
     if (!headless && draw_poll_input(&live, &quit) == 0) {
         if (quit) { sa1_log("window closed"); report_and_exit(0); }
+        if (no_pad) { live = (hle_pad){0}; }
         if (!scripted) { hle_pad_state = live; b = live.buttons; }
         else { hle_pad_state.x = live.x; hle_pad_state.y = live.y; hle_pad_state.ltrig = live.ltrig; hle_pad_state.rtrig = live.rtrig; }
     }
@@ -178,7 +181,7 @@ static void on_frame(uint32_t frame) {
     }
     for (int i = 0; i < ndumps; i++) if (dumps[i].frame == frame) {      /* debug: guest RAM to a file */
         FILE *o = fopen(dumps[i].path, "wb");
-        if (o) { fwrite(sa1_ram, 1, SA1_RAM_SIZE, o); fclose(o); sa1_log("dump: %s", dumps[i].path); }
+        if (o) { fwrite(sa1_ram, 1, SA1_RAM_SIZE + SA1_RAM_EXTRA, o); fclose(o); sa1_log("dump: %s (%u bytes, lists included)", dumps[i].path, SA1_RAM_SIZE + SA1_RAM_EXTRA); }
     }
     input_tape_frame_end(frame);
     if (stats_every && frame % (uint32_t)stats_every == 0) kamui_report();
@@ -211,6 +214,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--watch") && i + 1 < argc) { sa1_watch_add(argv[++i]); sa1_watch_addr = 1; }
         else if (!strcmp(argv[i], "--trace-funcs") && i + 1 < argc) trace_path = argv[++i];
         else if (!strcmp(argv[i], "--headless")) headless = 1;
+        else if (!strcmp(argv[i], "--no-pad")) no_pad = 1;
         else if (!strcmp(argv[i], "--aspect") && i + 1 < argc) { const char *a = argv[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; }
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--stats") && i + 1 < argc) stats_every = atoi(argv[++i]);

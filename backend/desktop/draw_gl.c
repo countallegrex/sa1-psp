@@ -135,8 +135,12 @@ uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels,
         case DRAW_FMT_4444: gfmt = GL_RGBA; gtype = GL_UNSIGNED_SHORT_4_4_4_4_REV; ifmt = GL_RGBA; break;
         case DRAW_FMT_8888: gfmt = GL_RGBA; gtype = GL_UNSIGNED_BYTE; ifmt = GL_RGBA; break;
         }
+        /* Mip levels: the PowerVR samples them (sky domes and far ground
+         * minify heavily; without levels they alias into a dot mosaic).  GL
+         * 1.4 generates them; the GE takes levels built at load. */
+        glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
         glTexImage2D(GL_TEXTURE_2D, 0, ifmt, width, height, 0, gfmt, gtype, data);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         free(tmp);
         texs[slot].gl = id;
@@ -311,7 +315,7 @@ void draw_set_state(const draw_state *s) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, s->clamp_u ? GL_CLAMP_TO_EDGE : s->flip_u ? GL_MIRRORED_REPEAT : GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, s->clamp_v ? GL_CLAMP_TO_EDGE : s->flip_v ? GL_MIRRORED_REPEAT : GL_REPEAT);
         GLint f = s->filter == DRAW_FILTER_POINT ? GL_NEAREST : GL_LINEAR;
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, s->filter == DRAW_FILTER_POINT ? GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
         switch (s->shade) {
         case DRAW_SHADE_DECAL: glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE); break;
@@ -348,10 +352,41 @@ static void emit(const draw_vertex *v, int n, GLenum mode) {
         } else glColor4ub((GLubyte)((c >> 16) & 255), (GLubyte)((c >> 8) & 255), (GLubyte)(c & 255), (GLubyte)a);
         float w = v[i].w > 1e-6f ? v[i].w : 1e-6f;
         float z = 1.0f / w;
+        if (z < 1.0f) z = 1.0f;   /* 1/w above 1 (2D elements pushed in front): nearest depth, not clipped */
         glTexCoord2f(v[i].u, v[i].v);
         glVertex4f(v[i].x * z, v[i].y * z, -(z + 1.0f), z);
     }
     glEnd();
+}
+#endif
+
+#ifndef SA1_NO_SDL
+/* PowerVR adds the offset (specular) colour after texturing: colour = tex *
+ * base + offset.  The fixed pipeline has no second colour stage, so a
+ * textured strip with a non-zero offset colour gets a second, additive,
+ * untextured pass at equal depth (the GE will do the same). */
+static void emit_offset(const draw_vertex *v, int n, GLenum mode) {
+    int any = 0;
+    for (int i = 0; i < n && !any; i++) if (v[i].ocolor & 0x00FFFFFFu) any = 1;
+    if (!any || headless) return;
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE);
+    glDepthFunc(GL_LEQUAL); glDepthMask(GL_FALSE);
+    glDisable(GL_ALPHA_TEST);
+    glBegin(mode);
+    for (int i = 0; i < n; i++) {
+        uint32_t o = v[i].ocolor;
+        unsigned a = cur.use_alpha ? (v[i].color >> 24) & 255 : 255;   /* scale by the vertex alpha so faded polygons fade their highlight too */
+        glColor4ub((GLubyte)(((o >> 16) & 255) * a / 255), (GLubyte)(((o >> 8) & 255) * a / 255), (GLubyte)((o & 255) * a / 255), 255);
+        float w = v[i].w > 1e-6f ? v[i].w : 1e-6f;
+        float z = 1.0f / w;
+        if (z < 1.0f) z = 1.0f;
+        glVertex4f(v[i].x * z, v[i].y * z, -(z + 1.0f), z);
+    }
+    glEnd();
+    stats.draw_calls++;
+    cur_valid = 0;                 /* the next draw_set_state restores the state */
+    draw_set_state(&cur);
 }
 #endif
 
@@ -360,6 +395,7 @@ void draw_strip(const draw_vertex *v, int n) {
     stats.draw_calls++; stats.strips++; stats.triangles += (uint32_t)(n - 2);
 #ifndef SA1_NO_SDL
     emit(v, n, GL_TRIANGLE_STRIP);
+    if (cur.texture) emit_offset(v, n, GL_TRIANGLE_STRIP);
 #else
     (void)v;
 #endif
