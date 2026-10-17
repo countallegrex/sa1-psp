@@ -86,10 +86,40 @@ void shinobi_hw_init(void) {
  * reads agree; r0 = seconds since 1950-01-01 00:00, or -1 on a bus error.
  * The host clock stands in (in strict mode, the fixed epoch plus guest
  * time); the oracle run's clock is not reproduced. */
-void fn_8c10be0c(sh4_ctx *c) {
-    HLE_ENTER(0x8c10be0cu, "syRtcRead (A-tail)");
+static uint32_t rtc_seconds(void) {
     time_t now = hle_strict ? (time_t)(hle_rtc_epoch + (int64_t)(shinobi_time_us() / 1000000u)) : time(NULL);
     /* 1950-01-01 is 631152000 s before the Unix epoch (20 years, 5 leap days). */
-    uint32_t secs = (uint32_t)((int64_t)now + 631152000);
-    RET(secs);
+    return (uint32_t)((int64_t)now + 631152000);
 }
+void fn_8c10be0c(sh4_ctx *c) {
+    HLE_ENTER(0x8c10be0cu, "syRtcRead (A-tail)");
+    RET(rtc_seconds());
+}
+
+/* 0x8C10BE78: the raw read under 0x8C10BE0C and under the per-frame RTC poll
+ * (0x8C10BA80 -> 0x8C10BD96, on the VBlank chain): copies the two RTC
+ * registers (high and low 16 bits) through the G2 helper 0x8C10D460 and
+ * stores the 32-bit count at r4; r0 = 0, or -1 on a bus error.  The helper
+ * suspends the AICA DMA channels first through a control block that the
+ * game only sets up with a live sound driver (0x8C10D5A8), so recompiled it
+ * dereferences a NULL block and its register writes, masked into guest
+ * RAM, corrupted memory at random (the task pool, in the M2 exit test). */
+void fn_8c10be78(sh4_ctx *c) {
+    HLE_ENTER(0x8c10be78u, "syRtc raw read (A-tail)");
+    hle_wr32(ARG0, rtc_seconds());
+    RET(0);
+}
+
+/* 0x8C10BED4 / 0x8C10BEFC / 0x8C10BF22: the RTC writers (write enable, low
+ * half, high half) through the same helper.  The host clock cannot be set
+ * from here; accepted and ignored, r0 = 0.  The game only calls them from
+ * its clock-setting menu. */
+static void rtc_write(sh4_ctx *c, uint32_t addr, const char *name) {
+    HLE_ENTER(addr, name);
+    static int logged;
+    if (!logged) { sa1_log("rtc: the game wrote the clock (0x%08x, value 0x%x); ignored", addr, ARG0); logged = 1; }
+    RET(0);
+}
+void fn_8c10bed4(sh4_ctx *c) { rtc_write(c, 0x8c10bed4u, "syRtc write enable (A-tail)"); }
+void fn_8c10befc(sh4_ctx *c) { rtc_write(c, 0x8c10befcu, "syRtc write low (A-tail)"); }
+void fn_8c10bf22(sh4_ctx *c) { rtc_write(c, 0x8c10bf22u, "syRtc write high (A-tail)"); }

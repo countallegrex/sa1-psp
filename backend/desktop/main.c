@@ -3,6 +3,7 @@
  *   sa1psp <1ST_READ.BIN> <data root> [--frames N] [--seconds S] [--log FILE]
  *          [--watch ADDR[:OFF...]]... [--press FRAME:BUTTONS[:HOLD]]... [--trace-funcs FILE]
  *          [--headless] [--scale N] [--screenshot FRAME:FILE.ppm]... [--stats N]
+ *          [--stick FRAME:X:Y[:HOLD]]... [--poke FRAME:ADDR:VALUE[:SIZE]]... [--dump FRAME:FILE]...
  *
  * Without --headless an SDL2 window opens at 480x272 times --scale (2 by
  * default) with an OpenGL 1.x fixed-function context (backend/draw.h), and
@@ -21,6 +22,8 @@
  * --press scripts the controller: at guest frame FRAME the buttons (hex
  * mask, hle.h: Start 8, A 4, B 2, Up 0x10 ...) are held for HOLD frames
  * (default 2).  This is how the boot test walks the title and menus.
+ * --stick holds the analog stick at X,Y (-128..127, y positive = down)
+ * for HOLD frames, so a scripted run can walk a stage.
  *
  * The data root is the directory that holds SONICADV/ (the disc's file
  * tree, which is also what the Memory Stick carries).  Nothing is built in:
@@ -50,12 +53,15 @@ void plat_set_data_root(const char *root);
 void plat_backtrace(void);
 void plat_trace_dump(const char *path);
 void plat_watchdog_start(uint32_t (*frame)(void), unsigned seconds);
+void plat_hw_watch(uint32_t guest_addr, int len);
 static const char *trace_path;
 
 static FILE *log_file;
 #define PRESS_MAX 64
 static struct { uint32_t frame, buttons, hold; } presses[PRESS_MAX];
 static int npresses;
+static struct { uint32_t frame, hold; int x, y; } sticks[PRESS_MAX];   /* --stick FRAME:X:Y[:HOLD] */
+static int nsticks;
 static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
@@ -63,6 +69,7 @@ static int headless, scale = 2, stats_every;
 #define SHOT_MAX 16
 static struct { uint32_t frame; const char *path; } shots[SHOT_MAX], dumps[SHOT_MAX];
 static int nshots, ndumps;
+static struct { uint32_t frame, addr; int len; } hwwatch;   /* --hwwatch FRAME:ADDR[:LEN]: hardware write watch */
 static struct { uint32_t frame, addr, value, size; } pokes[SHOT_MAX];
 static int npokes;
 void kamui_report(void);            /* hle/ninja/kamui.c: renderer counters */
@@ -113,12 +120,42 @@ static void on_trap(sh4_ctx *c, uint32_t pc, const char *what) {
     if (log_file) fclose(log_file);
 }
 
+/* Debug aid (SA1_TASK_CHECK=1): walk the game's task lists (0x8C79F04C[8],
+ * 48-byte tasks: +0 next, +4 prev, +8 parent, +12 child, +16 main) every
+ * frame and log the first broken link, with the frame and the task's main
+ * (which names the object).  A stale child pointer makes the game's
+ * delete-children loop spin forever at the next level change. */
+static int task_check_on = -1, task_check_bad;
+static void task_check_list(uint32_t t, uint32_t parent, int depth, uint32_t frame) {
+    uint32_t prev = 0;
+    for (int n = 0; t && n < 8192 && task_check_bad < 20; n++) {
+        uint32_t nxt = hle_rd32(t), prv = hle_rd32(t + 4), par = hle_rd32(t + 8), chd = hle_rd32(t + 12), main_ = hle_rd32(t + 16);
+        if (par != parent || prv != prev) {
+            sa1_log("task-check: frame %u: task 0x%08x (main 0x%08x, depth %d) parent 0x%08x expected 0x%08x (main 0x%08x), prev 0x%08x expected 0x%08x",
+                    frame, t, main_, depth, par, parent, parent ? hle_rd32(parent + 16) : 0, prv, prev);
+            task_check_bad++;
+            return;
+        }
+        if (chd && depth < 8) task_check_list(chd, t, depth + 1, frame);
+        prev = t; t = nxt;
+    }
+}
+static void task_check(uint32_t frame) {
+    if (task_check_on < 0) task_check_on = getenv("SA1_TASK_CHECK") != NULL;
+    if (!task_check_on || task_check_bad >= 20) return;
+    for (int i = 0; i < 8; i++) task_check_list(hle_rd32(0x8C79F04Cu + 4u * (uint32_t)i), 0, 0, frame);
+}
+
 static void on_frame(uint32_t frame) {
     sa1_watch_check("frame");
+    task_check(frame);
     uint32_t b = 0;
     int scripted = 0;
     for (int i = 0; i < npresses; i++)
         if (frame >= presses[i].frame && frame < presses[i].frame + presses[i].hold) { b |= presses[i].buttons; scripted = 1; }
+    int sx = 0, sy = 0, stick_scripted = 0;
+    for (int i = 0; i < nsticks; i++)
+        if (frame >= sticks[i].frame && frame < sticks[i].frame + sticks[i].hold) { sx = sticks[i].x; sy = sticks[i].y; stick_scripted = 1; }
     hle_pad live = {0};
     int quit = 0;
     if (!headless && draw_poll_input(&live, &quit) == 0) {
@@ -126,10 +163,12 @@ static void on_frame(uint32_t frame) {
         if (!scripted) { hle_pad_state = live; b = live.buttons; }
         else { hle_pad_state.x = live.x; hle_pad_state.y = live.y; hle_pad_state.ltrig = live.ltrig; hle_pad_state.rtrig = live.rtrig; }
     }
+    if (stick_scripted || headless) { hle_pad_state.x = (int8_t)sx; hle_pad_state.y = (int8_t)sy; }
     b = input_tape_pad(frame, b, scripted);
     if (b != hle_pad_state.buttons) sa1_log("pad: buttons 0x%x", b);
     hle_pad_state.buttons = b;
     for (int i = 0; i < nshots; i++) if (shots[i].frame == frame) kamui_set_screenshot(shots[i].path);
+    if (hwwatch.len && hwwatch.frame == frame) plat_hw_watch(hwwatch.addr, hwwatch.len);
     for (int i = 0; i < npokes; i++) if (pokes[i].frame == frame) {       /* debug: write a guest word */
         if (pokes[i].size == 1) hle_wr8(pokes[i].addr, pokes[i].value);
         else if (pokes[i].size == 2) hle_wr16(pokes[i].addr, pokes[i].value);
@@ -181,6 +220,12 @@ int main(int argc, char **argv) {
             pokes[npokes].size = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : 4;
             npokes++;
         }
+        else if (!strcmp(argv[i], "--hwwatch") && i + 1 < argc) {   /* FRAME:ADDR[:LEN] */
+            char *spec = argv[++i], *end;
+            hwwatch.frame = (uint32_t)strtoul(spec, &end, 0);
+            hwwatch.addr = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 16) : 0;
+            hwwatch.len = *end == ':' ? atoi(end + 1) : 4;
+        }
         else if (!strcmp(argv[i], "--dump") && i + 1 < argc && ndumps < SHOT_MAX) {
             char *spec = argv[++i], *end;
             dumps[ndumps].frame = (uint32_t)strtoul(spec, &end, 0);
@@ -192,6 +237,14 @@ int main(int argc, char **argv) {
             shots[nshots].frame = (uint32_t)strtoul(spec, &end, 0);
             shots[nshots].path = *end == ':' ? end + 1 : "frame.ppm";
             nshots++;
+        }
+        else if (!strcmp(argv[i], "--stick") && i + 1 < argc && nsticks < PRESS_MAX) {   /* FRAME:X:Y[:HOLD], -128..127 */
+            char *spec = argv[++i], *end;
+            sticks[nsticks].frame = (uint32_t)strtoul(spec, &end, 0);
+            sticks[nsticks].x = *end == ':' ? (int)strtol(end + 1, &end, 0) : 0;
+            sticks[nsticks].y = *end == ':' ? (int)strtol(end + 1, &end, 0) : 0;
+            sticks[nsticks].hold = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : 2;
+            nsticks++;
         }
         else if (!strcmp(argv[i], "--press") && i + 1 < argc && npresses < PRESS_MAX) {
             char *spec = argv[++i], *end;

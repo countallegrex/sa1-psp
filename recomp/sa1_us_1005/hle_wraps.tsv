@@ -6,6 +6,10 @@ address	hle	what
 8c09da44	hle/overlay/overlay_loader.c	PRS file loader: (r4 = file name, r5 = destination) -> r0 = 0 or -1
 8c099872	hle/overlay/overlay_loader.c	PRS texture-archive loader that decompresses through 0x8C900000
 8c10be0c	hle/shinobi/hw.c	syRtc read (A-tail Katana piece): polls the G2 bus for the RTC; r0 = seconds since 1950-01-01, or -1
+8c10be78	hle/shinobi/hw.c	syRtc raw register-pair read (A-tail): *r4 = seconds since 1950-01-01, r0 = 0; its G2 helper needs the sound driver's DMA block, NULL here
+8c10bed4	hle/shinobi/hw.c	syRtc write enable (A-tail): ignored, r0 = 0
+8c10befc	hle/shinobi/hw.c	syRtc write low half (A-tail): ignored, r0 = 0
+8c10bf22	hle/shinobi/hw.c	syRtc write high half (A-tail): ignored, r0 = 0
 8c051790	hle/shinobi/vsync.c	game frame wait: spins while the VBlank handler 0x8C051810 has not yet brought 0x8C754EC0 to zero; the wrapper advances guest frames instead
 8c099a00	hle/game/tasks.c	game task system init: root task record at 0x8C7A0A0C, current task pointer 0x8C7A0A08
 8c099a50	hle/game/tasks.c	task yield: saves the register context on the task's stack and switches to the next task (native coroutine switch)
