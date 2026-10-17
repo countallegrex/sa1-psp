@@ -22,7 +22,8 @@ from the first code byte and from every SHC prologue (`sts.l pr,@-r15`) that has
 word reached, rounds up to 32 bytes, and then keeps extending over the next
 32-byte chunk while a linear decode from it reaches an `rts` with no invalid
 word on the way (leaf functions with no prologue, reached only through
-pointers).
+pointers), or while an SHC prologue follows `nop` padding within the next
+64 bytes (a function after a literal pool, as in ADV0100).
 """
 from __future__ import annotations
 
@@ -132,10 +133,30 @@ def find_code_end(data: bytes, start: int = 0) -> int:
     seen: set[int] = set()
     reach, pool, _ = descend(hw, seeds, limit, seen)
     end = (max(reach, pool) + 31) & ~31
-    while end < limit and leaf_at(hw, end, limit):
-        r, pl, _ = descend(hw, [end], limit, seen)
+    while end < limit:
+        # a function right after the literal pool and its padding (0x0009 or 0x0900)
+        nxt = next((o for o in range(end, min(end + 64, limit - 16), 2)
+                    if hw[(o >> 1) - 1] in (0x0009, 0x0900) and prologue_at(hw, o)), None)
+        if leaf_at(hw, end, limit):
+            start = end
+        elif nxt is not None:
+            start = nxt
+        else:
+            break
+        r, pl, _ = descend(hw, [start], limit, seen)
         end = max(end + 32, (max(r, pl) + 31) & ~31)
     return end
+
+
+def prologue_at(hw, o) -> bool:
+    """An SHC function entry: pushes of r8-r14 (mov.l rN,@-r15), then sts.l pr,@-r15."""
+    for k in range(8):
+        h = hw[(o >> 1) + k] if (o >> 1) + k < len(hw) else 0
+        if h == 0x4F22:
+            return True
+        if (h & 0xFF0F) != 0x2F06 or not 8 <= (h >> 4 & 0xF) <= 14:
+            return False
+    return False
 
 
 def inside(path: str, root: str) -> bool:

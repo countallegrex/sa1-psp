@@ -15,7 +15,8 @@ void fn_8c099872_orig(sh4_ctx *c);
 
 #define PHYS(a) ((uint32_t)(a) & 0x1FFFFFFFu)
 
-static const uint32_t slot_base[SA1_SLOT_COUNT] = {0x0C900000u, 0x0CB80000u};
+static const uint32_t slot_base[SA1_SLOT_COUNT] = {0x0C900000u, 0x0CB80000u, 0x0C920000u};
+#define AREA_SPAN 0x00280000u   /* 0x8C900000 up to the event slot */
 
 uint32_t hle_overlay_slot_base(int slot) {
     return slot >= 0 && slot < SA1_SLOT_COUNT ? slot_base[slot] : 0;
@@ -44,11 +45,21 @@ const hle_overlay_file *hle_overlay_find(const char *name, int slot) {
     return NULL;
 }
 
+/* Decompressed size of a file the registry knows, under any slot; an
+ * unknown file (data, or code not recompiled) counts as filling the area. */
+static uint32_t load_span(const char *name) {
+    const char *n = last_component(name);
+    for (unsigned i = 0; i < hle_overlay_file_count; i++)
+        if (same_name(n, last_component(hle_overlay_files[i].file))) return hle_overlay_files[i].size;
+    return AREA_SPAN;
+}
+
 void hle_overlay_load_begin(const char *name, uint32_t dest) {
-    uint32_t d = PHYS(dest);
+    uint32_t d = PHYS(dest), span = load_span(name);
     for (int s = 0; s < SA1_SLOT_COUNT; s++) {
         const sa1_overlay *ov = sa1_overlay_get(s);
-        if (ov && (d == slot_base[s] || (d >= ov->code_lo && d < ov->code_hi))) {
+        if (ov && (d == slot_base[s] || (d >= ov->code_lo && d < ov->code_hi) ||
+                   (d < ov->code_lo && ov->code_lo - d < span))) {
             sa1_log("overlay: %s -> 0x%08x overwrites %s", name, (unsigned)(d | 0x80000000u), ov->name);
             sa1_overlay_set(s, NULL);
         }
@@ -64,7 +75,10 @@ void hle_overlay_load_end(const char *name, uint32_t dest, int ok) {
             return;
         }
         const hle_overlay_file *f = hle_overlay_find(name, s);
-        if (f) {
+        if (f && !f->ov) {
+            sa1_log("overlay: loaded %s to 0x%08x; its code was not emitted into this build", f->file,
+                    (unsigned)(d | 0x80000000u));
+        } else if (f) {
             sa1_log("overlay: loaded %s to 0x%08x", f->file, (unsigned)(d | 0x80000000u));
             sa1_overlay_set(s, f->ov);
         } else {

@@ -121,7 +121,9 @@ typedef struct sa1_overlay {
     uint32_t count;
 } sa1_overlay;
 
-enum { SA1_SLOT_AREA, SA1_SLOT_EVENT, SA1_SLOT_COUNT };   /* 0x8C900000, 0x8CB80000 */
+/* 0x8C900000, 0x8CB80000, and 0x8C920000, where the Egg Carrier field
+ * (ADV0100/ADV0130) loads its code next to ADV01OBJ in the area slot. */
+enum { SA1_SLOT_AREA, SA1_SLOT_EVENT, SA1_SLOT_AREA2, SA1_SLOT_COUNT };
 void sa1_overlay_set(int slot, const sa1_overlay *ov);
 const sa1_overlay *sa1_overlay_get(int slot);
 

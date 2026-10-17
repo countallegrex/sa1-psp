@@ -14,6 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: python3 tools/check_clean.py --all
+      # hle/overlay/overlay_registry.c must match recomp/sa1_us_1005/overlays/*.toml
+      - run: python3 tools/gen_overlay_registry.py --check
 
   # PSP target inside the pinned pspdev image (same pin as the Dockerfile and
   # docs/m-1-toolchain.md).
@@ -51,6 +53,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: python tests/emitter/run_tests.py
+      # Overlay loader slot rules (tests/overlay/loader_test.c), no game data.
+      - name: Overlay loader test
+        shell: bash
+        run: |
+          ${{ matrix.os == 'windows-latest' && 'clang' || 'cc' }} -std=c11 -D_CRT_SECURE_NO_WARNINGS \
+            -Ihle -Ihle/overlay -Irecomp/emitter/runtime tests/overlay/loader_test.c \
+            hle/overlay/overlay_loader.c recomp/emitter/runtime/sh4_rt.c -o loader_test
+          ./loader_test
 
   # Desktop target with clang + Ninja, then run the hello-world.
   desktop:

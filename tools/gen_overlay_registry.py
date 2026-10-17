@@ -7,7 +7,11 @@ Usage:
 Reads the [sa1_overlay] table of every recomp/sa1_us_1005/overlays/*.toml
 (file, slot, size, sha256) and writes one hle_overlay_file record per
 overlay, pointing at the sa1_ovl_<name> table that
-recomp/emitter/emit_overlay.py generates.  The output holds only names,
+recomp/emitter/emit_overlay.py generates.  The tables are weak references:
+a config whose code has not been emitted (no recomp/out/overlays/emitter/
+<name>/) still links, and the loader treats that file as having no
+recompiled code.  So adding a config never breaks the build; tools/
+overlays.py build emits it and rewrites this file.  The output holds only names,
 addresses, sizes and hashes; nothing from the disc.  --check exits 1 if the
 committed file is out of date instead of writing it.
 """
@@ -21,7 +25,7 @@ import tomllib
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIGS = os.path.join(REPO, "recomp", "sa1_us_1005", "overlays")
 OUT = os.path.join(REPO, "hle", "overlay", "overlay_registry.c")
-SLOTS = {0x0C900000: "SA1_SLOT_AREA", 0x0CB80000: "SA1_SLOT_EVENT"}
+SLOTS = {0x0C900000: "SA1_SLOT_AREA", 0x0CB80000: "SA1_SLOT_EVENT", 0x0C920000: "SA1_SLOT_AREA2"}
 
 
 def records():
@@ -45,7 +49,8 @@ def render(recs):
          " * recompiled code overlay; the sa1_ovl_* tables come from",
          " * recomp/emitter/emit_overlay.py (recomp/out/, never committed). */",
          '#include "overlay_loader.h"', ""]
-    L.append("extern const sa1_overlay %s;" % ", ".join("sa1_ovl_" + r[0] for r in recs))
+    L.append("/* weak: NULL when the overlay's code was not emitted into this build */")
+    L += ["extern const sa1_overlay sa1_ovl_%s HLE_OVERLAY_WEAK;" % r[0] for r in recs]
     L += ["", "const hle_overlay_file hle_overlay_files[] = {"]
     width = max(len(r[1]) for r in recs) + 3
     for name, file, slot, size, sha in recs:

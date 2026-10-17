@@ -4,7 +4,15 @@
  * recomp/emitter/emit_overlay.py (recomp/out/, never committed). */
 #include "overlay_loader.h"
 
-extern const sa1_overlay sa1_ovl_adv00, sa1_ovl_advertise, sa1_ovl_ev0001, sa1_ovl_ev0002, sa1_ovl_ev0003, sa1_ovl_ev0006, sa1_ovl_ev002b, sa1_ovl_summary;
+/* weak: NULL when the overlay's code was not emitted into this build */
+extern const sa1_overlay sa1_ovl_adv00 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_advertise HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_ev0001 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_ev0002 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_ev0003 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_ev0006 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_ev002b HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_summary HLE_OVERLAY_WEAK;
 
 const hle_overlay_file hle_overlay_files[] = {
     {"SONICADV/ADV00.PRS",     SA1_SLOT_AREA,   2328347, "bac5bcd53a8e8b95e6a9e536d1ae5d7cd3ed63056c027366390c645d2d74c94d", &sa1_ovl_adv00},
