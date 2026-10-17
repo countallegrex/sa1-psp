@@ -66,6 +66,10 @@ typedef float    __attribute__((may_alias)) sa1_f32a;
  * registers the A-tail Katana pieces and the 8 TA-writing functions touch). */
 uint32_t sa1_mmio_rd(uint32_t addr, int size);
 void sa1_mmio_wr(uint32_t addr, int size, uint32_t value);
+/* The HLE layer serves the few registers the game touches directly (timer
+ * unit, cable pins, G2 FIFO status); set handled when the address is one. */
+extern uint32_t (*sa1_mmio_hook)(uint32_t addr, int size, int *handled);
+extern void (*sa1_mmio_wr_hook)(uint32_t addr, int size, uint32_t value, int *handled);
 
 /* ---- control flow ------------------------------------------------------ */
 void sa1_call(sh4_ctx *c, uint32_t addr);               /* function table / seam */
@@ -74,6 +78,23 @@ sa1_fn sa1_fn_lookup(uint32_t addr);                   /* NULL when unknown */
 void sa1_set_log_sink(void (*sink)(const char *line)); /* default: stderr */
 void sa1_log(const char *fmt, ...) __attribute__((format(printf, 1, 2))); /* one line to the sink */
 void sa1_seam_stub(sh4_ctx *c, uint32_t addr, const char *name);
+/* Per-entry hit counters behind sa1_seam_stub and sa1_seam_hit: the log
+ * prints the busiest callees at exit (sa1_seam_report).  A real HLE body
+ * calls sa1_seam_hit so it is counted too. */
+void sa1_seam_hit(uint32_t addr, const char *name);
+void sa1_seam_report(int top);
+/* Native functions installed at run time for guest addresses that have no
+ * emitted code (BIOS syscall vectors, host-provided callbacks).  Checked
+ * before the overlay slots and the main table. */
+void sa1_register_fn(uint32_t addr, sa1_fn fn);
+/* Debug aid: when sa1_watch_addr is set, sa1_watch_check() logs (once per
+ * change) whenever the 32-bit word there differs from its last value.  The
+ * runtime calls it at every seam hit and indirect call; the backend may
+ * call it per frame. */
+extern uint32_t sa1_watch_addr;
+void sa1_watch_check(const char *where);
+/* Called by sa1_trap before abort(), if set (the backend prints its report). */
+extern void (*sa1_trap_hook)(sh4_ctx *c, uint32_t pc, const char *what);
 extern const sa1_fn_entry sa1_fn_table[];
 extern const uint32_t sa1_fn_count;
 extern const sa1_fn_entry sa1_seam_table[];
