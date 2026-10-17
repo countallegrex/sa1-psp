@@ -78,6 +78,7 @@ Source: Sonic Adventure, US v1.005, GD-ROM dump, extracted locally to
 | Item | Fact |
 |---|---|
 | `1ST_READ.BIN` | 6,735,488 bytes, **already descrambled** (starts with the Katana SDK library-handle startup stub, loads at `0x8C010000`). |
+| Code overlays | Measured by the M0 trace (`docs/m0-trace.md` §5): area code (`STGnn`, `ADVnn`, `B_*`, `MINI*`, `ADVERTISE`, `SUMMARY` `.PRS`) loads at `0x8C900000`, event code (`EVnnnn.PRS`) at `0x8CB80000`, the movie player (`MOVIE.BIN`) at `0x8CEB0000`. 29 % of the code executed on the Emerald Coast route is in these files, not in `1ST_READ.BIN`. |
 | Frame rate | 30 fps on Dreamcast. That is the target, not 60. |
 | SDK | Katana SDK (`KATANA` and `Ninja` strings present): Shinobi (`sy*`, `gd*`, `pd*`), Ninja (`nj*`), Katana sound library + Manatee ARM7 driver. |
 | Known data layout | `..\private\sa_tools\project\sa_tools_sa1\1st_read_data.ini` (94 KB, from X-Hax SA Tools) gives addresses of models, landtables, object lists, textures, in the executable. |
@@ -89,7 +90,7 @@ Disc assets (2,834 files, 973 MB):
 | `.ADX` | 109 | 433 MB | BGM and voice streams | Keep. Decode on CPU; it is cheap. Optionally re-encode at lower rate to save card space. |
 | `.SFD` | 10 | 175 MB | Sofdec FMV (intro, endings) | Cannot be played natively. Convert offline to PMF, or skip with a still frame. Late milestone. |
 | `.AFS` | 2 | 132 MB | Archives (voice banks) | Keep; read entries directly from the card. |
-| `.PRS` | 849 | 125 MB | Compressed level geometry, models, textures (PVM inside) | Keep compressed on the card. PRS decompression is a tiny LZ routine; the game's own copy runs recompiled, or we HLE it. |
+| `.PRS` | 849 | 125 MB | Compressed level geometry, models, textures (PVM inside); about 300 of them (`STG`, `ADV`, `B_`, `MINI`, `EV`) also carry SH-4 code that must be recompiled | Keep compressed on the card. PRS decompression is a tiny LZ routine; the game's own copy runs recompiled, or we HLE it. |
 | `.MLT` | 123 | 50 MB | Manatee sound banks (sequenced SFX, tone data) | The hardest asset. See §6 Audio. |
 | `.PVR` | 442 | 29 MB | Loose PowerVR textures (many VQ-compressed) | Convert offline to PSP formats (CLUT8 / DXT1 / RGBA4444), downscaled where needed. |
 | `.BIN` | 536 | 12 MB | Misc binary (events, camera, etc.) | Keep. |
@@ -268,10 +269,16 @@ Each one has a single exit test. Do not start the next before the test passes.
       report with discovered-vs-executed coverage ≥ 95 %, a named list of SDK
       entry points, and a measured emitted-code size. Decide here whether to
       keep Dream-Recomp's emitter or write ours.
-      *Static half passed 2026-10-16: 9,568 functions, 88.4 % of code bytes
+      *Passed 2026-10-16. Static: 9,568 functions, 88.4 % of code bytes
       decoded, 289 SDK entry points, 13.1 MB MIPS measured, decision: own
-      emitter (`docs/m0-report.md`, `docs/seam.md`). The Flycast
-      executed-function trace is still outstanding and is M1's first task.*
+      emitter (`docs/m0-report.md`, `docs/seam.md`). Dynamic: Flycast 2.7
+      trace of title → Station Square → Emerald Coast act 1 → Station
+      Square; 97.76 % of the 2,631 executed call targets in `1ST_READ.BIN`
+      were found statically (100 % with the 68 trace seeds now in the
+      config); 5,881 discovered functions never ran on that route
+      (`docs/m0-trace.md`). New scope found by the trace: 29 % of the
+      executed code is in disc overlays (`STG`/`ADV`/`B_`/`EV*.PRS`,
+      `MOVIE.BIN`) that M1 must recompile too.*
 - [ ] **M1 Desktop boot, no graphics.** Recompiled code + Shinobi HLE
       (memory, files from the card layout, pad, vsync, timers) + Ninja stubs
       that log. Exit: the game initialises, loads the title screen data, then
@@ -282,7 +289,9 @@ Each one has a single exit test. Do not start the next before the test passes.
       51 snippet tests pass locally and run in CI, 408 indirect sites go through the function
       table, no non-local returns needed. `hle/seam.h` holds the 289 seam
       prototypes with logging stubs. Still to do: the Shinobi HLE bodies, a
-      boot `main`, and the Flycast executed-function trace.*
+      boot `main`, and discovery + emission for the overlays the title
+      screen and Station Square load (`ADVERTISE.PRS`, `ADV00.PRS`, the
+      opening `EV*.PRS`; `docs/m0-trace.md` §5).*
 - [ ] **M2 Desktop graphics.** Ninja HLE on OpenGL fixed function, reading
       models and textures from guest RAM. Exit: Emerald Coast completed with
       a controller, draw order correct, no desktop-only features.
@@ -390,8 +399,10 @@ sa1-psp/                      this repo (public)
 - M0 static work done: Dream-Recomp cloned and built in
   `recomp/dream-recomp/` (ignored), its output in `recomp/out/` (ignored);
   see `recomp/sa1_us_1005/README.md` for the two local patches it needs.
-  **Still missing:** Flycast (not on winget; needs a manual download) for
-  the executed-function trace.
+- Flycast 2.7 in `..\flycast\`: the official release in `release-2.7\`,
+  and a trace build (v2.7 + a local logging patch, MSVC) in `trace-2.7\`,
+  started with `run_trace.bat`. The M0 trace is
+  `..\flycast\trace-2.7\sa1trace.txt`; method in `docs/m0-trace.md`.
 - M1 emitter done: `python recomp/emitter/emit_sa1.py --bin <1ST_READ.BIN>
   --functions recomp/out/dream/sa1_us_1005.functions.json` writes
   `recomp/out/emitter/` (26.8 MB of C, 32 chunks) in about a minute;

@@ -11,13 +11,15 @@ pspdev v20261001 in WSL.
 Exit test (README §8): discovered-vs-executed coverage ≥ 95 %, a named list
 of SDK entry points, a measured emitted-code size, and the emitter decision.
 
-**Status: static half done, dynamic half open.** The SDK entry-point list
+**Status: passed (2026-10-16).** The SDK entry-point list
 (`docs/seam.md`, `recomp/sa1_us_1005/sdk_entry_points.tsv`), the code sizes
-and the decision are below. The Flycast playthrough trace was not captured
-(Flycast is not on winget; installing it needs a download the maintainer has to
-approve, and the run to Emerald Coast needs a hand on the controller), so
-"discovered vs executed" has no executed side yet. That comparison is the
-first task of M1 and is tracked there.
+and the decision are below. The dynamic half, a Flycast trace of title →
+Station Square → Emerald Coast → Station Square diffed against this list,
+is in `docs/m0-trace.md`: 97.76 % of the executed call targets in
+`1ST_READ.BIN` were found statically (100 % after adding the 68 seeds the
+trace produced). The trace also found that 29 % of the executed code lives
+in overlays loaded from disc, which this static run could not see
+(`docs/m0-trace.md` §5).
 
 ## 1. Binary layout (the fact that changes everything else)
 
@@ -199,10 +201,11 @@ the 13 unlowered instructions (to look at), and the 289 seam addresses.
 
 ## 6. Open items carried to M1
 
-- Install Flycast, dump the GD-ROM image into a form it mounts, run title →
-  Station Square → Emerald Coast, log executed PCs, and diff against the
-  9,568-function list. This closes the M0 exit test's dynamic half and seeds
-  the 11.6 % gap.
+- ~~Flycast trace and diff~~: done, `docs/m0-trace.md`. Follow-ups from it:
+  discovery and emission for the code overlays (`ADVERTISE.PRS`,
+  `ADV00.PRS` and the opening `EV*.PRS` first, for M1's exit test), one
+  function table per overlay slot, and switching the emitter's input to the
+  seeded function list (`recomp/out/dream_seeded/`).
 - Byte-pattern signatures for block B if Katana static libraries turn out to
   be available locally (ask the maintainer once; do not search for them).
 - Decide the three `njRotate` axes, and name the two hot Shinobi entries at
