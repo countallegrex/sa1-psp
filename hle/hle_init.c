@@ -9,6 +9,8 @@ void hle_shinobi_init(void);  /* hle/shinobi/sys.c */
 void hle_movie_init(void);    /* hle/overlay/movie.c */
 
 void (*hle_frame_hook)(uint32_t frame);
+int hle_strict;
+int64_t hle_rtc_epoch = 946684800;   /* 2000-01-01 00:00 UTC */
 
 void hle_guest_string(uint32_t addr, char *buf, unsigned n) {
     unsigned i = 0;

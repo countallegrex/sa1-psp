@@ -84,10 +84,11 @@ void shinobi_hw_init(void) {
 /* ---- real-time clock (A-tail syRtc, wrapped) ---------------------------- */
 /* 0x8C10BE0C: reads the AICA RTC (0xA0710000/4) through the G2 bus until two
  * reads agree; r0 = seconds since 1950-01-01 00:00, or -1 on a bus error.
- * The host clock stands in; the oracle run's clock is not reproduced. */
+ * The host clock stands in (in strict mode, the fixed epoch plus guest
+ * time); the oracle run's clock is not reproduced. */
 void fn_8c10be0c(sh4_ctx *c) {
     HLE_ENTER(0x8c10be0cu, "syRtcRead (A-tail)");
-    time_t now = time(NULL);
+    time_t now = hle_strict ? (time_t)(hle_rtc_epoch + (int64_t)(shinobi_time_us() / 1000000u)) : time(NULL);
     /* 1950-01-01 is 631152000 s before the Unix epoch (20 years, 5 leap days). */
     uint32_t secs = (uint32_t)((int64_t)now + 631152000);
     RET(secs);

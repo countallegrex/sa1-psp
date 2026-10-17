@@ -80,5 +80,11 @@ void hle_init(void);
  * the run (it may exit the process). */
 extern void (*hle_frame_hook)(uint32_t frame);
 uint32_t hle_frame_count(void);
+/* Strict determinism (backend --strict, tests/replay/README.md): guest time
+ * is exactly 1/60 s per frame plus a fixed step per timer read, with no host
+ * time in it, and the real-time clock reads hle_rtc_epoch (Unix seconds) plus
+ * the guest time.  Off by default; set before hle_init. */
+extern int hle_strict;
+extern int64_t hle_rtc_epoch;
 /* Runs a guest function from native code (callbacks): r4..r7 = a0..a3. */
 void hle_call_guest(sh4_ctx *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);

@@ -13,10 +13,20 @@
  * inside one frame still sees it move.  The run is then deterministic
  * frame for frame, whatever the host speed, like the oracle's 60 Hz. */
 static uint64_t frame_t0;
-static uint32_t frame_seen;
+static uint32_t frame_seen, reads_in_frame;
+
+/* Strict mode drops the host clock: each read inside a frame advances the
+ * clock by STRICT_STEP_US instead (capped like the host time), which keeps
+ * busy-waits moving and depends only on what the guest code did. */
+#define STRICT_STEP_US 10u
 
 uint64_t shinobi_time_us(void) {
     uint32_t f = hle_frame_count();
+    if (hle_strict) {
+        if (f != frame_seen) { frame_seen = f; reads_in_frame = 0; }
+        uint64_t in_frame = (uint64_t)reads_in_frame++ * STRICT_STEP_US;
+        return (uint64_t)f * 16667u + (in_frame > 16000 ? 16000 : in_frame);
+    }
     uint64_t now = sa1_plat_time_us();
     if (f != frame_seen || !frame_t0) { frame_seen = f; frame_t0 = now; }
     uint64_t in_frame = now - frame_t0;

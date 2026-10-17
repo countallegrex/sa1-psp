@@ -14,6 +14,10 @@
  * --trace-funcs writes, at exit, every host function that ran with the frame
  * it first ran in (needs a build with -DSA1_TRACE_FUNCS=ON).
  *
+ * --strict, --record FILE, --replay FILE, --check FILE, --expect-frame N
+ * and --epoch S: deterministic runs, input tapes and state checks
+ * (input_tape.c, tests/replay/README.md).
+ *
  * --press scripts the controller: at guest frame FRAME the buttons (hex
  * mask, hle.h: Start 8, A 4, B 2, Up 0x10 ...) are held for HOLD frames
  * (default 2).  This is how the boot test walks the title and menus.
@@ -31,6 +35,7 @@
  * Part of sa1-psp (MIT). */
 #include "hle.h"
 #include "../draw.h"
+#include "input_tape.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,6 +93,7 @@ static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
 #endif
 
 static void report_and_exit(int code) {
+    code = input_tape_finish(code, NULL);
     sa1_log("exit: %u frames, %.3f s", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6);
     kamui_report();
     sa1_seam_report(getenv("SA1_REPORT_TOP") ? atoi(getenv("SA1_REPORT_TOP")) : 30);
@@ -99,6 +105,7 @@ static void report_and_exit(int code) {
 
 static void on_trap(sh4_ctx *c, uint32_t pc, const char *what) {
     (void)c; (void)pc; (void)what;
+    input_tape_finish(3, "trap");
     plat_backtrace();
     sa1_log("exit: trap after %u frames, %.3f s", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6);
     sa1_seam_report(30);
@@ -119,6 +126,7 @@ static void on_frame(uint32_t frame) {
         if (!scripted) { hle_pad_state = live; b = live.buttons; }
         else { hle_pad_state.x = live.x; hle_pad_state.y = live.y; hle_pad_state.ltrig = live.ltrig; hle_pad_state.rtrig = live.rtrig; }
     }
+    b = input_tape_pad(frame, b, scripted);
     if (b != hle_pad_state.buttons) sa1_log("pad: buttons 0x%x", b);
     hle_pad_state.buttons = b;
     for (int i = 0; i < nshots; i++) if (shots[i].frame == frame) kamui_set_screenshot(shots[i].path);
@@ -132,6 +140,7 @@ static void on_frame(uint32_t frame) {
         FILE *o = fopen(dumps[i].path, "wb");
         if (o) { fwrite(sa1_ram, 1, SA1_RAM_SIZE, o); fclose(o); sa1_log("dump: %s", dumps[i].path); }
     }
+    input_tape_frame_end(frame);
     if (stats_every && frame % (uint32_t)stats_every == 0) kamui_report();
     if (frame_limit && frame >= frame_limit) {
         sa1_log("frame limit %u reached", frame_limit);
@@ -191,6 +200,7 @@ int main(int argc, char **argv) {
             presses[npresses].hold = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : 2;
             npresses++;
         }
+        else if (input_tape_arg(argc, argv, &i)) continue;
         else if (!bin) bin = argv[i];
         else if (!root) root = argv[i];
         else { fprintf(stderr, "unexpected argument %s\n", argv[i]); return 2; }
@@ -212,6 +222,8 @@ int main(int argc, char **argv) {
     sa1_ram = calloc(SA1_RAM_ALLOC, 1);
     if (!sa1_ram) { fprintf(stderr, "cannot allocate guest RAM\n"); return 1; }
     if (load_image(bin) != 0) return 1;
+    if (input_tape_start(bin) != 0) return 2;
+    if (!frame_limit) frame_limit = input_tape_frames();
     plat_set_data_root(root);
     hle_init();
     if (draw_init(scale, headless) != 0 && !headless) { sa1_log("no window; running headless"); headless = 1; }
