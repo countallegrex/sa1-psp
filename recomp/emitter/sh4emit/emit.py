@@ -30,7 +30,7 @@ STORE_OPS = {
 
 class Program:
     def __init__(self, image, code_lo, code_hi, functions, seam, sdk_range=None,
-                 name_prefix="fn_", log=print, extern=None, wrap=None):
+                 name_prefix="fn_", log=print, extern=None, wrap=None, keep=None):
         """functions: list of (entry, end, origin).  seam: {addr: (name, sites)}.
         extern: {addr: C name} of functions emitted in another unit (an
         overlay's calls into the main image); called directly, full sync.
@@ -45,6 +45,11 @@ class Program:
         self.prefix = name_prefix
         self.extern = {phys(a): n for a, n in (extern or {}).items()}
         self.wrap = {phys(a) for a in (wrap or ())}
+        # Entries that stay C functions even when only a branch reaches them:
+        # the Flycast trace's executed entries (recomp/sa1_us_1005/
+        # executed_entries.txt), which are real call targets whatever the
+        # discovery origin says.
+        self.keep = {phys(a) for a in (keep or ())}
         self.log = log
         self.summaries = Summaries()
         self.cfgs = {}
@@ -66,6 +71,23 @@ class Program:
     def in_sdk(self, addr):
         return self.sdk_range is not None and self.sdk_range[0] <= phys(addr) < self.sdk_range[1]
 
+    def pointer_words(self, candidates):
+        """Candidates whose P1 address (0x8C...) is an aligned 32-bit word
+        anywhere in the image: a function pointer in a data table, or in a
+        literal pool that code stores into an object (an instruction pair
+        that happens to spell one only costs an extra C function)."""
+        import struct
+        found = set()
+        if not candidates:
+            return found
+        want = {(e | 0x80000000) & 0xFFFFFFFF for e in candidates}
+        data = self.image.data
+        for off in range(0, len(data) - 3, 4):
+            w = struct.unpack_from("<I", data, off)[0]
+            if w in want:
+                found.add(phys(w))
+        return found
+
     # ---- passes -----------------------------------------------------------
     def build(self):
         t0 = time.time()
@@ -86,8 +108,16 @@ class Program:
         self.stats["patched_words"] = len(patched)
 
         # pass 2: branch-origin entries nothing calls are local code of whoever
-        # branches to them; everything else is a C function.
-        local_only = {e for e in entries_all if origin.get(e) == "branch" and e not in called}
+        # branches to them; everything else is a C function.  Kept as
+        # functions anyway: entries the trace saw executed, and entries whose
+        # address appears as a 32-bit word in the image (object function
+        # tables in data reach them through sa1_call; M1 boot bug: the
+        # Station Square object table pointed at merged entry 0x8C060460).
+        branch_entries = {e for e in entries_all if origin.get(e) == "branch" and e not in called}
+        referenced = self.pointer_words(branch_entries)
+        self.stats["entries_kept_trace"] = len(branch_entries & self.keep)
+        self.stats["entries_kept_pointer"] = len(referenced - self.keep)
+        local_only = {e for e in branch_entries if e not in self.keep and e not in referenced}
         entries = [e for e in entries_all if e not in local_only]
         self.stats["entries_merged"] = len(local_only)
         env = Env(self.image, self.code_lo, self.code_hi, entries, patched)

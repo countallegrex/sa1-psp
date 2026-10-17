@@ -18,6 +18,7 @@
 #include "shinobi.h"
 
 void fn_8c051790_orig(sh4_ctx *c);
+void fn_8c0517f6_orig(sh4_ctx *c);
 
 #define FRAME_COUNTDOWN 0x8C754EC0u   /* frames still to wait, decremented by 0x8C051810 */
 #define NJ_VSYNC_WAITING 0x8C88F7D0u  /* njWaitVSync sets, the vblank handler clears */
@@ -82,6 +83,24 @@ void fn_8c051790(sh4_ctx *c) {
         }
     }
     fn_8c051790_orig(c);
+}
+
+/* 0x8C0517F6: the second entry of the same routine (wrapped game function):
+ * wait until the countdown is at most r4, then the pad server and the
+ * per-frame task runner.  The adventure field calls it from its loop that
+ * runs several logic updates per rendered frame (0x8C04EA90). */
+void fn_8c0517f6(sh4_ctx *c) {
+    HLE_ENTER(0x8c0517f6u, "game frame wait, second entry (wrapped)");
+    int guard = 0;
+    int32_t limit = (int32_t)ARG0;
+    while ((int32_t)hle_rd32(FRAME_COUNTDOWN) > limit) {
+        shinobi_frame(c);
+        if (!vblank_callback && ++guard > 4) {
+            hle_wr32(FRAME_COUNTDOWN, 0);
+            break;
+        }
+    }
+    fn_8c0517f6_orig(c);
 }
 
 /* 0x8C6050B0: njWaitVSync: wait for the next vblank, flip, run the pad

@@ -12,3 +12,4 @@ address	hle	what
 8c099bba	hle/game/tasks.c	task start (task, fn, arg): builds the initial frame on the task's stack (native coroutine create)
 8c099b2c	hle/game/tasks.c	task kill-and-switch (task): kills it and, if it was the current one, resumes the next task
 8c099ab2	hle/game/tasks.c	task kill (task): recursive; the wrapper releases the native coroutine
+8c0517f6	hle/shinobi/vsync.c	game frame wait, second entry: spins while the VBlank countdown 0x8C754EC0 is above r4 (the adventure field runs several logic updates per frame)

@@ -68,6 +68,8 @@ def main():
     ap.add_argument("--seam", default=os.path.join(REPO, "recomp", "sa1_us_1005", "sdk_entry_points.tsv"))
     ap.add_argument("--wraps", default=os.path.join(REPO, "recomp", "sa1_us_1005", "hle_wraps.tsv"),
                     help="functions hle/ wraps; their bodies are emitted as fn_<addr>_orig")
+    ap.add_argument("--keep", default=os.path.join(REPO, "recomp", "sa1_us_1005", "executed_entries.txt"),
+                    help="entries that stay C functions even if only a branch reaches them (the trace's executed entries)")
     ap.add_argument("--out", default=os.path.join(REPO, "recomp", "out", "emitter"))
     ap.add_argument("--chunks", type=int, default=32)
     ap.add_argument("--update-hle", action="store_true", help="copy seam.h / seam_stubs.c into hle/")
@@ -90,10 +92,14 @@ def main():
             functions.append((e, int(fn["end"], 16), fn.get("origin", "")))
     seam = read_seam(args.seam)
     wraps = read_wraps(args.wraps)
+    keep = []
+    if args.keep and os.path.exists(args.keep):
+        with open(args.keep, encoding="utf-8") as f:
+            keep = [int(line, 16) for line in f if line.strip() and not line.startswith("#")]
     print("%d functions in block A, %d seam entries, %d wrapped" % (len(functions), len(seam), len(wraps)))
 
     t0 = time.time()
-    prog = Program(image, BLOCK_A[0], BLOCK_A[1], functions, seam, sdk_range=BLOCK_B, wrap=wraps)
+    prog = Program(image, BLOCK_A[0], BLOCK_A[1], functions, seam, sdk_range=BLOCK_B, wrap=wraps, keep=keep)
     prog.build()
     counts = prog.write_all(args.out, chunks=args.chunks)
     shutil.copy(os.path.join(HERE, "runtime", "sh4_rt.h"), args.out)

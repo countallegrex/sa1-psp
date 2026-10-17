@@ -87,11 +87,13 @@ KNOWN_ENCODINGS = [
 CASES = []
 
 
-def case(name, asm, setup=None, expect=None, calls=None, entry=0, extra=()):
+def case(name, asm, setup=None, expect=None, calls=None, entry=0, extra=(), branch=()):
     """entry: byte offset of the function the harness calls; extra: offsets
-    of further function entries inside this case's region."""
+    of further function entries inside this case's region; branch: offsets
+    of entries given the discovery origin "branch" (a branch target that may
+    or may not be a real function)."""
     CASES.append({"name": name, "asm": asm, "setup": setup or {}, "expect": expect or {},
-                  "calls": calls or [], "entry": entry, "extra": list(extra)})
+                  "calls": calls or [], "entry": entry, "extra": list(extra), "branch": list(branch)})
 
 
 RET = "\n rts\n nop\n"
@@ -622,6 +624,29 @@ deflt:
  rts
  nop
 """, {"r4": 2, "r15": DATA + 0x100}, {"r0": 7}, calls=["callee"])
+# A discovery entry of origin "branch" that a branch reaches (so the emitter
+# would fold it into its parent) but whose address also sits in a data
+# table: the game calls it through that pointer, so it must stay a function.
+# (M1 boot bug: Station Square's object table pointed at such an entry.)
+case("branch_entry_in_table", """
+ sts.l pr,@-r15
+ clrt
+ bt target
+ mov.l tbladdr,r1
+ mov.l @r1,r1
+ jsr @r1
+ mov #3,r4
+ lds.l @r15+,pr
+ rts
+ nop
+ .align 4
+tbladdr: .long tbl
+tbl: .long TARGET
+target:
+ mov r4,r0
+ rts
+ add #4,r0
+""", {"r15": DATA + 0x100}, {"r0": 7}, branch=(0x1c,))
 case("tail_call", """
  mov.l fn,r1
  jmp @r1
@@ -751,6 +776,7 @@ def resolve_case_refs():
     """Fill call-target addresses: case i lives at BASE + i*STRIDE."""
     index = {c["name"]: i for i, c in enumerate(CASES)}
     for c in CASES:
+        c["asm"] = c["asm"].replace("TARGET", "%#x" % (BASE + index[c["name"]] * STRIDE + 0x1c))
         for callee in c["calls"]:
             addr = BASE + index[callee] * STRIDE
             c["asm"] = c["asm"].replace("FNADDR", "%#x" % addr)
@@ -953,8 +979,8 @@ def main():
     functions = []
     for i, c in enumerate(CASES):
         at = BASE + i * STRIDE
-        for off in sorted({c["entry"], 0, *c["extra"]}):
-            functions.append((at + off, at + STRIDE, "call"))
+        for off in sorted({c["entry"], 0, *c["extra"], *c["branch"]}):
+            functions.append((at + off, at + STRIDE, "branch" if off in c["branch"] else "call"))
     seam = {SEAM_ADDR: ("test_add", 1), SEAM2_ADDR: ("test_zero", 1)}
     prog = Program(img, BASE, BASE + len(CASES) * STRIDE, functions, seam,
                    sdk_range=(0x8C5FA000, 0x8C66C000), log=lambda *a: None)
