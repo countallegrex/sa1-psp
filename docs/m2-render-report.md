@@ -4,7 +4,8 @@ Exit test (README §8): Emerald Coast completed with a controller on
 desktop, draw order correct, no desktop-only features.
 
 Status: **renderer done; first exit-test run failed (2026-10-17), the
-hang and the aspect ratio fixed since, second run pending.** The desktop
+hang, the aspect ratio and the three Flycast-comparison defects (§8: sky
+dome, fog, light records) fixed since; second run pending.** The desktop
 build draws every scene on the scripted route from guest RAM, and Emerald
 Coast when the stage variables are forced. The maintainer's controller run reached
 Emerald Coast and hung after about 80 s (§7: a stray write from the RTC
@@ -159,7 +160,14 @@ write logs the guest call stack), `SA1_TASK_CHECK=1` (per-frame check of the
 task lists' parent/prev links; logs the first broken one with the task's
 main), `SA1_HANG_DUMP=FILE` (guest RAM when the watchdog fires),
 `SA1_KAMUI_DUMP=<frame>` (every header, pointer hand-off and writer call of
-that frame), `SA1_MODEL_DEBUG=1`, `SA1_NOVSYNC=1`, `SA1_REPORT_TOP=N`.
+that frame), `SA1_MODEL_DEBUG=1`, `SA1_NOVSYNC=1`, `SA1_REPORT_TOP=N`,
+`SA1_TEX_LOG=1` / `SA1_TEX_DUMP_DIR=<dir>` (every texture decode, as PPM).
+Debug builds (`CMAKE_BUILD_TYPE=Debug`, or `-DSA1_RAM_CHECK=ON`) check
+every guest access in the flat-RAM macros against the RAM window
+(`sh4_rt.h`, §8 item 4): an address outside it is logged once with the
+host backtrace (the recompiled functions on the guest call stack), counted,
+and listed at exit after the seam report; `SA1_RAM_TRAP=1` aborts at the
+first. Release builds compile the bare mask.
 The stage variables: `0x8C7493BA` current level, `0x8C7493BC` act,
 `0x8C7493BE`/`C0` next level/act (Emerald Coast = 1, Chaos 0 = 15,
 Station Square = 26); GameMode at `0x8C760970`.
@@ -225,41 +233,119 @@ the old near plane: clipped), the offset colour (added after texturing;
 visible on the intro layers and characters), mip levels, and a `--no-pad`
 switch after an idle pad steered a windowed scripted run off the route.
 
-Still open:
+The three items left open by that pass, and what the third pass (later
+the same day) found, in the order of the task list:
 
-- **Sky dome texture (`sonic_sky1`, 256x256 RGB565 twiddled with mips)**
-  shows fine streaks/dots where the console shows smooth clouds. The
-  decode of that file matches an independent offline decode byte for byte
-  and the known twiddle/mip tables; bilinear filtering is confirmed active
-  (nearest vs linear renders differ). What differs from the console is not
-  yet known (candidates: the game's UV scale on the dome, or Flycast's own
-  decode showing the texture is stored differently than the header says);
-  a Flycast texture dump run was in progress when this pass ended.
-- **Station Square is lighter than the console's night tint.** The fog
-  entries the game calls: `njSetFogDensity` (stubbed) then
-  `njGenerateFogTable` (the HLE writes the default curve, ignoring the
-  density), `njSetFogTable` (near/far derived from the table: 2.7/128 at
-  the title, disabled in Station Square and Emerald Coast). So in both
-  stages the game disables table fog here; the night tint on the console
-  likely comes from the density-driven table the stub drops, or from the
-  fog mode bits per polygon. Next step: implement `0x8C652E38`
-  (density table generator, tail-called by `0x8C63FE3C`) from its
-  disassembly and compare again.
-- Specular on Sonic is weaker than the console's (offset colours are
-  small; the console's highlight may come from the intensity path).
+**1. Sky dome streaks: the mipmap chain offset.** Flycast's texture dumps
+(`texdump/`, outside the repo) gave the ground truth; scoring our decode
+of `sonic_sky1` against the matching dump at every candidate offset put
+the 256x256 level at `0xAAAC`, not `0xAAB0` (mean absolute error per texel
+6.9 against 32.5; a 64x64 ARGB4444 mipmapped texture likewise 13.7 at
+`0xAAC` against 116 at `0xAB0`). In a PVR *file* a twiddled 16-bit
+mipmap chain starts with one dummy texel (levels at 0x2, 0x4, 0xC, 0x2C,
+..., 0xAAAC); the table the decoder used (0x6, 0x8, ..., 0xAAB0) is the
+texture-memory layout, four bytes higher. Reading every texel two Morton
+positions early swaps the columns of each 2x2 block with the next block's,
+which is exactly the vertical dither the sky showed; the previous
+"byte-exact offline decode" had used the same table. The decoder is now
+its own unit, `hle/ninja/pvr_decode.c`, with a test on synthetic twiddled,
+mipmapped, VQ, VQ-mipmapped and rectangle textures
+(`tests/ninja/pvr_decode_test.c`, in CI, no game data). VQ mipmap offsets
+were already right (no dummy); palettised mipmap chains are untested (none
+on the route). After the fix the dome matches the Flycast capture at frames
+6000 and 7600.
+
+**2. Station Square tint: the fog model.** `njSetFogDensity` (`0x8C63FE3C`
+→ `0x8C652E38`) is `kmSetFogDensity`: it writes its argument, the
+FOG_DENSITY register word, as given (an 8-bit float: mantissa /128 in bits
+15..8, signed exponent in bits 7..0). The hardware indexes the 128-entry
+table by `z = density / w` clamped to [1, 256): entry `i` covers
+`z = (16 + (i & 15)) / 16 * 2^(i >> 4)`, so entry 0 is `w = density` (the
+far end) and 127 is `w = density / 248`. `njGenerateFogTable3(table, near,
+far)` (`0x8C63FB48`, from its disassembly) sets the density to |far|
+(quantised to 8 bits through `frexpf`) and writes a table that is 0 up to
+the first entry nearer than |near| and rises linearly in `w` to 1 at |far|;
+`njGenerateFogTable` writes the default curve `1/z` (fog = `w / density`);
+`njSetFogTable` (`0x8C652DD0`) uploads the floats as bytes. All four are
+now real bodies in `kamui.c`; the backend's linear fog takes the `w` where
+the table passes 0.02 and 0.98. What the game sets on the route: title and
+menus, density `0xFF12` (522,240 units: no visible fog); Station Square and
+Emerald Coast, `njGenerateFogTable3(near -7000, far -8000)` with a black
+fog colour, i.e. black from 7,111 to 8,000 units (the street's far end),
+nothing nearer. The per-polygon fog bits (TSP 23..22) are honoured: the
+parser keeps them and the backend enables fog for modes 0 and 3 (table) and
+not 1 (per-vertex) or 2 (none); counted over the route, 1,502,391 headers
+use table fog, 217,649 none, 0 per-vertex, 0 table mode 2. Station Square
+at frame 3000 against the Flycast capture after this: the tone now agrees
+within a few percent of luminance in every quarter of the frame (pavement
+51/72/90 against 53/77/97 RGB, road 20/42/77 against 20/41/77); what
+remains is not a tint but detail (texture filtering, and the frames are
+hor+ 960x544 against 4:3 640x480).
+
+**3. Specular on Sonic: no missing term in the HLE, one wrong layout.**
+`njSetLightIntensity` / `njSetLightColor` / `njCreateLight` (disassembled)
+keep the premultiplied colours as colour x intensity (+0x84) at +0xB4, then
+that times ambient, diffuse, specular at +0xC4, +0xD4, +0xE4 (a, r, g, b
+each; alpha +0x148 is 0); the M2 body had ambient/diffuse/specular at
++0xB4/+0xC4/+0xD4 with r, g, b, 1, so a reader of the diffuse colour got
+the specular-scaled one. Fixed (`light.c`, with +0x80 and +0x88 too), but
+it changes nothing on screen: the two lights the route creates (type 0x13
+at `0x8C6AEE28` and `0x8C760810`) are only ever passed to the Ninja entries;
+no recompiled code reads their records. The game lights its characters
+itself and writes the result as packed vertex colours plus offset (specular)
+colours: in the frame-6000 opaque list 29,879 vertices carry an offset
+colour, 97% of them below 32/255 and the brightest 200/255, all on Sonic.
+The renderer adds them in the second, additive pass (`draw_gl.c`
+`emit_offset`), and the highlight sits where the capture has it; the
+softness that remains is the fixed-function pass itself (per-vertex
+colour, no colour clamp), the same thing the GE will do. Noted as a
+limitation, not a bug.
+
+**4. Guest addresses outside RAM (the §7 lesson).** The flat-RAM macros
+now check every access in Debug builds (§5). The scripted route to frame
+7700 reports three addresses:
+
+| Address | Access | Hits | Where | Meaning |
+|---|---|---|---|---|
+| `0x2D2D2D0A` | read, once, frame 0 | 1 | `fn_8c0100a0` (boot) | a byte read through the word at `0x8C66C3AC`, which is text in the SDK's constant data; the console makes the same read of an unmapped address. Harmless. |
+| `0xFF000038` | write, every frame from 2462 | 25,168 | `0x8C09E778` (texture-upload writer, `hle_wraps.tsv` `TA_PASS`) | QACR0 |
+| `0xFF00003C` | write, every frame from 2462 | 25,168 | same | QACR1 |
+
+QACR0/1 select the store-queue target area. The writer loads
+`0xFF000040` from its literal pool and stores with `mov.l r0,@-r1` twice;
+the emitter's constant tracking does not follow the pre-decrement, so the
+stores are RAM stores and land at offsets `0x1000038`/`0x100003C`: inside
+the opaque TA buffer, overwritten by that frame's parameters before they
+are read, which is why nothing broke. Two seam entries to add: the emitter
+should carry constants through `@-Rn` and `add #imm` (then these become
+`sa1_mmio_wr`, and the hook can ignore the QACR writes as it ignores the
+other control registers); until then the pattern is known and harmless.
+The run also showed a build hazard: the emitter leaves a copy of
+`sh4_rt.h` next to its output, and the desktop target's include order let
+it shadow the one in the tree, so the game code compiled against a stale
+header; the runtime directory now comes first.
 
 ## 6. Open items
 
-- **The exit test.** Needs a controller run through the real route. The
-  Chaos 0 fight must be won (the overlays doc says the scripted pad cannot).
-- Title logo (§3).
+- **The exit test.** Needs a controller run through the real route, recorded:
+  `build-desktop\backend\desktop\sa1psp.exe ..\private\dump\sa1_us_1005\data\1ST_READ.BIN ..\private\dump\sa1_us_1005\data --record tests\replay\sonic_ec1.tape`
+  (title → Sonic → Station Square → Chaos 0 win → Emerald Coast act 1
+  complete; `tests/replay/README.md`). The Chaos 0 fight must be won (the
+  overlays doc says the scripted pad cannot). M2 is ticked only after that
+  run passes.
+- Palettised mipmapped textures: whether their chain starts with a dummy
+  texel like the 16-bit one is unverified (none on the route; §8 item 1).
+- Emitter: constants through `@-Rn` / `add #imm` so register-based MMIO
+  stores become `sa1_mmio_wr` (the QACR writes, §8 item 4); register-bank
+  switches (`SR.RB`) should be lowered, or at least detected and reported.
+- Fog: a table is reduced to linear near/far; the per-vertex fog mode (1)
+  is not implemented (unused on the route).
 - `hle_wraps.tsv` still lists the eight non-writers (three collision
   functions, five flag tests) as wrapped; they run unchanged through the
   wrappers. Dropping the rows means a main-image re-emit.
-- Emitter: register-bank switches (`SR.RB`) should be lowered, or at
-  least detected and reported.
 - PSP shape to keep for M4: 32 MB desktop window vs 18 MB on the PSP
   (§1 item 4); CLUT textures stay paletted there; strips should be merged
   per state change; the 16-bit depth buffer with `1 − 2/z` loses precision
-  far away (no artefact seen at 480x272).
+  far away (no artefact seen at 480x272); the offset-colour pass is a second
+  draw of every textured strip that has one.
 - `njDrawPolygon2D` fans are approximated as strips; no fan on the route.
