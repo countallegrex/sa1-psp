@@ -10,6 +10,9 @@
  *   --check FILE        compare guest memory with FILE's rows; any primary
  *                       mismatch, a trap or a missed --expect-frame fails the run
  *   --expect-frame N    the run must reach guest frame N
+ *   --watch-list FILE   the addresses to trace (tests/replay/watch.txt)
+ *   --watch-trace FILE  write their values every frame, tab-separated, for
+ *                       tools/tape_expect.py and tools/tape_diff.py
  *
  * main.c calls in at five points: argument parsing, start-up (before
  * hle_init), the pad of each frame, the end of each frame hook (where
@@ -30,7 +33,7 @@
 static int strict;
 static int64_t epoch = 946684800;           /* 2000-01-01 00:00 UTC */
 static int epoch_set;
-static const char *record_path, *replay_path, *check_path;
+static const char *record_path, *replay_path, *check_path, *watch_list_path, *watch_trace_path;
 static uint32_t expect_frame;
 static char title_sha[65];
 
@@ -156,12 +159,13 @@ static int load_tape(const char *path) {
 
 /* ---- checks ----------------------------------------------------------------
  *   FRAME ADDR SIZE EXPECTED [TOLERANCE] [NAME]
- * FRAME is N (at frame N exactly) or <=N (at some frame up to N: milestones).
+ * FRAME is N (at frame N exactly), <=N (at some frame up to N) or M..N (at
+ * some frame from M to N): the last two are milestones.
  * SIZE is 1, 2, 4 (unsigned), s1, s2, s4 (signed) or f (float32).
  * TOLERANCE is an absolute difference ("-" for exact).  Rows after a
  * "[secondary]" line are reported but do not fail the run. */
 typedef struct {
-    uint32_t frame, addr;
+    uint32_t from, frame, addr;
     int by, size, is_signed, is_float, secondary, done, ok;
     double expected, tol, last;
     char name[48];
@@ -202,8 +206,10 @@ static int load_checks(const char *path) {
             if (!strcmp(tol, "-") || (e != tol && !*e)) rest += c2;   /* a number or "-": the tolerance */
             else strcpy(tol, "-");                                     /* no tolerance, just a name */
         }
-        r.by = fr[0] == '<' && fr[1] == '=';
-        r.frame = (uint32_t)strtoul(fr + (r.by ? 2 : 0), NULL, 0);
+        char *dots = strstr(fr, "..");
+        r.by = (fr[0] == '<' && fr[1] == '=') || dots;
+        r.from = dots ? (uint32_t)strtoul(fr, NULL, 0) : 0;
+        r.frame = (uint32_t)strtoul(dots ? dots + 2 : fr + (r.by ? 2 : 0), NULL, 0);
         r.addr = (uint32_t)strtoul(addr, NULL, 16);
         r.is_signed = size[0] == 's';
         r.is_float = size[0] == 'f';
@@ -232,8 +238,60 @@ static void check_result(check_row *r, int ok, uint32_t frame) {
     r->done = 1; r->ok = ok;
     if (ok) return;
     if (r->secondary) check_fail_secondary++; else check_fail_primary++;
-    sa1_log("check: %s %s: %s%u [0x%08x] = %.6g, expected %.6g (tolerance %g)", r->secondary ? "DRIFT" : "FAIL",
-            r->name, r->by ? "by frame " : "frame ", r->by ? r->frame : frame, r->addr, r->last, r->expected, r->tol);
+    if (r->by)
+        sa1_log("check: %s %s: never %.6g in frames %u..%u [0x%08x] (last %.6g, tolerance %g)", r->secondary ? "DRIFT" : "FAIL",
+                r->name, r->expected, r->from, r->frame, r->addr, r->last, r->tol);
+    else
+        sa1_log("check: %s %s: frame %u [0x%08x] = %.6g, expected %.6g (tolerance %g)", r->secondary ? "DRIFT" : "FAIL",
+                r->name, frame, r->addr, r->last, r->expected, r->tol);
+}
+
+/* ---- the watch trace ---------------------------------------------------------
+ * watch.txt rows: ADDR SIZE NAME [ROLE [TOLERANCE]]; only the first three
+ * matter here.  One line per frame: frame, then each value. */
+typedef struct { uint32_t addr; int size, is_signed, is_float; char name[32]; } watch_row;
+static watch_row *watches;
+static int nwatches;
+static FILE *wtrace;
+
+static int load_watches(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "watch: cannot open %s\n", path); return -1; }
+    char line[512], addr[32], size[8], name[32];
+    int lineno = 0;
+    while (fgets(line, sizeof line, f)) {
+        lineno++;
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\n' || *p == '\r' || !*p) continue;
+        if (sscanf(p, "%31s %7s %31s", addr, size, name) != 3) {
+            fprintf(stderr, "watch: %s:%d: need ADDR SIZE NAME\n", path, lineno); fclose(f); return -1;
+        }
+        watch_row w = {(uint32_t)strtoul(addr, NULL, 16), 0, size[0] == 's', size[0] == 'f', ""};
+        w.size = w.is_float ? 4 : atoi(size + w.is_signed);
+        snprintf(w.name, sizeof w.name, "%s", name);
+        if (!hle_in_ram(w.addr) || (w.size != 1 && w.size != 2 && w.size != 4)) {
+            fprintf(stderr, "watch: %s:%d: bad address or size\n", path, lineno); fclose(f); return -1;
+        }
+        watch_row *t = realloc(watches, (size_t)(nwatches + 1) * sizeof *t);
+        if (!t) { fclose(f); return -1; }
+        watches = t;
+        watches[nwatches++] = w;
+    }
+    fclose(f);
+    return 0;
+}
+
+static void trace_watches(uint32_t frame) {
+    fprintf(wtrace, "%u", frame);
+    for (int i = 0; i < nwatches; i++) {
+        const watch_row *w = &watches[i];
+        if (w->is_float) { fprintf(wtrace, "\t%.9g", hle_rdf(w->addr)); continue; }
+        uint32_t v = w->size == 1 ? hle_rd8(w->addr) : w->size == 2 ? hle_rd16(w->addr) : hle_rd32(w->addr);
+        if (w->is_signed) fprintf(wtrace, "\t%d", w->size == 1 ? (int8_t)v : w->size == 2 ? (int16_t)v : (int32_t)v);
+        else fprintf(wtrace, "\t%u", v);
+    }
+    fputc('\n', wtrace);
 }
 
 /* ---- the hooks main.c calls -------------------------------------------------- */
@@ -246,11 +304,22 @@ int input_tape_arg(int argc, char **argv, int *i) {
     else if (!strcmp(a, "--replay")) { replay_path = argv[++*i]; strict = 1; }
     else if (!strcmp(a, "--check")) check_path = argv[++*i];
     else if (!strcmp(a, "--expect-frame")) expect_frame = (uint32_t)strtoul(argv[++*i], NULL, 0);
+    else if (!strcmp(a, "--watch-list")) watch_list_path = argv[++*i];
+    else if (!strcmp(a, "--watch-trace")) watch_trace_path = argv[++*i];
     else return 0;
     return 1;
 }
 
 int input_tape_start(const char *title_path) {
+    if (watch_trace_path) {
+        if (!watch_list_path) { fprintf(stderr, "--watch-trace needs --watch-list\n"); return -1; }
+        if (load_watches(watch_list_path) != 0) return -1;
+        wtrace = fopen(watch_trace_path, "w");
+        if (!wtrace) { fprintf(stderr, "watch: cannot write %s\n", watch_trace_path); return -1; }
+        fprintf(wtrace, "frame");
+        for (int i = 0; i < nwatches; i++) fprintf(wtrace, "\t%s", watches[i].name);
+        fputc('\n', wtrace);
+    }
     if (!strict && !check_path && !expect_frame) return 0;
     if ((record_path || replay_path) && sha256_file(title_path, title_sha) != 0) {
         fprintf(stderr, "tape: cannot read %s\n", title_path); return -1;
@@ -288,10 +357,11 @@ uint32_t input_tape_pad(uint32_t frame, uint32_t buttons, int scripted) {
 }
 
 void input_tape_frame_end(uint32_t frame) {
+    if (wtrace) trace_watches(frame);
     for (int i = 0; i < nchecks; i++) {
         check_row *r = &checks[i];
         if (r->done) continue;
-        if (r->by ? frame > r->frame : frame != r->frame) continue;
+        if (r->by ? frame < r->from || frame > r->frame : frame != r->frame) continue;
         r->last = read_value(r);
         int ok = fabs(r->last - r->expected) <= r->tol;
         if (ok || !r->by || frame == r->frame) check_result(r, ok, frame);
@@ -302,6 +372,7 @@ int input_tape_finish(int code, const char *why) {
     static int finished;
     if (finished) return code;
     finished = 1;
+    if (wtrace) { fclose(wtrace); wtrace = NULL; }
     if (rec) {
         rec_flush();
         fprintf(rec, "end %u\n", rec_end);
