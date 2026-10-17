@@ -21,6 +21,28 @@
 hle_pad hle_pad_state;      /* written by the backend before each frame */
 static uint32_t prev_on;
 
+#ifdef SA1_PAD_PULSE
+/* Debug aid (desktop, -DSA1_PAD_PULSE): SA1_PAD_PULSE="START:END:PERIOD:
+ * BUTTONS:HOLD[,...]" adds BUTTONS (hex) for HOLD frames every PERIOD
+ * frames from START to END, on top of the backend's script.  Long fights
+ * need more presses than the backend's --press table holds. */
+#include <stdio.h>
+#include <stdlib.h>
+static uint32_t pulse_buttons(uint32_t frame) {
+    const char *p = getenv("SA1_PAD_PULSE");
+    uint32_t b = 0;
+    while (p && *p) {
+        unsigned s, e, per, btn, hold;
+        int n = 0;
+        if (sscanf(p, "%u:%u:%u:%x:%u%n", &s, &e, &per, &btn, &hold, &n) != 5 || !per) break;
+        if (frame >= s && frame < e && (frame - s) % per < hold) b |= btn;
+        p += n;
+        if (*p == ',') p++;
+    }
+    return b;
+}
+#endif
+
 void sdk_8c601a34(sh4_ctx *c) {
     HLE_ENTER(0x8c601a34u, "pdInitPeripheral");
     for (uint32_t a = PAD_TABLE; a < PAD_TABLE + PAD_UNITS * PAD_RECORD; a += 4) hle_wr32(a, 0);
@@ -42,6 +64,9 @@ void sdk_8c601e2a(sh4_ctx *c) {
     HLE_ENTER(0x8c601e2au, "pdExecPeripheralServer");
     uint32_t r = PAD_TABLE;
     uint32_t on = hle_pad_state.buttons;
+#ifdef SA1_PAD_PULSE
+    on |= pulse_buttons(hle_frame_count());
+#endif
     hle_wr32(r + 0, 0x01000000u);                    /* Maple function: controller, on A0 */
     hle_wr32(r + 4, 0x000CFE0Eu);                    /* support bits; the game tests 0x000C000E (0x8C050C2E) */
     hle_wr32(r + 8, on);

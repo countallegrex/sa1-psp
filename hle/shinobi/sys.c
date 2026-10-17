@@ -14,8 +14,37 @@ uint32_t hle_frame_count(void) { return frame_count; }
 
 /* One guest frame has passed: the backend hook runs first (it may stop the
  * run), then the registered frame callbacks (hle/shinobi/chain.c). */
+#ifdef SA1_RAMDUMP
+/* Debug aid (desktop, -DSA1_RAMDUMP): SA1_RAMDUMP="F1,F2,..." writes guest
+ * RAM at those frames to $SA1_RAMDUMP_DIR/ram_<frame>.bin.  The dumps are
+ * game state: keep them outside the repository. */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static void ram_dump(uint32_t frame) {
+    const char *list = getenv("SA1_RAMDUMP"), *dir = getenv("SA1_RAMDUMP_DIR");
+    if (!list || !dir) return;
+    for (const char *p = list; *p; ) {
+        char *end;
+        unsigned long f = strtoul(p, &end, 0);
+        if (end == p) break;
+        if (f == frame) {
+            char path[1024];
+            snprintf(path, sizeof path, "%s/ram_%u.bin", dir, (unsigned)frame);
+            FILE *o = fopen(path, "wb");
+            if (o) { fwrite(sa1_ram, 1, SA1_RAM_SIZE, o); fclose(o); }
+            sa1_log("ramdump: %s", path);
+        }
+        p = *end == ',' ? end + 1 : end;
+    }
+}
+#endif
+
 void shinobi_frame(sh4_ctx *c) {
     frame_count++;
+#ifdef SA1_RAMDUMP
+    ram_dump(frame_count);
+#endif
     if (hle_frame_hook) hle_frame_hook(frame_count);
     shinobi_run_vblank(c);
     shinobi_run_vblank_callbacks(c);
