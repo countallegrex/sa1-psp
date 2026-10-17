@@ -300,6 +300,15 @@ SA1_WEAK void sdk_8c5fba64(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fba64u, ""); c->r
 SA1_WEAK void sdk_8c5fb8a8(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fb8a8u, ""); c->r[0] = 0; }
 SA1_WEAK void sdk_8c5ff2e8(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5ff2e8u, ""); c->r[0] = 0; }
 SA1_WEAK void sdk_8c603384(sh4_ctx *c) { sa1_seam_stub(c, 0x8c603384u, ""); c->r[0] = 0; }
+SA1_WEAK void sdk_8c5fc94c(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fc94cu, ""); c->r[0] = 0; }
+SA1_WEAK void sdk_8c5fcdf6(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fcdf6u, ""); c->r[0] = 0; }
+SA1_WEAK void sdk_8c5fceda(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fcedau, ""); c->r[0] = 0; }
+SA1_WEAK void sdk_8c5fd044(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fd044u, ""); c->r[0] = 0; }
+SA1_WEAK void sdk_8c5fd358(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5fd358u, ""); c->r[0] = 0; }
+SA1_WEAK void sdk_8c5ff24c(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5ff24cu, ""); c->r[0] = 0; }
+SA1_WEAK void sdk_8c5ff2a4(sh4_ctx *c) { sa1_seam_stub(c, 0x8c5ff2a4u, ""); c->r[0] = 0; }
+SA1_WEAK void sdk_8c60e14c(sh4_ctx *c) { sa1_seam_stub(c, 0x8c60e14cu, ""); c->r[0] = 0; }
+SA1_WEAK void sdk_8c63a9dc(sh4_ctx *c) { sa1_seam_stub(c, 0x8c63a9dcu, ""); c->r[0] = 0; }
 
 const sa1_fn_entry sa1_seam_table[] = {
     {0x0c5fb8a4u, sdk_8c5fb8a4},
@@ -327,6 +336,13 @@ const sa1_fn_entry sa1_seam_table[] = {
     {0x0c5fc0c2u, sdk_8c5fc0c2},
     {0x0c5fc58au, sdk_8c5fc58a},
     {0x0c5fc81cu, sdk_8c5fc81c},
+    {0x0c5fc94cu, sdk_8c5fc94c},
+    {0x0c5fcdf6u, sdk_8c5fcdf6},
+    {0x0c5fcedau, sdk_8c5fceda},
+    {0x0c5fd044u, sdk_8c5fd044},
+    {0x0c5fd358u, sdk_8c5fd358},
+    {0x0c5ff24cu, sdk_8c5ff24c},
+    {0x0c5ff2a4u, sdk_8c5ff2a4},
     {0x0c5ff2ccu, sdk_8c5ff2cc},
     {0x0c5ff2deu, sdk_8c5ff2de},
     {0x0c5ff2e8u, sdk_8c5ff2e8},
@@ -433,6 +449,7 @@ const sa1_fn_entry sa1_seam_table[] = {
     {0x0c60d1f2u, sdk_8c60d1f2},
     {0x0c60d1f8u, sdk_8c60d1f8},
     {0x0c60e080u, sdk_8c60e080},
+    {0x0c60e14cu, sdk_8c60e14c},
     {0x0c60e49au, sdk_8c60e49a},
     {0x0c60edb0u, sdk_8c60edb0},
     {0x0c60ede0u, sdk_8c60ede0},
@@ -483,6 +500,7 @@ const sa1_fn_entry sa1_seam_table[] = {
     {0x0c63a994u, sdk_8c63a994},
     {0x0c63a9b8u, sdk_8c63a9b8},
     {0x0c63a9c4u, sdk_8c63a9c4},
+    {0x0c63a9dcu, sdk_8c63a9dc},
     {0x0c63a9f4u, sdk_8c63a9f4},
     {0x0c63aa94u, sdk_8c63aa94},
     {0x0c63ac14u, sdk_8c63ac14},
@@ -594,4 +612,4 @@ const sa1_fn_entry sa1_seam_table[] = {
     {0x0c65c2a8u, sdk_8c65c2a8},
     {0x0c65e3c6u, sdk_8c65e3c6},
 };
-const uint32_t sa1_seam_count = 291;
+const uint32_t sa1_seam_count = 300;

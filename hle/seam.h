@@ -297,3 +297,12 @@ void sdk_8c5fba64(sh4_ctx *c);  /* -                                            
 void sdk_8c5fb8a8(sh4_ctx *c);  /* -                                            1 sites */
 void sdk_8c5ff2e8(sh4_ctx *c);  /* -                                            0 sites */
 void sdk_8c603384(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c5fc94c(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c5fcdf6(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c5fceda(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c5fd044(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c5fd358(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c5ff24c(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c5ff2a4(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c60e14c(sh4_ctx *c);  /* -                                            0 sites */
+void sdk_8c63a9dc(sh4_ctx *c);  /* -                                            0 sites */
