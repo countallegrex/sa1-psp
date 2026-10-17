@@ -30,6 +30,14 @@ if(NOT SA1_NO_SDL)
   endif()
 endif()
 
+# Guest-address check in the flat-RAM macros (sh4_rt.h, SA1_RAM_CHECK): on in
+# Debug builds, or forced; a release build compiles the bare mask.
+option(SA1_RAM_CHECK "Check every guest access against the RAM window (debug aid; always on in Debug)" OFF)
+if(SA1_RAM_CHECK OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_compile_definitions(SA1_RAM_CHECK=1)
+  message(STATUS "sa1psp: guest RAM-window check on")
+endif()
+
 # The platform-neutral HLE (hle/) as a library: compiles without game code.
 file(GLOB SA1_HLE_SRCS CONFIGURE_DEPENDS
      "${CMAKE_SOURCE_DIR}/hle/*.c"
@@ -73,9 +81,12 @@ if(SA1_GAME_SRCS)
     ${SA1_GAME_SRCS}
     ${SA1_RECOMP_OUT}/emitter/game_table.c
     ${SA1_OVERLAY_SRCS})
+  # The runtime header first: the emitter leaves a copy of sh4_rt.h next to
+  # its output, which must not shadow the one in the tree.
+  target_include_directories(sa1psp BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime)
   target_include_directories(sa1psp PRIVATE ${SA1_RECOMP_OUT}/emitter)
   target_link_libraries(sa1psp PRIVATE sa1_backend_desktop sa1_hle)
-  target_include_directories(sa1psp PRIVATE ${CMAKE_SOURCE_DIR}/hle ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime ${CMAKE_SOURCE_DIR}/backend)
+  target_include_directories(sa1psp PRIVATE ${CMAKE_SOURCE_DIR}/hle ${CMAKE_SOURCE_DIR}/backend)
   # The generated code needs these (recomp/emitter/README.md, "Requirements").
   set(SA1_GAME_OPT "-O1" CACHE STRING "Optimisation level for the recompiled game code")
   # Symbols for the trap backtrace (recompiled functions are named by guest address).

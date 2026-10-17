@@ -61,17 +61,43 @@ typedef float    __attribute__((may_alias)) sa1_f32a;
  * share one masked base across @(disp,Rn) accesses.  Differs from hardware
  * only for an access whose base+disp crosses the 16 MB wrap, which nothing
  * does. */
+#ifdef SA1_RAM_CHECK
+/* Debug builds (the desktop Debug configuration, or -DSA1_RAM_CHECK=ON):
+ * every access checks that the guest address is RAM (P0/P1/P2 spellings
+ * of the 16 MB plus the HLE's extra area) or a store-queue address (the
+ * TA writers).  Anything else, a hardware register reached through a
+ * register the emitter could not see (the M2 hang, docs/m2-render-report.md
+ * section 7), would silently land in RAM under the mask: it is logged once
+ * per address with the guest call stack (sa1_badaddr_hook), counted, and
+ * listed by sa1_seam_report; SA1_RAM_TRAP=1 aborts on the first one.  The
+ * access itself still goes to the masked RAM byte, so a run behaves as
+ * before.  Release builds compile the bare mask. */
+void sa1_ram_badaddr(uint32_t a, uint32_t d, int write);
+static inline int sa1_addr_ok(uint32_t a) {
+    return ((a & 0xDFFFFFFFu) - 0x8C000000u) < SA1_RAM_SIZE + SA1_RAM_EXTRA   /* 0x8C/0xAC: RAM and the extra area */
+        || (a - 0x0C000000u) < SA1_RAM_SIZE + SA1_RAM_EXTRA                   /* 0x0C: physical */
+        || (a & 0xFC000000u) == 0xE0000000u;                                   /* store queues */
+}
+static inline uint8_t *sa1_ramp_checked(uint32_t a, int32_t d, int write) {
+    if (__builtin_expect(!sa1_addr_ok(a), 0)) sa1_ram_badaddr(a, (uint32_t)d, write);
+    return sa1_ram + (((uint32_t)(a) & SA1_RAM_MASK) + d);
+}
+#define RAMP(a, d)   sa1_ramp_checked((uint32_t)(a), (int32_t)(d), 0)
+#define RAMPW(a, d)  sa1_ramp_checked((uint32_t)(a), (int32_t)(d), 1)
+#else
 #define RAMP(a, d)   (sa1_ram + (((uint32_t)(a) & SA1_RAM_MASK) + (d)))
+#define RAMPW(a, d)  RAMP(a, d)
+#endif
 #define RD8(a, d)    ((uint32_t)*(const sa1_u8a *)RAMP(a, d))
 #define RD8S(a, d)   ((uint32_t)(int32_t)(int8_t)*(const sa1_u8a *)RAMP(a, d))
 #define RD16(a, d)   ((uint32_t)*(const sa1_u16a *)RAMP(a, d))
 #define RD16S(a, d)  ((uint32_t)(int32_t)(int16_t)*(const sa1_u16a *)RAMP(a, d))
 #define RD32(a, d)   (*(const sa1_u32a *)RAMP(a, d))
 #define RDF(a, d)    (*(const sa1_f32a *)RAMP(a, d))
-#define WR8(a, d, v)  (*(sa1_u8a *)RAMP(a, d) = (uint8_t)(v))
-#define WR16(a, d, v) (*(sa1_u16a *)RAMP(a, d) = (uint16_t)(v))
-#define WR32(a, d, v) (*(sa1_u32a *)RAMP(a, d) = (uint32_t)(v))
-#define WRF(a, d, v)  (*(sa1_f32a *)RAMP(a, d) = (v))
+#define WR8(a, d, v)  (*(sa1_u8a *)RAMPW(a, d) = (uint8_t)(v))
+#define WR16(a, d, v) (*(sa1_u16a *)RAMPW(a, d) = (uint16_t)(v))
+#define WR32(a, d, v) (*(sa1_u32a *)RAMPW(a, d) = (uint32_t)(v))
+#define WRF(a, d, v)  (*(sa1_f32a *)RAMPW(a, d) = (v))
 
 /* Accesses whose address is a compile-time constant outside RAM (hardware
  * registers the A-tail Katana pieces and the 8 TA-writing functions touch). */
@@ -114,6 +140,11 @@ void sa1_trace_dump(void (*cb)(void *fn, uint32_t first_frame, uint32_t hits, vo
 extern uint32_t (*sa1_trace_frame)(void);
 /* Called by sa1_trap before abort(), if set (the backend prints its report). */
 extern void (*sa1_trap_hook)(sh4_ctx *c, uint32_t pc, const char *what);
+/* Called on the first access to each guest address outside RAM (SA1_RAM_CHECK
+ * builds); the desktop backend prints the host backtrace, which names the
+ * recompiled functions on the guest call stack. */
+extern void (*sa1_badaddr_hook)(uint32_t addr);
+void sa1_badaddr_report(void);     /* the addresses hit so far, with counts (no-op without SA1_RAM_CHECK) */
 extern const sa1_fn_entry sa1_fn_table[];
 extern const uint32_t sa1_fn_count;
 extern const sa1_fn_entry sa1_seam_table[];

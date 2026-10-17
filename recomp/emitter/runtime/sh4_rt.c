@@ -244,6 +244,29 @@ void sa1_seam_stub(sh4_ctx *c, uint32_t addr, const char *name) {
             c->r[4], c->r[5], c->r[6], c->r[7]);
 }
 
+/* ---- guest addresses outside RAM (SA1_RAM_CHECK) -------------------------- */
+void (*sa1_badaddr_hook)(uint32_t addr);
+#define BAD_MAX 64
+static struct { uint32_t addr, hits, first_frame; int write; } bad_recs[BAD_MAX];
+static uint32_t bad_n, bad_other;
+
+void sa1_ram_badaddr(uint32_t a, uint32_t d, int write) {
+    uint32_t addr = a + d;
+    uint32_t f = sa1_trace_frame ? sa1_trace_frame() : 0;
+    for (uint32_t i = 0; i < bad_n; i++) if (bad_recs[i].addr == addr) { bad_recs[i].hits++; return; }
+    if (bad_n == BAD_MAX) { bad_other++; return; }
+    bad_recs[bad_n].addr = addr; bad_recs[bad_n].hits = 1; bad_recs[bad_n].first_frame = f; bad_recs[bad_n].write = write; bad_n++;
+    sa1_log("guest %s outside RAM: 0x%08x (base 0x%08x + %u) at frame %u; masked into RAM offset 0x%x", write ? "write" : "read", addr, a, d, f, addr & SA1_RAM_MASK);
+    if (sa1_badaddr_hook) sa1_badaddr_hook(addr);
+    if (getenv("SA1_RAM_TRAP")) { sa1_log("SA1_RAM_TRAP set: aborting"); abort(); }
+}
+
+void sa1_badaddr_report(void) {
+    if (!bad_n) { sa1_log("ram check: no guest access outside RAM"); return; }
+    sa1_log("ram check: %u distinct guest addresses outside RAM%s (each is a seam entry to add):", bad_n, bad_other ? " (table full, more not listed)" : "");
+    for (uint32_t i = 0; i < bad_n; i++) sa1_log("  0x%08x  %s, %u hits, first at frame %u", bad_recs[i].addr, bad_recs[i].write ? "write" : "read", bad_recs[i].hits, bad_recs[i].first_frame);
+}
+
 void sa1_seam_report(int top) {
     sa1_hit *sorted[SA1_HIT_MAX];
     uint32_t n = 0;
@@ -258,6 +281,9 @@ void sa1_seam_report(int top) {
     sa1_log("seam report: %u distinct entries called", n);
     for (uint32_t i = 0; i < n && (int)i < top; i++)
         sa1_log("  %10u  0x%08x  %s", sorted[i]->hits, sorted[i]->addr | 0x80000000u, sorted[i]->name);
+#ifdef SA1_RAM_CHECK
+    sa1_badaddr_report();
+#endif
 }
 
 /* ---- function-execution trace (-finstrument-functions) ------------------ */

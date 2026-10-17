@@ -113,6 +113,10 @@ static void report_and_exit(int code) {
     exit(code);
 }
 
+/* SA1_RAM_CHECK (sh4_rt.h): a guest access outside RAM; the backtrace names
+ * the recompiled functions (fn_8c0xxxxx) that made it. */
+static void on_badaddr(uint32_t addr) { (void)addr; plat_backtrace(); }
+
 static void on_trap(sh4_ctx *c, uint32_t pc, const char *what) {
     (void)c; (void)pc; (void)what;
     input_tape_finish(3, "trap");
@@ -274,6 +278,7 @@ int main(int argc, char **argv) {
     SetUnhandledExceptionFilter(on_crash);
 #endif
     sa1_trap_hook = on_trap;
+    sa1_badaddr_hook = on_badaddr;
     hle_frame_hook = on_frame;
     sa1_trace_frame = hle_frame_count;
     plat_watchdog_start(hle_frame_count, 10);   /* a guest loop with no frame progress is a bug */
