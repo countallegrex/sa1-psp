@@ -293,9 +293,10 @@ Each one has a single exit test. Do not start the next before the test passes.
       files have their own discovery config, 100 % of the 406 executed
       overlay call targets found (97.04 % without the 12 seeds), and 1,070 C
       functions in one table per slot. That C compiles with clang and
-      psp-gcc and links against the main image. Still to do: the Shinobi
-      HLE bodies, a boot `main`, and the loader hook that installs an
-      overlay's table when the game loads the file.*
+      psp-gcc and links against the main image. The loader hook
+      (`hle/overlay/`) wraps the game's PRS loader `0x8C09DA44` and installs
+      the table of the file the game loads. Still to do: the Shinobi HLE
+      bodies and a boot `main`.*
 - [ ] **M2 Desktop graphics.** Ninja HLE on OpenGL fixed function, reading
       models and textures from guest RAM. Exit: Emerald Coast completed with
       a controller, draw order correct, no desktop-only features.

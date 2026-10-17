@@ -13,8 +13,7 @@ static void (*sa1_log_sink)(const char *line);
 
 void sa1_set_log_sink(void (*sink)(const char *line)) { sa1_log_sink = sink; }
 
-static void sa1_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-static void sa1_log(const char *fmt, ...) {
+void sa1_log(const char *fmt, ...) {
     char buf[256];
     va_list ap;
     va_start(ap, fmt);

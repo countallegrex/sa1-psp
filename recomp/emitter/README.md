@@ -20,6 +20,11 @@ into `recomp/out/overlays/emitter/<name>/`. Functions are named
 a full register sync. The output also holds one `sa1_overlay` table, which the
 loader hook installs with `sa1_overlay_set` (see `docs/m1-overlays.md` §5).
 
+`recomp/sa1_us_1005/hle_wraps.tsv` lists block-A functions that `hle/` wraps
+(`--wraps`). Their recompiled bodies are emitted as `fn_<addr>_orig`. Calls
+and the function table keep `fn_<addr>`, which `hle/` defines. The overlay
+loader hook works this way (`docs/m1-overlays.md` §7).
+
 Inputs: the user's own binary (never committed), the function list from the
 discovery step (`recomp/sa1_us_1005/README.md`, Dream-Recomp run as a
 separate process) and the seam table `recomp/sa1_us_1005/sdk_entry_points.tsv`.

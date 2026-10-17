@@ -50,11 +50,24 @@ def read_seam(path):
     return seam
 
 
+def read_wraps(path):
+    """Addresses of the functions hle/ wraps (recomp/sa1_us_1005/hle_wraps.tsv)."""
+    wraps = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#") or line.startswith("address\t") or not line.strip():
+                continue
+            wraps.append(int(line.split("\t")[0], 16))
+    return wraps
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True, help="path to the descrambled 1ST_READ.BIN")
     ap.add_argument("--functions", required=True, help="Dream-Recomp *.functions.json")
     ap.add_argument("--seam", default=os.path.join(REPO, "recomp", "sa1_us_1005", "sdk_entry_points.tsv"))
+    ap.add_argument("--wraps", default=os.path.join(REPO, "recomp", "sa1_us_1005", "hle_wraps.tsv"),
+                    help="functions hle/ wraps; their bodies are emitted as fn_<addr>_orig")
     ap.add_argument("--out", default=os.path.join(REPO, "recomp", "out", "emitter"))
     ap.add_argument("--chunks", type=int, default=32)
     ap.add_argument("--update-hle", action="store_true", help="copy seam.h / seam_stubs.c into hle/")
@@ -76,10 +89,11 @@ def main():
         if BLOCK_A[0] <= phys(e) < BLOCK_A[1]:
             functions.append((e, int(fn["end"], 16), fn.get("origin", "")))
     seam = read_seam(args.seam)
-    print("%d functions in block A, %d seam entries" % (len(functions), len(seam)))
+    wraps = read_wraps(args.wraps)
+    print("%d functions in block A, %d seam entries, %d wrapped" % (len(functions), len(seam), len(wraps)))
 
     t0 = time.time()
-    prog = Program(image, BLOCK_A[0], BLOCK_A[1], functions, seam, sdk_range=BLOCK_B)
+    prog = Program(image, BLOCK_A[0], BLOCK_A[1], functions, seam, sdk_range=BLOCK_B, wrap=wraps)
     prog.build()
     counts = prog.write_all(args.out, chunks=args.chunks)
     shutil.copy(os.path.join(HERE, "runtime", "sh4_rt.h"), args.out)

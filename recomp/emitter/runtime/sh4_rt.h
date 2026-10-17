@@ -72,6 +72,7 @@ void sa1_call(sh4_ctx *c, uint32_t addr);               /* function table / seam
 void sa1_trap(sh4_ctx *c, uint32_t pc, const char *what); /* unimplemented: logs, aborts */
 sa1_fn sa1_fn_lookup(uint32_t addr);                   /* NULL when unknown */
 void sa1_set_log_sink(void (*sink)(const char *line)); /* default: stderr */
+void sa1_log(const char *fmt, ...) __attribute__((format(printf, 1, 2))); /* one line to the sink */
 void sa1_seam_stub(sh4_ctx *c, uint32_t addr, const char *name);
 extern const sa1_fn_entry sa1_fn_table[];
 extern const uint32_t sa1_fn_count;

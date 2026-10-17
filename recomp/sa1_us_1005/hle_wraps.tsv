@@ -1,0 +1,7 @@
+# Block-A functions the HLE layer wraps (docs/m1-overlays.md section 7).
+# emit_sa1.py defines the recompiled body as fn_<address>_orig; every call
+# and the function table keep using fn_<address>, which the listed hle/ file
+# defines (it calls fn_<address>_orig).  Addresses only.
+address	hle	what
+8c09da44	hle/overlay/overlay_loader.c	PRS file loader: (r4 = file name, r5 = destination) -> r0 = 0 or -1
+8c099872	hle/overlay/overlay_loader.c	PRS texture-archive loader that decompresses through 0x8C900000

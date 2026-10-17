@@ -30,10 +30,13 @@ STORE_OPS = {
 
 class Program:
     def __init__(self, image, code_lo, code_hi, functions, seam, sdk_range=None,
-                 name_prefix="fn_", log=print, extern=None):
+                 name_prefix="fn_", log=print, extern=None, wrap=None):
         """functions: list of (entry, end, origin).  seam: {addr: (name, sites)}.
         extern: {addr: C name} of functions emitted in another unit (an
-        overlay's calls into the main image); called directly, full sync."""
+        overlay's calls into the main image); called directly, full sync.
+        wrap: addresses of functions the HLE layer wraps.  The recompiled
+        body is defined as <name>_orig; every call and the function table
+        still use <name>, which hle/ defines (and which calls <name>_orig)."""
         self.image = image
         self.code_lo, self.code_hi = phys(code_lo), phys(code_hi)
         self.functions_in = [(phys(e), phys(end) if end else None, origin) for e, end, origin in functions]
@@ -41,6 +44,7 @@ class Program:
         self.sdk_range = tuple(phys(x) for x in sdk_range) if sdk_range else None
         self.prefix = name_prefix
         self.extern = {phys(a): n for a, n in (extern or {}).items()}
+        self.wrap = {phys(a) for a in (wrap or ())}
         self.log = log
         self.summaries = Summaries()
         self.cfgs = {}
@@ -51,6 +55,10 @@ class Program:
     # ---- names ------------------------------------------------------------
     def fn_name(self, addr):
         return "%s%08x" % (self.prefix, phys(addr) | 0x80000000)
+
+    def def_name(self, addr):
+        """Name of the C definition: fn_name, plus "_orig" when wrapped."""
+        return self.fn_name(addr) + ("_orig" if phys(addr) in self.wrap else "")
 
     def seam_name(self, addr):
         return "sdk_%08x" % (phys(addr) | 0x80000000)
@@ -213,6 +221,9 @@ class Program:
                 f.write("extern const sa1_overlay %s;\n" % overlay["record"])
             for e in self.order:
                 f.write("void %s(sh4_ctx *c);\n" % self.fn_name(e))
+                if e in self.wrap:
+                    f.write("void %s(sh4_ctx *c);  /* recompiled body; the wrapper is in hle/ */\n"
+                            % self.def_name(e))
         table = overlay["table"] if overlay else "sa1_fn_table"
         with open(os.path.join(out_dir, "%s_table.c" % unit), "w", newline="\n") as f:
             f.write("/* generated: function table for indirect calls */\n#include \"sh4_rt.h\"\n#include \"%s.h\"\n" % unit)
@@ -228,6 +239,7 @@ class Program:
         if not overlay:
             self.write_seam(out_dir)
         counts["functions"] = len(self.order)
+        counts["wrapped"] = len(self.wrap & set(self.order))
         counts["source_bytes"] = src_bytes
         counts["chunks"] = len(files)
         counts.update(self.stats)
@@ -288,7 +300,7 @@ class FunctionEmitter:
     def emit(self):
         cfg, fa, prog = self.cfg, self.fa, self.prog
         L = []
-        name = prog.fn_name(cfg.entry)
+        name = prog.def_name(cfg.entry)
         L.append("")
         L.append("void %s(sh4_ctx *c) {" % name)
         ints = [regs.name(r) for r in iter_bits(fa.used) if not regs.is_float(r)]

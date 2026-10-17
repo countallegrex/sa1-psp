@@ -154,9 +154,8 @@ emitter as the main image (`recomp/emitter/sh4emit/`), with three changes:
   `SA1_SLOT_AREA` and `SA1_SLOT_EVENT`. `sa1_fn_lookup` (behind
   `sa1_call`) checks the installed overlays by code range before the main
   table, so main-image code that calls a pointer into the slot reaches
-  whichever file is loaded. The loader hook that calls `sa1_overlay_set`
-  when the game decompresses a file belongs to the HLE file layer and is
-  not written yet.
+  whichever file is loaded. The loader hook in `hle/overlay/` calls
+  `sa1_overlay_set` when the game loads a file into a slot (§7).
 
 | File | C functions | SH-4 instructions | Calls into main | Seam calls | Unresolved `jsr`/`jmp` | C source | psp-gcc `-Os` `.text` | Ratio | clang `-Os` x86-64 `.text` |
 |---|---|---|---|---|---|---|---|---|---|
@@ -214,14 +213,111 @@ targets.
 
 **Rule for every further overlay:** run `emit_overlay.py`, then add any
 "external target without a function" it prints to the main config. These are
-main-image entries that only overlays reach.
+main-image entries that only overlays reach. Then run
+`python -I tools/gen_overlay_registry.py` so the loader hook knows the file
+(§7).
 
-## 7. Open items
+## 7. The loader hook
 
-- The **loader hook**: find the routine in block A that decompresses a PRS
-  into `0x8C900000` / `0x8CB80000`, and have the HLE call
-  `sa1_overlay_set` with the matching record. The disc file name or the
-  decompressed SHA-256 can select the record.
+### Where the game loads an overlay
+
+Every load into a slot on the route goes through one block-A routine:
+
+| Address | Role | Arguments and result |
+|---|---|---|
+| **`0x8C09DA44`** | load a PRS file | `r4` = file name, a C string with no directory, spelled as the game spells it (`"advertise.prs"`, `"adv00.PRS"`, `"ev002B.prs"`); `r5` = destination. Reads the whole file into the staging buffer `0x8CD00000` (`0x8C09CC80`, through `gdFs`), decompresses it to `r5` with `0x8C04C5E0`, then calls SDK `0x8C5FC0C2` through its uncached P2 address (presumably a cache flush). Returns `r0` = 0, or -1 if the file did not open, in which case nothing is decompressed. |
+| `0x8C04C5E0` | SEGA PRS decompressor | `r4` = source, `r5` = destination; returns `r0` = bytes written. Same algorithm as `prs_decompress` in `tools/trace_overlays.py`: one control byte per 8 flag bits, literal copy on 1, then a short (`0xFF00 \| byte`, length 2–5) or long (`0xE000 \| word >> 3`, length in the low 3 bits or one extra byte) back-reference, ending at a long reference of 0. |
+| `0x8C09CC80` | read a whole file | `r4` = name, `r5` = buffer; returns `r0` = 0, or -1 if `gdFsOpen` failed. |
+
+Its callers that write to a slot:
+
+| Caller | Files | Destination |
+|---|---|---|
+| `0x8C09CE90`, one `switch` case per level (called from `0x8C04E4CC`) | `stg00.PRS`–`stg12.PRS`, `b_*.PRS`, `adv00.PRS`–`adv03.PRS`, `adv01obj.PRS`, `minicart.PRS`, `shooting.PRS`, `sboard.PRS`, `al_main.PRS` | `0x8C900000` |
+| the same function, data files | `adv0100.PRS`, `adv0130.PRS` | `0x8C920000` |
+| the same function, data files | `shtpath1.PRS`, `shtpath2.PRS`, `al_garden00`–`02.PRS`, `al_race.PRS` | `0x8CB80000` (the event slot) |
+| `0x8C053B60`, the title/menu state machine | `advertise.prs`, `summary.prs`, `alertwnd.prs` | `0x8C900000`; it then calls the header entries (`0x8C054008` → `0x8C9000F4` in the trace) |
+| `0x8C049882`, start event `r4` | `sprintf("ev%04X.prs", r4)`, after zeroing `0x48000` bytes at the slot; `r4` < 0 skips the load | `0x8CB80000`; it then calls the file's first header word (`0x8C0498EC` in the trace) |
+
+Two things follow for the hook. The event slot also receives area data
+files, so a load of an unknown file must empty the slot. And `alertwnd.prs`
+is a code file for the area slot (the menu calls `0x8C900000` right after
+loading it) that is not recompiled yet.
+
+Other writers I checked: `0x8C0997BC` loads a texture archive (`"%s.PRS"`),
+staged at `0x8CF00000` and decompressed to `0x8CD00000`; `0x8C0356AC`
+decompresses to `0x8CCA4000`/`0x8CCA6000`; the raw readers around
+`0x8C09CCE4` put SET and camera files at `0x8CB50000`–`0x8CB78000`, below the
+event slot. One variant of the texture loader, **`0x8C099872`** (`r4` = name,
+`r5` = texture list), decompresses the archive into `0x8C900000` itself as
+scratch space. Nothing reaches it: no call, tail call or stored pointer in
+block A or in the seven overlays, and the trace never ran it. The M0 trace
+executed `0x8C09DA44`, `0x8C04C5E0`, `0x8C09CE90`, `0x8C053B60` and
+`0x8C049882`.
+
+I found them from the strings: the pool loads of `advertise.prs`,
+`ev%04X.prs` and the `stgNN.PRS` names sit next to calls to `0x8C09DA44`,
+whose callee `0x8C04C5E0` has the decompressor's shape. A scan of block A
+for every pool load or `bsr` of `0x8C04C5E0`, `0x8C09DA44` and `0x8C09CC80`
+gave the callers above.
+
+### Hook
+
+- **Hook point: a wrapped game function**, not the seam. The loader is game
+  code in block A, and it is the one place that has both the file name and
+  the destination. The decompressor sees no name; the `gdFs` read goes to
+  the staging buffer, not the slot. `recomp/sa1_us_1005/hle_wraps.tsv`
+  lists `0x8C09DA44` and `0x8C099872`. `emit_sa1.py` (via
+  `Program(wrap=...)`) emits their recompiled bodies as
+  `fn_8c09da44_orig` / `fn_8c099872_orig`. `hle/overlay/overlay_loader.c`
+  defines `fn_8c09da44` / `fn_8c099872`, so every direct call, the function
+  table and the overlays' calls into the main image reach the wrapper. A
+  wrapper can read only registers in the body's `live_in` summary, because
+  callers sync just those before the call. `r4` and `r5` are live-in for
+  both.
+- **Identification: the file name** in `r4`, compared without regard to case
+  against the last path component of `file` in each overlay config, and only
+  among the files of the destination's slot. The registry also carries the
+  decompressed size and SHA-256, but the hook does not hash: hashing 2.3 MB
+  on every area load would cost time on the PSP, and the name is exact for
+  this one disc version. A launcher or a debug build can check the hashes
+  once against the extracted files.
+- **Rules.** Before the body runs, every slot is emptied whose base is the
+  destination or whose installed code range contains it. After a
+  successful load (`r0` = 0) at a slot base, the slot gets the matching
+  record, or stays empty for a file with no recompiled code (data, or
+  `alertwnd.prs`). An empty slot makes `sa1_call` into it trap, loudly,
+  instead of running a stale table. `0x8C099872` only empties the area slot.
+  Each step logs a line (`overlay: loaded SONICADV/ADV00.PRS to
+  0x8c900000`, `overlay slot 0: ADV00`), which is what M1's exit test reads.
+- **Registry**: `tools/gen_overlay_registry.py` writes
+  `hle/overlay/overlay_registry.c` from the `[sa1_overlay]` tables, one
+  `hle_overlay_file` record per config: file, slot, size, SHA-256, and a
+  pointer to `sa1_ovl_<name>`. It holds names, sizes and hashes only and is
+  committed. `--check` reports whether it is out of date. The build must
+  link every overlay the registry names.
+
+**Check.** The main image re-emitted with the two wraps differs from the
+previous output only in those two definitions' names and two extra
+prototypes in `game.h`. The 51 emitter tests pass. `compile_clang.sh` now
+also builds `hle/overlay/*.c` and links: 0 warnings. `link_test.c` installs
+every registry entry through the hook under the game's lower-case name and
+checks every function's lookup (0 mismatches). It also checks the reuse
+rules: a load past `ADV00`'s code keeps the table, a load inside it or a
+data file at a slot base empties the slot, an event file aimed at the area
+slot does not match, and a failed load leaves the slot empty. Finally it runs
+the wrapped `fn_8c09da44` itself on a name in guest RAM: with the seam stubs
+the open fails, `r0` = -1, the slot ends up empty and `r15` comes back
+unchanged. Both `hle/overlay` files also compile with psp-gcc (`-Os -G0
+-Wall`, 0 warnings; 1,104 + 785 bytes of `.text`).
+
+## 8. Open items
+
+- **The hook has only run in the link test.** The real exercise is the M1
+  boot, once the `gdFs` HLE can open files: the log should show
+  `ADVERTISE`, then the `EV*` files, then `ADV00` being installed.
+- **`alertwnd.prs`** is area-slot code that is not recompiled yet; the M0
+  route never ran it.
 - **280 unresolved indirect sites** in the overlays (219 in `EV002B`, mostly
   `jsr @rn` through event-script tables) go through `sa1_call`. That works
   for targets with a function, and traps on any other.
