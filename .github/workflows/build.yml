@@ -61,6 +61,12 @@ jobs:
             -Ihle -Ihle/overlay -Irecomp/emitter/runtime tests/overlay/loader_test.c \
             hle/overlay/overlay_loader.c recomp/emitter/runtime/sh4_rt.c -o loader_test
           ./loader_test
+      # PVR texture decoder on synthetic textures (tests/ninja/pvr_decode_test.c), no game data.
+      - name: PVR decoder test
+        shell: bash
+        run: |
+          ${{ matrix.os == 'windows-latest' && 'clang' || 'cc' }} -std=c11 -Wall -D_CRT_SECURE_NO_WARNINGS             -Ihle/ninja tests/ninja/pvr_decode_test.c hle/ninja/pvr_decode.c -o pvr_decode_test
+          ./pvr_decode_test
 
   # Replay harness on synthetic data (tests/replay/README.md): tape format
   # round trip through backend/desktop/input_tape.c and tools/tape_io.py,

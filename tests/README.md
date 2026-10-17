@@ -6,6 +6,8 @@ it is unset. No fixture in this directory may be derived from the game.
 
 - `emitter/`: the SH-4 → C emitter on hand-written snippets (no game data).
 - `overlay/`: overlay loader slot rules (no game data).
+- `ninja/`: the PVR texture decoder (`hle/ninja/pvr_decode.c`) on synthetic
+  twiddled, mipmapped, VQ and rectangle textures (no game data).
 - `replay/`: input tapes and state checks for the desktop build
   (`tools/replay_test.py`, `replay/README.md`). A tape holds controller
   input and the SHA-256 of the title it was recorded on; a check file holds

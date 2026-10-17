@@ -24,6 +24,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "ninja.h"
+#include "pvr_decode.h"
 #include "../shinobi/shinobi.h"
 
 #include <stdio.h>
@@ -47,8 +48,7 @@ static uint32_t palette[1024];        /* KAMUI palette RAM, ARGB8888 */
 uint32_t texture_memory_bytes(void) { return total_bytes; }
 int texture_count(void) { return ntex; }
 
-/* ---- PVR decoding ------------------------------------------------------------ */
-typedef struct { const uint8_t *p; uint32_t n; } span;
+/* ---- PVR decoding (pvr_decode.c does the texels) ----------------------------- */
 static uint32_t rd32le(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 /* chunk magics as little-endian words (the four-letter tags themselves are
  * on tools/check_clean.py's signature list, so they are not spelled here) */
@@ -57,167 +57,36 @@ static uint32_t rd32le(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 
 #define MAGIC_ARCHIVE 0x484D5650u   /* P V M H */
 static uint16_t rd16le(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 
-/* PowerVR -> PSP bit order (swap the red and blue fields). */
-static uint16_t to_psp(uint16_t v, int pixfmt) {
-    switch (pixfmt) {
-    case 0: return (uint16_t)((v & 0x8000) | (v & 0x7C00) >> 10 | (v & 0x03E0) | (v & 0x001F) << 10);           /* ARGB1555 */
-    case 1: return (uint16_t)((v & 0xF800) >> 11 | (v & 0x07E0) | (v & 0x001F) << 11);                           /* RGB565 */
-    case 2: return (uint16_t)((v & 0xF000) | (v & 0x0F00) >> 8 | (v & 0x00F0) | (v & 0x000F) << 8);             /* ARGB4444 */
-    default: return v;
-    }
-}
-static int psp_fmt(int pixfmt) { return pixfmt == 0 ? DRAW_FMT_5551 : pixfmt == 1 ? DRAW_FMT_5650 : pixfmt == 2 ? DRAW_FMT_4444 : DRAW_FMT_5650; }
-
-/* Morton order inside a square: index = interleave(y bits, x bits), y in the low bit. */
-static uint32_t twiddle(uint32_t x, uint32_t y) {
-    uint32_t r = 0;
-    for (int b = 0; b < 10; b++) r |= ((y >> b) & 1) << (2 * b) | ((x >> b) & 1) << (2 * b + 1);
-    return r;
-}
-/* Rectangles are twiddled in min(w,h) squares along the long side. */
-static uint32_t twiddled_index(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
-    uint32_t s = w < h ? w : h;
-    uint32_t bx = x / s, by = y / s;
-    uint32_t block = w >= h ? bx : by;
-    return block * s * s + twiddle(x % s, y % s);
-}
-
-static const uint32_t MIP_POINT[11] = {0x6, 0x8, 0x10, 0x30, 0xB0, 0x2B0, 0xAB0, 0x2AB0, 0xAAB0, 0x2AAB0, 0xAAAB0};
-static const uint32_t VQ_MIP_POINT[11] = {0x0, 0x1, 0x2, 0x6, 0x16, 0x56, 0x156, 0x556, 0x1556, 0x5556, 0x15556};
 static int log2u(uint32_t v) { int n = 0; while ((1u << n) < v && n < 12) n++; return n; }
-
-static uint32_t yuv_to_565(int y, int u, int v) {
-    int r = y + (int)(1.402f * (v - 128)), g = y - (int)(0.344f * (u - 128) + 0.714f * (v - 128)), b = y + (int)(1.772f * (u - 128));
-    if (r < 0) r = 0; if (r > 255) r = 255;
-    if (g < 0) g = 0; if (g > 255) g = 255;
-    if (b < 0) b = 0; if (b > 255) b = 255;
-    return (uint32_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3));
-}
 
 /* Decodes the PVR-T at p (length n) into a 16-bit PSP-order image.
  * Returns the backend handle, 0 on failure; *w, *h, *fmt describe it. */
 static const char *decode_name = "";      /* the texture being decoded, for the debug log and dumps */
 static uint32_t decode_pvrt(const uint8_t *p, uint32_t n, int *out_w, int *out_h, int *out_fmt, uint32_t *out_bytes, uint32_t *gbix_out) {
-    uint32_t off = 0;
-    if (gbix_out) *gbix_out = 0xFFFFFFFFu;
-    if (n >= 16 && rd32le(p) == MAGIC_GINDEX) {
-        uint32_t l = rd32le(p + 4);
-        if (gbix_out && l >= 4) *gbix_out = rd32le(p + 8);
-        off = 8 + l;
-    }
-    if (off + 16 > n || rd32le(p + off) != MAGIC_TEXTURE) return 0;
-    uint32_t size = rd32le(p + off + 4);
-    int pixfmt = p[off + 8], datafmt = p[off + 9];
-    uint32_t w = rd16le(p + off + 12), h = rd16le(p + off + 14);
-    const uint8_t *d = p + off + 16;
-    uint32_t dn = size >= 8 ? size - 8 : 0;
-    if (off + 8 + dn > n) dn = n - off - 16;
-    if (w == 0 || h == 0 || w > 1024 || h > 1024 || (w & (w - 1)) || (h & (h - 1))) {
+    pvr_info info;
+    int r = pvr_parse(p, n, &info);
+    if (gbix_out) *gbix_out = r == PVR_ERR_HEADER ? PVR_NO_GINDEX : info.gbix;
+    if (r == PVR_ERR_HEADER) return 0;
+    uint32_t w = info.w, h = info.h;
+    int pixfmt = info.pixfmt, datafmt = info.datafmt;
+    if (r == PVR_ERR_SIZE) {
         sa1_log("texture: unsupported size %ux%u (fmt %d/%d)", w, h, pixfmt, datafmt);
         return 0;
     }
     uint16_t *img = calloc((size_t)w * h, 2);
     if (!img) return 0;
-    int fmt = psp_fmt(pixfmt);
     static int tex_log = -1;
     if (tex_log < 0) tex_log = getenv("SA1_TEX_LOG") != NULL;       /* debug aid: every decode */
-    if (tex_log) sa1_log("texture: decode %s %ux%u pixel %d data 0x%x size %u avail %u", decode_name, w, h, pixfmt, datafmt, size, n);
-    int ok = 1;
-    switch (datafmt) {
-    case 1: case 2: case 0xD: {                        /* twiddled (+mips) */
-        uint32_t base = 0;
-        if (datafmt == 2) base = MIP_POINT[log2u(w)];
-        if (datafmt == 2 && w != h) base = 0;             /* mips on rectangles: not a DC format */
-        if (pixfmt == 3) {
-            /* YUV422: 16-bit units twiddled like any texel; the unit at even x
-             * holds (U, Y0), the one at x+1 holds (V, Y1), low byte first. */
-            fmt = DRAW_FMT_5650;
-            for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x + 1 < w; x += 2) {
-                uint32_t i0 = base + twiddled_index(x, y, w, h) * 2, i1 = base + twiddled_index(x + 1, y, w, h) * 2;
-                uint16_t w0 = i0 + 1 < dn ? rd16le(d + i0) : 0, w1 = i1 + 1 < dn ? rd16le(d + i1) : 0;
-                int u = w0 & 255, y0 = w0 >> 8, v = w1 & 255, y1 = w1 >> 8;
-                img[y * w + x] = to_psp((uint16_t)yuv_to_565(y0, u, v), 1);
-                img[y * w + x + 1] = to_psp((uint16_t)yuv_to_565(y1, u, v), 1);
-            }
-            break;
-        }
-        for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
-            uint32_t i = base + twiddled_index(x, y, w, h) * 2;
-            uint16_t v = i + 1 < dn ? rd16le(d + i) : 0;
-            img[y * w + x] = to_psp(v, pixfmt);
-        }
-        break;
-    }
-    case 3: case 4: case 0x10: case 0x11: {            /* VQ: 256-entry codebook of 2x2 texels, twiddled indices */
-        uint32_t cb_entries = 256;
-        if (datafmt >= 0x10) {               /* small VQ: the codebook shrinks with the texture */
-            uint32_t idx_bytes = (w * h) / 4;
-            if (datafmt == 0x11) idx_bytes += VQ_MIP_POINT[log2u(w)];
-            cb_entries = dn > idx_bytes ? (dn - idx_bytes) / 8 : 0;
-            if (cb_entries > 256) cb_entries = 256;
-        }
-        uint32_t cb_bytes = cb_entries * 8;
-        uint32_t base = cb_bytes + ((datafmt == 4 || datafmt == 0x11) ? VQ_MIP_POINT[log2u(w)] : 0);
-        uint32_t hw = w / 2, hh = h / 2;
-        for (uint32_t y = 0; y < hh; y++) for (uint32_t x = 0; x < hw; x++) {
-            uint32_t i = base + twiddled_index(x, y, hw, hh);
-            uint32_t code = i < dn ? d[i] : 0;
-            if (code >= cb_entries) code = 0;
-            const uint8_t *e = d + code * 8;
-            /* texel order inside the entry: (0,0), (0,1), (1,0), (1,1) */
-            img[(2 * y) * w + 2 * x] = to_psp(rd16le(e), pixfmt);
-            img[(2 * y + 1) * w + 2 * x] = to_psp(rd16le(e + 2), pixfmt);
-            img[(2 * y) * w + 2 * x + 1] = to_psp(rd16le(e + 4), pixfmt);
-            img[(2 * y + 1) * w + 2 * x + 1] = to_psp(rd16le(e + 6), pixfmt);
-        }
-        break;
-    }
-    case 5: case 6: case 7: case 8: {                  /* palettised, twiddled: expand with the palette RAM */
-        int bits = datafmt <= 6 ? 4 : 8;
-        uint32_t base = 0;        /* mips ignored: level 0 is last; approximate with the start */
-        if (datafmt == 6 || datafmt == 8) {
-            uint32_t texels = 0;
-            for (uint32_t s = 1; s < w; s *= 2) texels += s * s;
-            base = bits == 4 ? (texels + 1) / 2 : texels;
-        }
-        fmt = DRAW_FMT_4444;
-        for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
-            uint32_t t = twiddled_index(x, y, w, h);
-            uint32_t k;
-            if (bits == 4) { uint32_t i = base + t / 2; k = i < dn ? (d[i] >> ((t & 1) * 4)) & 15 : 0; }
-            else { uint32_t i = base + t; k = i < dn ? d[i] : 0; }
-            uint32_t c = palette[k & 1023];
-            if (c == 0) c = 0xFF000000u | (k * 0x010101u);
-            img[y * w + x] = (uint16_t)((c >> 28) << 12 | ((c >> 4) & 15) << 8 | ((c >> 12) & 15) << 4 | ((c >> 20) & 15));
-        }
-        break;
-    }
-    case 9: case 0xB: {                                  /* rectangle, linear */
-        if (pixfmt == 3) {                                /* YUV422: pairs of texels */
-            fmt = DRAW_FMT_5650;
-            for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x + 1 < w; x += 2) {
-                uint32_t i = (y * w + x) * 2;
-                if (i + 3 >= dn) break;
-                int u = d[i], y0 = d[i + 1], v = d[i + 2], y1 = d[i + 3];
-                uint32_t a = yuv_to_565(y0, u, v), b = yuv_to_565(y1, u, v);
-                img[y * w + x] = to_psp((uint16_t)a, 1); img[y * w + x + 1] = to_psp((uint16_t)b, 1);
-            }
-        } else {
-            for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
-                uint32_t i = (y * w + x) * 2;
-                img[y * w + x] = to_psp(i + 1 < dn ? rd16le(d + i) : 0, pixfmt);
-            }
-        }
-        break;
-    }
-    default:
+    if (tex_log) sa1_log("texture: decode %s %ux%u pixel %d data 0x%x size %u avail %u", decode_name, w, h, pixfmt, datafmt, info.data_len + 8, n);
+    int fmt = DRAW_FMT_5650;
+    if (pvr_decode(&info, palette, img, &fmt) != PVR_OK) {
         sa1_log("texture: data format 0x%x not supported (pixel format %d, %ux%u)", datafmt, pixfmt, w, h);
-        ok = 0;
+        free(img);
+        return 0;
     }
-    uint32_t handle = 0;
-    if (ok) handle = draw_texture_create((int)w, (int)h, fmt, img, 0, NULL);
+    uint32_t handle = draw_texture_create((int)w, (int)h, fmt, img, 0, NULL);
     const char *dump_dir = getenv("SA1_TEX_DUMP_DIR");      /* debug aid: every decoded texture as PPM, 16-bit expanded */
-    if (ok && dump_dir && w >= (uint32_t)(getenv("SA1_TEX_DUMP_MIN") ? atoi(getenv("SA1_TEX_DUMP_MIN")) : 128)) {
+    if (dump_dir && w >= (uint32_t)(getenv("SA1_TEX_DUMP_MIN") ? atoi(getenv("SA1_TEX_DUMP_MIN")) : 128)) {
         char path[512]; FILE *o;
         static unsigned dump_seq;
         snprintf(path, sizeof path, "%s/tex_%03u_%s_%ux%u_p%d_d%x.ppm", dump_dir, dump_seq++, decode_name, w, h, pixfmt, datafmt);
