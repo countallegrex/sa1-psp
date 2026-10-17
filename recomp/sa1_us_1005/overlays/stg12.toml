@@ -1,0 +1,36 @@
+# Sonic Adventure (USA) v1.005, code overlay SONICADV/STG12.PRS (Hot Shelter),
+# for dream-translate (discovery only). Addresses only; nothing from the disc
+# is in this file. The game decompresses the file (SEGA PRS) to the area slot
+# at 0x8C900000; tools/overlays.py writes the same bytes to
+# ../private/overlays/sa1_us_1005/STG12.bin. Run with
+#   DREAM_CODE_RANGES=0C900000:0C918020
+# (the code part; data follows it). See docs/m1-overlays.md.
+
+[game]
+id = "sa1_ovl_stg12"
+title = "Sonic Adventure overlay STG12"
+region = "USA"
+
+[binary]
+path = "../../../../private/overlays/sa1_us_1005/STG12.bin"   # decompressed, 1,904,268 bytes
+load_address = 0x8C900000
+link_address = 0x0C900000
+entry = 0x8C900000
+
+[functions]
+pointers = true
+sweep = true
+# Header entry pointers, then executed call targets discovery missed
+# (tools/trace_diff.py --overlay; also in stg12_seeds.txt).
+extra = [0x0C900000]
+exclude = []
+
+# Read by recomp/emitter/emit_overlay.py and tools/extract_overlays.py;
+# dream-translate ignores this table.
+[sa1_overlay]
+file = "SONICADV/STG12.PRS"
+slot = 0x8C900000
+code_lo = 0x8C900000
+code_hi = 0x8C918020
+size = 1904268
+sha256 = "9ce6ec66592476b285df6e4a6c16f483a8047d2f6d8b25d5cff3cd62427c51c2"

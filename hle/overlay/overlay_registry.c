@@ -13,6 +13,17 @@ extern const sa1_overlay sa1_ovl_ev0002 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_ev0003 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_ev0006 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_ev002b HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg01 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg02 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg03 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg04 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg05 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg06 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg07 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg08 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg09 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg10 HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_stg12 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_summary HLE_OVERLAY_WEAK;
 
 const hle_overlay_file hle_overlay_files[] = {
@@ -24,6 +35,17 @@ const hle_overlay_file hle_overlay_files[] = {
     {"SONICADV/EV0003.PRS",    SA1_SLOT_EVENT,    87496, "9c53aa10e7922502b23aced8516e7b94efac5fd8d31a3330f771dca409c9b500", &sa1_ovl_ev0003},
     {"SONICADV/EV0006.PRS",    SA1_SLOT_EVENT,    31640, "9bdf1b01e15bff52b0a7ad3087982b9146541859f921df71d27945892ee49e34", &sa1_ovl_ev0006},
     {"SONICADV/EV002B.PRS",    SA1_SLOT_EVENT,   325560, "24958a1055e9aa83580f6777ba9a4e3675c44e290842f31b86375755853a985e", &sa1_ovl_ev002b},
+    {"SONICADV/STG01.PRS",     SA1_SLOT_AREA,   1954056, "38edbe29b2da1ee267cb53b089cdd231732f28cb1e7136093cfe751f57c7f7ab", &sa1_ovl_stg01},
+    {"SONICADV/STG02.PRS",     SA1_SLOT_AREA,   1138093, "59e1b467567021cee5eb69e02b86bfdb54a94b94d0330419f60a3b56f33deb11", &sa1_ovl_stg02},
+    {"SONICADV/STG03.PRS",     SA1_SLOT_AREA,   1212172, "36ebd31dcc1a9f6de3002e0d8c2448bc98fcb58d2896cf6a8b375d9b8a5d86d9", &sa1_ovl_stg03},
+    {"SONICADV/STG04.PRS",     SA1_SLOT_AREA,   1558768, "582223f74f81b1f1167948e88312570e6f046665f1692997e178c22dc99d011e", &sa1_ovl_stg04},
+    {"SONICADV/STG05.PRS",     SA1_SLOT_AREA,   1954534, "5231b156f0895b252ad51888832c09cf43063281f7fb9e9383e137837e7d3691", &sa1_ovl_stg05},
+    {"SONICADV/STG06.PRS",     SA1_SLOT_AREA,   1995960, "b1e44238cab5561e227782fa74cead30bfc45a1d0e31360586b8b8280ed7bbf7", &sa1_ovl_stg06},
+    {"SONICADV/STG07.PRS",     SA1_SLOT_AREA,   1430380, "3bd82699695745fd199949bd4a40f931a1546cce7a004c085ea9b29eefdfdb43", &sa1_ovl_stg07},
+    {"SONICADV/STG08.PRS",     SA1_SLOT_AREA,   2024604, "db141931d1afc5c8b8a937cb4cfe1233827952b46ebd48ffb850cf65c3ff7d49", &sa1_ovl_stg08},
+    {"SONICADV/STG09.PRS",     SA1_SLOT_AREA,   2242852, "a519225e97f4c46b3538d4f172d3afe55c83e0059960e96b1ca5977b260d9119", &sa1_ovl_stg09},
+    {"SONICADV/STG10.PRS",     SA1_SLOT_AREA,   2229116, "68176c73e0d972bc5c5f226deaa44ec3a590850cf631bd63a6613ad9a3b020a1", &sa1_ovl_stg10},
+    {"SONICADV/STG12.PRS",     SA1_SLOT_AREA,   1904268, "9ce6ec66592476b285df6e4a6c16f483a8047d2f6d8b25d5cff3cd62427c51c2", &sa1_ovl_stg12},
     {"SONICADV/SUMMARY.PRS",   SA1_SLOT_AREA,    695821, "9fc758d366c9c22730440245de2e0d058fa9c29110af1b5c2afa022ca29d60cc", &sa1_ovl_summary},
 };
-const unsigned hle_overlay_file_count = 9;
+const unsigned hle_overlay_file_count = 20;
