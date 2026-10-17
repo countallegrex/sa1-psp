@@ -101,7 +101,7 @@ Disc assets (2,834 files, 973 MB):
 | | Dreamcast | PSP-2000/3000/Go (CFW) | Consequence |
 |---|---|---|---|
 | CPU | SH-4 200 MHz, 2-way superscalar, 4x4 vector FPU (`ftrv`) | Allegrex 333 MHz, single issue, VFPU | Recompiled code costs 2–4x the original. Net: roughly **half to a third** of the SH-4's throughput for game logic. The per-frame transform/lighting work must leave the recompiled path and go native (§5). |
-| Main RAM | 16 MB | 64 MB total, ~52 MB usable | Fits only because VRAM and sound RAM are *not* emulated. **PSP-1000 (32 MB) is out of scope.** |
+| Main RAM | 16 MB | 64 MB total, **50.7 MB usable (measured on a 3001, §7)** | Fits only because VRAM and sound RAM are *not* emulated. **PSP-1000 (32 MB) is out of scope.** |
 | Video RAM | 8 MB, PVR textures incl. VQ | 2 MB EDRAM; GE can also texture from main RAM | Framebuffers in EDRAM, textures in main RAM, converted and downscaled offline. |
 | GPU | PowerVR2 tile deferred, order-independent transparency, modifier volumes | GE immediate, fixed function, no shaders, Z-buffer | Draw order must be sorted by us (opaque, then punch-through, then translucent back-to-front). Shadows via modifier volumes become stencil or projected quads. |
 | Sound | AICA 64 ch + ARM7 running the Manatee driver, 2 MB sound RAM | sceAudio, 8 PCM channels, software mixing on CPU or Media Engine | No ARM7. Sequenced SFX need an HLE sequencer or pre-rendered PCM (§6). |
@@ -242,6 +242,11 @@ Two different problems:
 
 ## 7. Memory budget on PSP-2000 (to be measured, not assumed)
 
+**Measured on the test PSP-3001 (ARK CFW, `MEMSIZE=1`, 2026-10-17, M-1
+hello-world):** largest single `malloc` 50,944 KB (49.75 MB) with the heap
+taking all user memory, plus 764 KB left outside the heap. **Usable total
+≈ 50.7 MB.** The budget below is against that figure, not the assumed 52 MB.
+
 | Region | Budget | Note |
 |---|---|---|
 | Guest RAM | 16 MB | Can shrink to the measured high-water mark of the game heap. |
@@ -251,7 +256,9 @@ Two different problems:
 | Runtime, stacks, I/O | 2 MB | |
 | EDRAM | 0.75 of 2 MB | Two 480x272 16-bit framebuffers + Z. |
 
-If this does not fit in 52 MB after measurement, the next step is per-level
+Current sum (16 + 3.66 + 0.77 overlay slot + 6 textures + 3 audio + 2
+runtime) ≈ 31.4 MB against 50.7 MB measured: ~19 MB of headroom before any
+texture downscale. If a later measurement does not fit, the next step is per-level
 code paging (load only the functions a level needs), which SA1's level
 structure makes tractable.
 
@@ -288,7 +295,7 @@ Each one has a single exit test. Do not start the next before the test passes.
       (`hle/`), the game's own coroutine task system on host coroutines, and
       a scripted controller: Sega logo, movie skipped, title, menus, file
       select, then `ADV00.PRS` installed and Station Square running with its
-      opening event at guest frame 2458�3000 (1.0 s host time). The run
+      opening event at guest frame 2458–3000 (1.0 s host time). The run
       ends at frame 3122 when the game loads `B_CHAOS0.PRS`, the first
       overlay outside M1's set. Found and fixed on the way: four emitter
       bugs (register sync at calls, switch-table bounds, pointer-table
@@ -424,5 +431,5 @@ sa1-psp/                      this repo (public)
   overlays: `ADVERTISE`, `SUMMARY`, `ADV00`, five `EV*`; each overlay is
   `python recomp/emitter/emit_overlay.py recomp/sa1_us_1005/overlays/<name>.toml`,
   then `python -I tools/gen_overlay_registry.py`). Run it as in
-  `docs/m1-boot-report.md` �1; `--help`-style options are listed at the top
+  `docs/m1-boot-report.md` §1; `--help`-style options are listed at the top
   of `backend/desktop/main.c`.
