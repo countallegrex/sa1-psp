@@ -1,0 +1,36 @@
+# Sonic Adventure (USA) v1.005, code overlay SONICADV/B_CHAOS4.PRS (boss Chaos 4),
+# for dream-translate (discovery only). Addresses only; nothing from the disc
+# is in this file. The game decompresses the file (SEGA PRS) to the area slot
+# at 0x8C900000; tools/overlays.py writes the same bytes to
+# ../private/overlays/sa1_us_1005/B_CHAOS4.bin. Run with
+#   DREAM_CODE_RANGES=0C900000:0C907160
+# (the code part; data follows it). See docs/m1-overlays.md.
+
+[game]
+id = "sa1_ovl_b_chaos4"
+title = "Sonic Adventure overlay B_CHAOS4"
+region = "USA"
+
+[binary]
+path = "../../../../private/overlays/sa1_us_1005/B_CHAOS4.bin"   # decompressed, 383,276 bytes
+load_address = 0x8C900000
+link_address = 0x0C900000
+entry = 0x8C900000
+
+[functions]
+pointers = true
+sweep = true
+# Header entry pointers, then executed call targets discovery missed
+# (tools/trace_diff.py --overlay; also in b_chaos4_seeds.txt).
+extra = [0x0C900000]
+exclude = []
+
+# Read by recomp/emitter/emit_overlay.py and tools/extract_overlays.py;
+# dream-translate ignores this table.
+[sa1_overlay]
+file = "SONICADV/B_CHAOS4.PRS"
+slot = 0x8C900000
+code_lo = 0x8C900000
+code_hi = 0x8C907160
+size = 383276
+sha256 = "df684213d2cf61e35f29b9898ffe5d77ad0dcde433821cd34678ad8d2ee9a682"
