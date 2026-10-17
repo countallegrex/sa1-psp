@@ -9,7 +9,10 @@
  * macro masks the alias), which is exactly where the KAMUI vertex buffer
  * they are aimed at lives (hle/ninja/kamui.c), and `pref` has no effect.
  * The wrappers stay so that the per-writer counts appear in the seam
- * report; recomp/sa1_us_1005/hle_wraps.tsv lists them.
+ * report; recomp/sa1_us_1005/hle_wraps.tsv lists them.  Eight of the
+ * wrapped functions are not writers at all (docs/overlays-sonic.md
+ * section 6: three collision functions and five that only test the
+ * constant 0x10000000); they run unchanged here too.
  *
  * Three of them (the strip writers 0x8C038516 and 0x8C038802 and the
  * near-plane clipper 0x8C037EE0) clear SR.RB on entry and set it back
@@ -19,13 +22,32 @@
  * Rn,sr` to the flag bits alone (docs/m2-render-report.md), so those
  * wrappers save r0-r7 around the recompiled body.
  *
+ * With SA1_KAMUI_DUMP=<frame> set, every call in that frame is logged
+ * with its registers (kamui.c's pointer trace).
+ *
  * Part of sa1-psp (MIT). */
 #include "../hle.h"
 
-#define TA_PASS(addr) void fn_##addr##_orig(sh4_ctx *c); \
-    void fn_##addr(sh4_ctx *c) { HLE_ENTER(0x##addr##u, "TA writer fn_" #addr); fn_##addr##_orig(c); }
+int kamui_ptr_trace(void);
 
-#define TA_PASS_BANKED(addr) void fn_##addr##_orig(sh4_ctx *c);     void fn_##addr(sh4_ctx *c) {         HLE_ENTER(0x##addr##u, "TA writer fn_" #addr " (banked)");         uint32_t saved[8];         for (int i = 0; i < 8; i++) saved[i] = c->r[i];         fn_##addr##_orig(c);         for (int i = 0; i < 8; i++) c->r[i] = saved[i]; }
+#define TA_PASS(addr) void fn_##addr##_orig(sh4_ctx *c); \
+    void fn_##addr(sh4_ctx *c) { \
+        HLE_ENTER(0x##addr##u, "TA writer fn_" #addr); \
+        int tr_ = kamui_ptr_trace(); \
+        if (tr_) sa1_log("ta: enter " #addr " r4 %08x r5 %08x r6 %08x r14 %08x ctx-op %08x", c->r[4], c->r[5], c->r[6], c->r[14], hle_rd32(0x8C890114u)); \
+        fn_##addr##_orig(c); \
+        if (tr_) sa1_log("ta: leave " #addr " r0 %08x r14 %08x ctx-op %08x", c->r[0], c->r[14], hle_rd32(0x8C890114u)); }
+
+#define TA_PASS_BANKED(addr) void fn_##addr##_orig(sh4_ctx *c); \
+    void fn_##addr(sh4_ctx *c) { \
+        HLE_ENTER(0x##addr##u, "TA writer fn_" #addr " (banked)"); \
+        uint32_t saved[8]; \
+        for (int i = 0; i < 8; i++) saved[i] = c->r[i]; \
+        int tr_ = kamui_ptr_trace(); \
+        if (tr_) sa1_log("ta: enter " #addr " (banked) r1 %08x r14 %08x", c->r[1], c->r[14]); \
+        fn_##addr##_orig(c); \
+        if (tr_) sa1_log("ta: leave " #addr " (banked) r14 %08x", c->r[14]); \
+        for (int i = 0; i < 8; i++) c->r[i] = saved[i]; }
 
 TA_PASS(8c037294)
 TA_PASS(8c037460)

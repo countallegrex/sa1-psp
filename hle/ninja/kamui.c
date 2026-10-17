@@ -89,6 +89,9 @@ static uint32_t clear_color = 0xFF000000u;
 static float fog_near = 1.0f, fog_far = 65535.0f;
 static uint32_t fog_color = 0xFF808080u;
 static const char *screenshot_path;
+static uint32_t dump_frame;        /* SA1_KAMUI_DUMP=<frame>: log every header, pointer handoff and writer call of that frame */
+static int ptr_trace(void) { return dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2; }
+int kamui_ptr_trace(void) { return ptr_trace(); }
 static int frame_rendered;
 static uint32_t stat_frames, stat_polys[3], stat_strips[3], stat_modvols, stat_overflow, stat_sprites;
 static uint32_t last_tris, last_calls, frame_rendered_count, last_polys[3], frame_polys[3];
@@ -188,6 +191,7 @@ static void buffers_alloc(void) {
 #define SH_STATIC   0x8C88FB34u
 #define DESC_STATIC 0x8C88FC40u
 void kamui_init(void) {
+    if (getenv("SA1_KAMUI_DUMP")) dump_frame = (uint32_t)strtoul(getenv("SA1_KAMUI_DUMP"), NULL, 0);
     sh_addr = SH_STATIC;
     desc_addr = DESC_STATIC;
     for (uint32_t i = 0; i < SH_SIZE; i += 4) sh_wr(i, 0);
@@ -220,6 +224,9 @@ void sdk_8c604702(sh4_ctx *c) {
     hle_wrf(NJ_G_DIST, 320.0f);
     hle_wrf(NJ_G_AX, 1.0f); hle_wrf(NJ_G_AY, 1.0f);
     hle_wrf(NJ_G_CLIPN, 1.0f); hle_wrf(NJ_G_CLIPF, 65535.0f);
+    /* the screen clip rectangle the game's own culling (0x8C038D00) tests
+     * projected bounding spheres against: left, top, right, bottom */
+    hle_wrf(0x8C88F600u, 0.0f); hle_wrf(0x8C88F604u, 0.0f); hle_wrf(0x8C88F608u, 640.0f); hle_wrf(0x8C88F60Cu, 480.0f);
     sa1_log("njInitSystem: mode 0x%x, frame %u, count %u", ARG0, ARG1, ARG2);
     kamui_init();
 }
@@ -281,16 +288,19 @@ void sdk_8c606a08(sh4_ctx *c) {
 }
 
 /* 0x8C6069A4: hand a buffer pointer back: *slot = (p & 0x03FFFFFF) | top bits. */
+
 void sdk_8c6069a4(sh4_ctx *c) {
     HLE_ENTER(0x8c6069a4u, "njSetVertexBufferPointer");
     uint32_t slot = hle_rd32(G_CTX_SLOT);
     if (slot) hle_wr32(slot, (ARG0 & 0x03FFFFFFu) | hle_rd32(G_CTX_TOP));
+    if (ptr_trace()) sa1_log("ptr: set slot 0x%08x = 0x%08x (op 0x%08x tr 0x%08x)", slot, ARG0, hle_rd32(KM_CTX_PTR_OP), hle_rd32(KM_CTX_PTR_TR));
 }
 
 /* 0x8C605DAC / 0x8C605E0A: sync strip head + descriptor <-> the context copy. */
 void sdk_8c605dac(sh4_ctx *c) {
     HLE_ENTER(0x8c605dacu, "njSaveContext");
     if (!sh_addr) return;
+    if (ptr_trace()) sa1_log("ptr: save  desc op 0x%08x tr 0x%08x (ctx op 0x%08x tr 0x%08x)", hle_rd32(desc_addr), hle_rd32(desc_addr + 8), hle_rd32(KM_CTX_PTR_OP), hle_rd32(KM_CTX_PTR_TR));
     hle_wr32(KM_CTX_PCW, sh_rd(SH_PCW)); hle_wr32(KM_CTX_ISP, sh_rd(SH_ISP));
     hle_wr32(KM_CTX_TSP, sh_rd(SH_TSP)); hle_wr32(KM_CTX_TCW, sh_rd(SH_TCW));
     hle_wr32(KM_CTX_PTR_OP, hle_rd32(desc_addr + 0));
@@ -302,6 +312,7 @@ void sdk_8c605dac(sh4_ctx *c) {
 void sdk_8c605e0a(sh4_ctx *c) {
     HLE_ENTER(0x8c605e0au, "njRestoreContext");
     if (!sh_addr) return;
+    if (ptr_trace()) sa1_log("ptr: restore ctx op 0x%08x tr 0x%08x (desc op 0x%08x tr 0x%08x)", hle_rd32(KM_CTX_PTR_OP), hle_rd32(KM_CTX_PTR_TR), hle_rd32(desc_addr), hle_rd32(desc_addr + 8));
     sh_wr(SH_PCW, hle_rd32(KM_CTX_PCW)); sh_wr(SH_ISP, hle_rd32(KM_CTX_ISP));
     sh_wr(SH_TSP, hle_rd32(KM_CTX_TSP)); sh_wr(SH_TCW, hle_rd32(KM_CTX_TCW));
     hle_wr32(desc_addr + 0, hle_rd32(KM_CTX_PTR_OP));
@@ -322,7 +333,7 @@ static void write_header(sh4_ctx *c, uint32_t slot, int opaque) {
     uint32_t a = p & 0x1FFFFFFFu;
     uint32_t tsp = hle_rd32(KM_CTX_TSP);
     if (opaque) tsp = (tsp & 0x03EFFFFFu) | 0x20080000u;
-    if (getenv("SA1_KAMUI_DEBUG")) sa1_log("kamui: header to %s at 0x%08x: pcw 0x%08x tsp 0x%08x tcw 0x%08x (cur gbix %u)", opaque ? "op" : "tr", a, hle_rd32(KM_CTX_PCW), tsp, hle_rd32(KM_CTX_TCW), hle_rd32(NJ_CUR_GINDEX));
+    if (ptr_trace()) sa1_log("kamui: header to %s at 0x%08x: pcw 0x%08x tsp 0x%08x tcw 0x%08x (cur global index %u)", opaque ? "op" : "tr", a, hle_rd32(KM_CTX_PCW), tsp, hle_rd32(KM_CTX_TCW), hle_rd32(NJ_CUR_GINDEX));
     hle_wr32(a + 0, hle_rd32(KM_CTX_PCW)); hle_wr32(a + 4, hle_rd32(KM_CTX_ISP));
     hle_wr32(a + 8, tsp); hle_wr32(a + 12, hle_rd32(KM_CTX_TCW));
     for (int i = 0; i < 4; i++) hle_wr32(a + 16 + 4u * (uint32_t)i, hle_rd32(ARG0 + 4u * (uint32_t)i));
@@ -349,10 +360,12 @@ static int select_texture(uint32_t n, uint32_t tsp_addr, uint32_t tcw_addr) {
     uint32_t tl = hle_rd32(NJ_CUR_TEXLIST);
     if (!tl) return -1;
     uint32_t names = hle_rd32(tl), count = hle_rd32(tl + 4);
-    static int dbg;
-    if (!names || n >= count) { if (dbg++ < 8) sa1_log("njSetTextureNum(%u): texlist 0x%08x names 0x%08x count %u", n, tl, names, count); return -1; }
+    /* the SDK indexes without a bounds check (the game relies on it: lists
+     * laid out back to back are addressed past their own count) */
+    (void)count;
+    if (!names || !hle_in_ram(names + n * 12)) return -1;
     uint32_t entry = hle_rd32(names + n * 12 + 8);   /* NJS_TEXNAME.texaddr -> NJS_TEXMEMLIST */
-    if (!entry) { if (dbg++ < 8) sa1_log("njSetTextureNum(%u): texlist 0x%08x names 0x%08x: entry not loaded (fn 0x%08x attr 0x%08x)", n, tl, names, hle_rd32(names + n * 12), hle_rd32(names + n * 12 + 4)); return -1; }
+    if (!entry || !hle_in_ram(entry)) return -1;
     uint32_t gbix = hle_rd32(entry), bank = hle_rd32(entry + 4);
     /* the SDK skips the reload when the global index is already current; a
      * texture without one (0xFFFFFFFF) must never match that way */
@@ -367,13 +380,13 @@ static int select_texture(uint32_t n, uint32_t tsp_addr, uint32_t tcw_addr) {
 void sdk_8c606a88(sh4_ctx *c) {
     HLE_ENTER(0x8c606a88u, "njSetTextureNum");
     int r = select_texture(ARG0, KM_CTX_TSP, KM_CTX_TCW);
-    if (getenv("SA1_KAMUI_DEBUG")) sa1_log("njSetTextureNum(%u) -> %d, tcw 0x%08x", ARG0, r, hle_rd32(KM_CTX_TCW));
+    if (ptr_trace()) sa1_log("njSetTextureNum(%u) -> %d, tcw 0x%08x", ARG0, r, hle_rd32(KM_CTX_TCW));
     RET(r);
 }
 void sdk_8c608d14(sh4_ctx *c) {
     HLE_ENTER(0x8c608d14u, "njSetTextureNum (strip head)");
     int r = sh_addr ? select_texture(ARG0, sh_addr + SH_TSP, sh_addr + SH_TCW) : -1;
-    if (getenv("SA1_KAMUI_DEBUG")) sa1_log("njSetTextureNum/sh(%u) -> %d, tcw 0x%08x", ARG0, r, sh_addr ? sh_rd(SH_TCW) : 0);
+    if (ptr_trace()) sa1_log("njSetTextureNum/sh(%u) -> %d, tcw 0x%08x", ARG0, r, sh_addr ? sh_rd(SH_TCW) : 0);
     RET(r);
 }
 
@@ -573,6 +586,12 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
         if (in_strip) { flush_strip(&pc, sorted); in_strip = 0; }
         if (type == 4 || type == 5) {
             uint32_t isp = hle_rd32(p + 4), tsp = hle_rd32(p + 8), tcw = hle_rd32(p + 12);
+            if (dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2 && want_list == 0 && !sorted) {
+                /* count the vertices that follow */
+                uint32_t q = p + 32, nv = 0;
+                while (q + 32 <= end && (hle_rd32(q) >> 29) == 7) { nv++; q += 32; }
+                sa1_log("hdr list %u at 0x%08x: pcw %08x isp %08x tsp %08x tcw %08x verts %u", (pcw >> 24) & 7, p, pcw, isp, tsp, tcw, nv);
+            }
             pc.list = (int)((pcw >> 24) & 7);
             pc.sprite = (type == 5);
             pc.modvol = (pc.list == 1 || pc.list == 3);
@@ -675,14 +694,13 @@ void sdk_8c6433e0(sh4_ctx *c) {         /* no-draw frame: keep the picture, drop
 void kamui_set_screenshot(const char *path) { screenshot_path = path; }
 
 void kamui_report(void) {
-    sa1_log("render: %u frames presented; last frame %u draw calls, %u triangles, polys op %u tr %u pt %u; polys per frame op %u tr %u pt %u, "
-            "strips op %u tr %u; %u modifier volumes skipped; %u sprites; buffer high-water op %u tr %u pt %u bytes; %u overflows; "
-            "textures %d, %u bytes",
+    sa1_log("render: %u frames presented; last frame %u draw calls, %u triangles, polygons op %u tr %u pt %u; "
+            "per frame on average: polygons op %u tr %u pt %u, strips op %u tr %u",
             frame_rendered_count, last_calls, last_tris, last_polys[0], last_polys[1], last_polys[2],
             stat_frames ? stat_polys[0] / stat_frames : 0, stat_frames ? stat_polys[1] / stat_frames : 0, stat_frames ? stat_polys[2] / stat_frames : 0,
-            stat_frames ? stat_strips[0] / stat_frames : 0, stat_frames ? stat_strips[1] / stat_frames : 0,
-            stat_modvols, stat_sprites, buf_high[0], buf_high[1], buf_high[2], stat_overflow,
-            texture_count(), texture_memory_bytes());
+            stat_frames ? stat_strips[0] / stat_frames : 0, stat_frames ? stat_strips[1] / stat_frames : 0);
+    sa1_log("render: textures %d (%u bytes); TA buffer high-water op %u tr %u pt %u bytes, %u overflows; %u modifier volumes skipped, %u sprites",
+            texture_count(), texture_memory_bytes(), buf_high[0], buf_high[1], buf_high[2], stat_overflow, stat_modvols, stat_sprites);
 }
 
 /* ---- helpers for the native draw entries (draw2d.c) ------------------------ */

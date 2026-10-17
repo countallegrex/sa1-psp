@@ -246,7 +246,7 @@ Two different problems:
 |---|---|---|
 | Guest RAM | 16 MB | Can shrink to the measured high-water mark of the game heap. |
 | Recompiled code | **3.66 MB measured (M1, own emitter), 3.88x the SH-4 bytes; target was ≤ 4.7 MB** | Measured at M1 (`docs/m1-emitter-report.md`): block A (0.94 MB of SH-4; the SDK block is replaced) compiles to 3,655,809 B of MIPS `.text` at `-Os` with `recomp/emitter/`, against 13.1 MB (13.9x) for Dream-Recomp's LLE-shaped output at M0. Registers are C locals, RAM is one array, and call sites sync only the registers the callee reads or writes (0.38 memory operations per instruction). Further levers: drop never-executed functions found by tracing, trust the SH ABI for r8–r15 at every call, per-level code paging. |
-| Textures (main RAM) | 4–8 MB | Offline downscale; CLUT8 or DXT1. |
+| Textures (main RAM) | 4–8 MB | Offline downscale; CLUT8 or DXT1. *Measured at M2 after conversion to 16-bit: 5.99 MB live in Station Square, 5.85 MB in Emerald Coast (`docs/m2-render-report.md`); the PSP needs the downscale pass or paletted formats.* |
 | Audio buffers + SFX | 2–3 MB | |
 | Runtime, stacks, I/O | 2 MB | |
 | EDRAM | 0.75 of 2 MB | Two 480x272 16-bit framebuffers + Z. |
@@ -297,6 +297,16 @@ Each one has a single exit test. Do not start the next before the test passes.
 - [ ] **M2 Desktop graphics.** Ninja HLE on OpenGL fixed function, reading
       models and textures from guest RAM. Exit: Emerald Coast completed with
       a controller, draw order correct, no desktop-only features.
+      *Renderer done 2026-10-17, exit test not yet run
+      (`docs/m2-render-report.md`). The desktop build opens an SDL2 window
+      (480x272, controller or keyboard) and draws the Sega logo, title,
+      menus, character select, Station Square and Emerald Coast from guest
+      RAM: the game's own PowerVR parameter stream is parsed out of KAMUI's
+      vertex buffers (`hle/ninja/kamui.c`), textures are converted once to
+      16-bit PSP formats, sprites, 2D and basic models are native. The
+      scripted pad reaches Emerald Coast only by forcing the stage variables
+      (`--poke`), so "completed with a controller" waits for a human run;
+      what it needs is in the report.*
 - [ ] **M3 Desktop audio.** ADX streaming plus pre-rendered SFX. Exit: BGM
       and jump/ring sounds in Emerald Coast.
 - [ ] **M4 PSP boot.** Same tree built with pspsdk: 16 MB guest array,

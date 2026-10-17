@@ -153,7 +153,7 @@ int draw_init(int scale, int want_headless) {
     if (!win) { sa1_log("draw: window: %s", SDL_GetError()); return -1; }
     glctx = SDL_GL_CreateContext(win);
     if (!glctx) { sa1_log("draw: GL context: %s", SDL_GetError()); return -1; }
-    SDL_GL_SetSwapInterval(1);
+    SDL_GL_SetSwapInterval(getenv("SA1_NOVSYNC") ? 0 : 1);   /* SA1_NOVSYNC=1: run unpaced, for timing */
     sa1_log("draw: GL %s on %s, window %dx%d", (const char *)glGetString(GL_VERSION),
             (const char *)glGetString(GL_RENDERER), win_w, win_h);
     for (int i = 0; i < SDL_NumJoysticks(); i++)

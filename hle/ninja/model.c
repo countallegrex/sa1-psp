@@ -24,7 +24,10 @@
 #include "ninja.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
+static int model_debug = -1;
+static int mdbg(void) { if (model_debug < 0) model_debug = getenv("SA1_MODEL_DEBUG") != NULL; return model_debug; }
 
 #define FARG(i) (c->fr[4 + (i)])
 #define LIGHT_LIST  0x8C8EA3E0u
@@ -169,10 +172,12 @@ static void draw_basic_model(sh4_ctx *c, uint32_t model) {
     uint32_t points = hle_rd32(model), normals = hle_rd32(model + 4), np = hle_rd32(model + 8);
     uint32_t meshsets = hle_rd32(model + 12), mats = hle_rd32(model + 16);
     uint32_t nms = hle_rd16(model + 20), nmat = hle_rd16(model + 22);
+    if (mdbg()) sa1_log("model 0x%08x: points 0x%08x normals 0x%08x np %u meshsets 0x%08x (%u) mats 0x%08x (%u) r %.1f", model, points, normals, np, meshsets, nms, mats, nmat, hle_rdf(model + 36));
     if (!points || np == 0 || np > MAX_VERTS || !meshsets) return;
     /* bounding sphere against the near plane and the far clip */
     { tv_t cen; xform(&e, hle_rdf(model + 24), hle_rdf(model + 28), hle_rdf(model + 32), &cen);
       float r = hle_rdf(model + 36);
+      if (mdbg()) sa1_log("  centre view z %.1f (near %.1f far %.1f) screen %.0f,%.0f lit %d", cen.z, e.clipn, hle_rdf(NJ_G_CLIPF), cen.sx, cen.sy, e.lit);
       if (cen.z + r < e.clipn) return;
       if (cen.z - r > hle_rdf(NJ_G_CLIPF)) return; }
     for (uint32_t i = 0; i < np; i++) {
@@ -195,6 +200,7 @@ static void draw_basic_model(sh4_ctx *c, uint32_t model) {
         }
         int textured = vuv != 0;
         int ignore_light = (flags & FLAG_IGN_LIGHT) != 0;
+        if (mdbg()) sa1_log("  meshset %u: type %u mat %u nmesh %u flags 0x%08x texid %u uv %d col %d", s, type, matid, nmesh, flags, texid, vuv != 0, vcol != 0);
         int list = begin_material(c, flags, texid, textured);
         uint32_t p = meshes, k = 0;    /* k: running index into the per-mesh-vertex arrays */
         for (uint32_t mi = 0; mi < nmesh && mi < 4096; mi++) {
@@ -410,5 +416,26 @@ void sdk_8c611028(sh4_ctx *c) { HLE_ENTER(0x8c611028u, "njDrawModel"); if (ARG0)
 void sdk_8c61103c(sh4_ctx *c) { HLE_ENTER(0x8c61103cu, "njDrawObject"); draw_object(c, ARG0, draw_basic_model, 0); }
 void sdk_8c638e4e(sh4_ctx *c) { HLE_ENTER(0x8c638e4eu, "njDrawModel (lit)"); if (ARG0) draw_basic_model(c, ARG0); }
 void sdk_8c638dec(sh4_ctx *c) { HLE_ENTER(0x8c638decu, "njDrawObject (lit)"); draw_object(c, ARG0, draw_basic_model, 0); }
-void sdk_8c6215d6(sh4_ctx *c) { HLE_ENTER(0x8c6215d6u, "njCnkDrawModel"); if (ARG0) draw_cnk_model(c, ARG0); }
-void sdk_8c621574(sh4_ctx *c) { HLE_ENTER(0x8c621574u, "njCnkDrawObject"); draw_object(c, ARG0, draw_cnk_model, 0); }
+/* SA1 (Dreamcast) models are all in the basic format; the 0x8C6215xx
+ * family is the lit basic draw (its bodies start by turning the first
+ * light into view space).  A model whose first word is not a pointer is
+ * taken as a chunk model so that the chunk path stays exercised. */
+static int looks_chunk(uint32_t model) {
+    uint32_t a = hle_rd32(model), b = hle_rd32(model + 4);
+    return hle_in_ram(a) && hle_in_ram(b) && !hle_in_ram(hle_rd32(model + 12)) && hle_rd32(model + 8) > 100000u;
+}
+static void draw_any_model(sh4_ctx *c, uint32_t model) { if (looks_chunk(model)) draw_cnk_model(c, model); else draw_basic_model(c, model); }
+void sdk_8c6215d6(sh4_ctx *c) { HLE_ENTER(0x8c6215d6u, "njDrawModel (lit, 0x8C6215D6)"); if (ARG0) draw_any_model(c, ARG0); }
+void sdk_8c621574(sh4_ctx *c) { HLE_ENTER(0x8c621574u, "njDrawObject (lit, 0x8C621574)"); draw_object(c, ARG0, draw_any_model, 0); }
+
+/* 0x8C610CF8 / 0x8C610D30 / 0x8C610D3E: draw parameters the SDK's model
+ * renderer kept at 0x8C8901F8 and 0x8C6735A8 (stores only). */
+void sdk_8c610cf8(sh4_ctx *c) {
+    HLE_ENTER(0x8c610cf8u, "njSetDrawParams");
+    uint32_t b = 0x8C8901F8u;
+    hle_wrf(b, FARG(0)); hle_wrf(b + 4, FARG(1)); hle_wrf(b + 8, FARG(2));
+    hle_wrf(b + 36, hle_rdf(NJ_G_DIST) * hle_rdf(NJ_G_AX)); hle_wrf(b + 40, hle_rdf(NJ_G_DIST) * hle_rdf(NJ_G_AY));
+    hle_wrf(b + 44, hle_rdf(NJ_G_CX)); hle_wrf(b + 48, hle_rdf(NJ_G_CY));
+}
+void sdk_8c610d30(sh4_ctx *c) { HLE_ENTER(0x8c610d30u, "njSetDrawParams2"); hle_wrf(0x8C8901F8u + 12, -FARG(0)); hle_wrf(0x8C8901F8u + 32, FARG(1)); }
+void sdk_8c610d3e(sh4_ctx *c) { HLE_ENTER(0x8c610d3eu, "njSetDrawVector"); hle_wrf(0x8C6735ACu, FARG(0)); hle_wrf(0x8C6735B0u, FARG(1)); hle_wrf(0x8C6735B4u, FARG(2)); }
