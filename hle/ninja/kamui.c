@@ -156,7 +156,35 @@ int kamui_append(int list, const uint32_t w[8]) {
     return 1;
 }
 
+int hle_aspect_wide = 1;
+
+/* 2D ranges: buffer spans written between kamui_mark2d_begin/end, per list. */
+#define RANGES2D_MAX 256
+static struct { uint32_t lo, hi; } ranges2d[3][RANGES2D_MAX];
+static int nranges2d[3], mark_depth;
+static uint32_t mark_start[3];
+void kamui_mark2d_begin(void) {
+    if (mark_depth++ == 0) for (int i = 0; i < 3; i++) mark_start[i] = kamui_buffer_ptr(i) & 0x1FFFFFFFu;
+}
+void kamui_mark2d_end(void) {
+    if (mark_depth == 0 || --mark_depth != 0) return;
+    for (int i = 0; i < 3; i++) {
+        uint32_t end = kamui_buffer_ptr(i) & 0x1FFFFFFFu;
+        if (end <= mark_start[i]) continue;
+        int n = nranges2d[i];
+        if (n && ranges2d[i][n - 1].hi == mark_start[i]) { ranges2d[i][n - 1].hi = end; continue; }
+        if (n < RANGES2D_MAX) { ranges2d[i][n].lo = mark_start[i]; ranges2d[i][n].hi = end; nranges2d[i] = n + 1; }
+    }
+}
+static int in_range2d(uint32_t p) {
+    for (int i = 0; i < 3; i++)
+        for (int k = 0; k < nranges2d[i]; k++)
+            if (p >= ranges2d[i][k].lo && p < ranges2d[i][k].hi) return 1;
+    return 0;
+}
+
 static void buffers_reset(void) {
+    nranges2d[0] = nranges2d[1] = nranges2d[2] = 0; mark_depth = 0;
     for (int i = 0; i < 3; i++) if (bufs[i].base) kamui_buffer_set(i, bufs[i].base);
     /* the game-visible copies too, so a stale pointer is never reused */
     hle_wr32(KM_CTX_PTR_OP, bufs[0].base); hle_wr32(KM_CTX_PTR_TR, bufs[1].base); hle_wr32(KM_CTX_PTR_PT, bufs[2].base);
@@ -225,8 +253,11 @@ void sdk_8c604702(sh4_ctx *c) {
     hle_wrf(NJ_G_AX, 1.0f); hle_wrf(NJ_G_AY, 1.0f);
     hle_wrf(NJ_G_CLIPN, 1.0f); hle_wrf(NJ_G_CLIPF, 65535.0f);
     /* the screen clip rectangle the game's own culling (0x8C038D00) tests
-     * projected bounding spheres against: left, top, right, bottom */
-    hle_wrf(0x8C88F600u, 0.0f); hle_wrf(0x8C88F604u, 0.0f); hle_wrf(0x8C88F608u, 640.0f); hle_wrf(0x8C88F60Cu, 480.0f);
+     * projected bounding spheres against: left, top, right, bottom.  In
+     * wide mode it is the 16:9 frame in the game's 640x480 space, so the
+     * objects that only the wider frame shows are not culled (draw.h). */
+    float left = hle_aspect_wide ? DRAW_WIDE_LEFT : 0.0f;
+    hle_wrf(0x8C88F600u, left); hle_wrf(0x8C88F604u, 0.0f); hle_wrf(0x8C88F608u, 640.0f - left); hle_wrf(0x8C88F60Cu, 480.0f);
     sa1_log("njInitSystem: mode 0x%x, frame %u, count %u", ARG0, ARG1, ARG2);
     kamui_init();
 }
@@ -606,7 +637,7 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
             } else { pc.face = 0xFFFFFFFFu; pc.face_off = 0; }
             if (pc.list == want_list) {
                 if (pc.modvol) stat_modvols++;
-                else { state_from_header(&pc.state, pcw, isp, tsp, tcw, pc.list); if (pc.list < 5) { int k = pc.list == 2 ? 1 : pc.list == 4 ? 2 : 0; stat_polys[k]++; frame_polys[k]++; } }
+                else { state_from_header(&pc.state, pcw, isp, tsp, tcw, pc.list); pc.state.layer = (uint8_t)(in_range2d(p) ? DRAW_LAYER_2D : DRAW_LAYER_3D); if (pc.list < 5) { int k = pc.list == 2 ? 1 : pc.list == 4 ? 2 : 0; stat_polys[k]++; frame_polys[k]++; } }
             }
             pc.strip_start = nverts;
             p += hsize;

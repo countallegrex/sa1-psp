@@ -88,7 +88,7 @@ static void draw_sprite(sh4_ctx *c, uint32_t sp, uint32_t n, uint32_t attr, floa
     kamui_draw_end(c);
 }
 
-void sdk_8c63eeb4(sh4_ctx *c) { HLE_ENTER(0x8c63eeb4u, "njDrawSprite2D"); draw_sprite(c, ARG0, ARG1, ARG2, FARG(0), 0); }
+void sdk_8c63eeb4(sh4_ctx *c) { HLE_ENTER(0x8c63eeb4u, "njDrawSprite2D"); kamui_mark2d_begin(); draw_sprite(c, ARG0, ARG1, ARG2, FARG(0), 0); kamui_mark2d_end(); }
 void sdk_8c63ef74(sh4_ctx *c) { HLE_ENTER(0x8c63ef74u, "njDrawSprite3D"); draw_sprite(c, ARG0, ARG1, ARG2, 0.0f, 1); }
 
 /* ---- njDrawPolygon(vtx, n, trans): untextured, z given as 1/w --------------- */
@@ -96,10 +96,12 @@ void sdk_8c63ec58(sh4_ctx *c) {
     HLE_ENTER(0x8c63ec58u, "njDrawPolygon");
     uint32_t v = ARG0, n = ARG1;
     if (!v || n < 3) return;
+    kamui_mark2d_begin();
     int list = kamui_draw_begin(c, ARG2 ? KM_ATTR_TRANS_FLAT : KM_ATTR_OPAQUE_FLAT, 0, KM_TEX_NONE, 0);
     for (uint32_t i = 0; i < n; i++, v += 16)
         put_vertex(list, i + 1 == n ? PCW_VTX_END : PCW_VTX, hle_rdf(v), hle_rdf(v + 4), hle_rdf(v + 8), 0, 0, hle_rd32(v + 12), 0);
     kamui_draw_end(c);
+    kamui_mark2d_end();
 }
 
 /* ---- njDrawTexture(vtx, n, tex, trans): textured, z given as 1/w ----------- */
@@ -107,11 +109,13 @@ void sdk_8c63ed08(sh4_ctx *c) {
     HLE_ENTER(0x8c63ed08u, "njDrawTexture");
     uint32_t v = ARG0, n = ARG1;
     if (!v || n < 3) return;
+    kamui_mark2d_begin();
     int list = kamui_draw_begin(c, ARG3 ? KM_ATTR_TRANS_TEX : KM_ATTR_OPAQUE_TEX, 0, KM_TEX_GINDEX, ARG2);
     for (uint32_t i = 0; i < n; i++, v += 24)
         put_vertex(list, i + 1 == n ? PCW_VTX_END : PCW_VTX, hle_rdf(v), hle_rdf(v + 4), hle_rdf(v + 8),
                    hle_rdf(v + 12), hle_rdf(v + 16), hle_rd32(v + 20), 0);
     kamui_draw_end(c);
+    kamui_mark2d_end();
 }
 
 /* ---- 3D point lists: transform, clip each triangle to the near plane, emit --- */
@@ -204,6 +208,6 @@ static void point_list(sh4_ctx *c, uint32_t pl, uint32_t n, float z, uint32_t at
     }
     kamui_draw_end(c);
 }
-void sdk_8c63ebc8(sh4_ctx *c) { HLE_ENTER(0x8c63ebc8u, "njDrawPolygon2D"); point_list(c, ARG0, ARG1, pri_to_z(FARG(0)), ARG2, 0, 0); }
-void sdk_8c63e1d4(sh4_ctx *c) { HLE_ENTER(0x8c63e1d4u, "njDrawLine2D"); point_list(c, ARG0, ARG1, pri_to_z(FARG(0)), ARG2, 0, 1); }
+void sdk_8c63ebc8(sh4_ctx *c) { HLE_ENTER(0x8c63ebc8u, "njDrawPolygon2D"); kamui_mark2d_begin(); point_list(c, ARG0, ARG1, pri_to_z(FARG(0)), ARG2, 0, 0); kamui_mark2d_end(); }
+void sdk_8c63e1d4(sh4_ctx *c) { HLE_ENTER(0x8c63e1d4u, "njDrawLine2D"); kamui_mark2d_begin(); point_list(c, ARG0, ARG1, pri_to_z(FARG(0)), ARG2, 0, 1); kamui_mark2d_end(); }
 void sdk_8c63ce24(sh4_ctx *c) { HLE_ENTER(0x8c63ce24u, "njDrawPolygon3D"); point_list(c, ARG0, ARG1, 1.0f, ARG2, 1, 0); }

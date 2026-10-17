@@ -60,7 +60,21 @@ typedef struct draw_state {
     uint8_t shade;           /* DRAW_SHADE_* */
     uint8_t fog;             /* DRAW_FOG_* */
     uint8_t gouraud;
+    uint8_t layer;           /* DRAW_LAYER_*: where the 640x480 coordinates land (aspect) */
 } draw_state;
+
+/* Aspect.  The game projects for a 4:3 640x480 screen; the frame is 16:9.
+ *   DRAW_LAYER_3D: hor+ in wide mode (the vertical field of view is kept and
+ *     the frame shows 853x480 of the game's screen space, x from -106.67 to
+ *     746.67, which the HLE's clip rectangle lets the game draw); in 4:3
+ *     mode the 640 columns sit pillarboxed in the middle.
+ *   DRAW_LAYER_2D: HUD, menus and sprites placed by 640x480 coordinates;
+ *     always the centred 4:3 area, except that a strip spanning the full
+ *     640 width (fades, backdrops) covers the whole frame. */
+enum { DRAW_LAYER_3D = 0, DRAW_LAYER_2D = 1 };
+#define DRAW_WIDE_LEFT  (-(480.0f * 16.0f / 9.0f - 640.0f) * 0.5f)   /* -106.67 */
+#define DRAW_WIDE_RIGHT (640.0f - DRAW_WIDE_LEFT)               /* 746.67 */
+void draw_set_aspect(int wide);              /* 1 = hor+ widescreen (default), 0 = 4:3 pillarbox */
 
 /* Window / frame */
 int  draw_init(int scale, int headless);     /* 480x272 window at integer scale; headless = no window at all */

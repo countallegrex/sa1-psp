@@ -50,6 +50,30 @@ static int headless = 1, win_w = 480, win_h = 272;
 static draw_stats stats;
 static draw_state cur;
 static int cur_valid;
+static int aspect_wide = 1;
+enum { PROJ_3D = 0, PROJ_2D, PROJ_FULL, PROJ_N };
+static float proj[PROJ_N][16];
+static int cur_proj = -1;
+/* x in 640-space from `left` to `right` maps to NDC [lo, hi]; y 0..480 to 1..-1 */
+static void build_proj(float *P, float left, float right, float lo, float hi) {
+    memset(P, 0, 16 * sizeof *P);
+    P[0] = (hi - lo) / (right - left); P[12] = lo - left * P[0];
+    P[5] = -2.0f / DC_H; P[13] = 1.0f;
+    P[10] = 2.0f;        P[14] = 3.0f;
+    P[15] = 1.0f;
+}
+static void build_projs(void) {
+    if (aspect_wide) build_proj(proj[PROJ_3D], DRAW_WIDE_LEFT, DRAW_WIDE_RIGHT, -1.0f, 1.0f);
+    else build_proj(proj[PROJ_3D], 0.0f, DC_W, -0.75f, 0.75f);
+    build_proj(proj[PROJ_2D], 0.0f, DC_W, -0.75f, 0.75f);
+    build_proj(proj[PROJ_FULL], 0.0f, DC_W, -1.0f, 1.0f);
+    cur_proj = -1;
+}
+void draw_set_aspect(int wide) {
+    aspect_wide = wide ? 1 : 0; build_projs();
+    sa1_log("draw: aspect %s; 3D x scale %g offset %g, 2D %g %g, full %g %g", aspect_wide ? "wide (hor+)" : "4:3",
+            proj[PROJ_3D][0], proj[PROJ_3D][12], proj[PROJ_2D][0], proj[PROJ_2D][12], proj[PROJ_FULL][0], proj[PROJ_FULL][12]);
+}
 
 const draw_stats *draw_get_stats(void) { return &stats; }
 
@@ -167,13 +191,10 @@ int draw_init(int scale, int want_headless) {
     glShadeModel(GL_SMOOTH);
     glFogi(GL_FOG_MODE, GL_LINEAR);
     glHint(GL_FOG_HINT, GL_NICEST);
-    /* Projection: x,y from DC pixels, depth 1 - 2/z (see the file comment). */
-    float P[16] = {0};
-    P[0] = 2.0f / DC_W;  P[12] = -1.0f;
-    P[5] = -2.0f / DC_H; P[13] = 1.0f;
-    P[10] = 2.0f;        P[14] = 3.0f;
-    P[15] = 1.0f;
-    glMatrixMode(GL_PROJECTION); glLoadMatrixf(P);
+    /* Projection: x,y from DC pixels, depth 1 - 2/z (see the file comment);
+     * one matrix per layer (draw.h, aspect), loaded per strip. */
+    build_projs();
+    glMatrixMode(GL_PROJECTION); glLoadMatrixf(proj[PROJ_3D]); cur_proj = PROJ_3D;
     glMatrixMode(GL_MODELVIEW); glLoadIdentity();
     return 0;
 #else
@@ -200,7 +221,18 @@ void draw_begin_frame(uint32_t clear_argb) {
     if (headless) return;
     glDepthMask(GL_TRUE);
     glClearColor(((clear_argb >> 16) & 255) / 255.0f, ((clear_argb >> 8) & 255) / 255.0f, (clear_argb & 255) / 255.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    if (!aspect_wide) {           /* 4:3: black pillars, the game's colour and all drawing in the middle */
+        glDisable(GL_SCISSOR_TEST);
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(win_w / 8, 0, win_w * 3 / 4, win_h);
+        glClearColor(((clear_argb >> 16) & 255) / 255.0f, ((clear_argb >> 8) & 255) / 255.0f, (clear_argb & 255) / 255.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    } else {
+        glDisable(GL_SCISSOR_TEST);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    }
 #else
     (void)clear_argb;
 #endif
@@ -293,8 +325,18 @@ void draw_set_state(const draw_state *s) {
 }
 
 #ifndef SA1_NO_SDL
+static void select_proj(const draw_vertex *v, int n) {
+    int p = PROJ_3D;
+    if (cur.layer == DRAW_LAYER_2D) {
+        float xmin = v[0].x, xmax = v[0].x;
+        for (int i = 1; i < n; i++) { if (v[i].x < xmin) xmin = v[i].x; if (v[i].x > xmax) xmax = v[i].x; }
+        p = (xmin <= 0.5f && xmax >= DC_W - 0.5f) ? PROJ_FULL : PROJ_2D;
+    }
+    if (p != cur_proj) { glMatrixMode(GL_PROJECTION); glLoadMatrixf(proj[p]); glMatrixMode(GL_MODELVIEW); cur_proj = p; }
+}
 static void emit(const draw_vertex *v, int n, GLenum mode) {
     if (headless) return;
+    select_proj(v, n);
     glBegin(mode);
     for (int i = 0; i < n; i++) {
         uint32_t c = v[i].color;

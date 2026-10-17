@@ -29,6 +29,8 @@
 #include "../hle.h"
 
 int kamui_ptr_trace(void);
+void kamui_mark2d_begin(void);
+void kamui_mark2d_end(void);
 
 #define TA_PASS(addr) void fn_##addr##_orig(sh4_ctx *c); \
     void fn_##addr(sh4_ctx *c) { \
@@ -49,6 +51,15 @@ int kamui_ptr_trace(void);
         if (tr_) sa1_log("ta: leave " #addr " (banked) r14 %08x", c->r[14]); \
         for (int i = 0; i < 8; i++) c->r[i] = saved[i]; }
 
+/* The 2D writers (HUD, menus): their parameters are marked for the 4:3
+ * area (ninja.h, kamui_mark2d_begin). */
+#define TA_PASS_2D(addr) void fn_##addr##_orig(sh4_ctx *c); \
+    void fn_##addr(sh4_ctx *c) { \
+        HLE_ENTER(0x##addr##u, "TA 2D writer fn_" #addr); \
+        kamui_mark2d_begin(); \
+        fn_##addr##_orig(c); \
+        kamui_mark2d_end(); }
+
 TA_PASS(8c037294)
 TA_PASS(8c037460)
 TA_PASS(8c0374d4)
@@ -61,14 +72,14 @@ TA_PASS_BANKED(8c037ee0)
 TA_PASS_BANKED(8c038516)
 TA_PASS(8c038668)
 TA_PASS_BANKED(8c038802)
-TA_PASS(8c041eaa)
-TA_PASS(8c042098)
-TA_PASS(8c042298)
-TA_PASS(8c042416)
-TA_PASS(8c0425a0)
-TA_PASS(8c042880)
-TA_PASS(8c04298e)
-TA_PASS(8c042b22)
+TA_PASS_2D(8c041eaa)
+TA_PASS_2D(8c042098)
+TA_PASS_2D(8c042298)
+TA_PASS_2D(8c042416)
+TA_PASS_2D(8c0425a0)
+TA_PASS_2D(8c042880)
+TA_PASS_2D(8c04298e)
+TA_PASS_2D(8c042b22)
 TA_PASS(8c0522c0)
 TA_PASS(8c052518)
 TA_PASS(8c0528ae)

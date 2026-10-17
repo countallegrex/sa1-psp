@@ -34,6 +34,10 @@ int kamui_draw_header(sh4_ctx *c, uint32_t attr, uint32_t mat);
 void kamui_ctx_patch(uint32_t isp_mask, uint32_t isp_val, uint32_t tsp_mask, uint32_t tsp_val);
 int kamui_put_vertex(int list, uint32_t pcw, float x, float y, float z, float u, float v, uint32_t c6, uint32_t c7);
 void kamui_draw_end(sh4_ctx *c);
+/* Bracket writes of 2D elements (HUD, menus, 2D sprites): the parameters
+ * written in between are drawn in the 4:3 area (draw.h, DRAW_LAYER_2D). */
+void kamui_mark2d_begin(void);
+void kamui_mark2d_end(void);
 int kamui_select_texture(uint32_t n);
 /* polygon attribute words as 0x8C606A08 takes them */
 #define KM_ATTR_OPAQUE_TEX   0x0008000Au

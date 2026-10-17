@@ -70,6 +70,10 @@ void sa1_plat_coro_destroy(sa1_coro *co);           /* never the running one */
  * the guest records. */
 typedef struct hle_pad { uint32_t buttons; uint8_t ltrig, rtrig; int8_t x, y; } hle_pad;
 extern hle_pad hle_pad_state;
+/* 1 = hor+ widescreen (the clip rectangle lets the game draw 853x480 of its
+ * screen space), 0 = 4:3.  Set before hle_init; the backend gets the same
+ * value through draw_set_aspect. */
+extern int hle_aspect_wide;
 
 /* ---- what the backend drives -------------------------------------------- */
 /* One-time setup of the HLE state: BIOS area, syscall vectors, heap, file

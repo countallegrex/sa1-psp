@@ -4,6 +4,7 @@
  *          [--watch ADDR[:OFF...]]... [--press FRAME:BUTTONS[:HOLD]]... [--trace-funcs FILE]
  *          [--headless] [--scale N] [--screenshot FRAME:FILE.ppm]... [--stats N]
  *          [--stick FRAME:X:Y[:HOLD]]... [--poke FRAME:ADDR:VALUE[:SIZE]]... [--dump FRAME:FILE]...
+ *          [--aspect wide|4:3]
  *
  * Without --headless an SDL2 window opens at 480x272 times --scale (2 by
  * default) with an OpenGL 1.x fixed-function context (backend/draw.h), and
@@ -210,6 +211,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--watch") && i + 1 < argc) { sa1_watch_add(argv[++i]); sa1_watch_addr = 1; }
         else if (!strcmp(argv[i], "--trace-funcs") && i + 1 < argc) trace_path = argv[++i];
         else if (!strcmp(argv[i], "--headless")) headless = 1;
+        else if (!strcmp(argv[i], "--aspect") && i + 1 < argc) { const char *a = argv[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; }
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--stats") && i + 1 < argc) stats_every = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--poke") && i + 1 < argc && npokes < SHOT_MAX) {   /* FRAME:ADDR:VALUE[:SIZE] */
@@ -280,6 +282,7 @@ int main(int argc, char **argv) {
     plat_set_data_root(root);
     hle_init();
     if (draw_init(scale, headless) != 0 && !headless) { sa1_log("no window; running headless"); headless = 1; }
+    draw_set_aspect(hle_aspect_wide);
 
     memset(&ctx, 0, sizeof ctx);
     ctx.r[15] = 0x8C00F400u;
