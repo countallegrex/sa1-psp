@@ -3,11 +3,12 @@
 Exit test (README §8): Emerald Coast completed with a controller on
 desktop, draw order correct, no desktop-only features.
 
-Status: **renderer done, exit test not run (2026-10-17).** The desktop
+Status: **renderer done; first exit-test run failed (2026-10-17), the
+hang and the aspect ratio fixed since, second run pending.** The desktop
 build draws every scene on the scripted route from guest RAM, and Emerald
-Coast when the stage variables are forced; a human run with a controller
-through the real route (Station Square → Chaos 0 → Emerald Coast) is still
-needed to tick the milestone. Everything below was measured with
+Coast when the stage variables are forced. The maintainer's controller run reached
+Emerald Coast and hung after about 80 s (§7: a stray write from the RTC
+poll, fixed), with the 4:3 picture stretched (§7: hor+ now). Everything below was measured with
 `build-desktop/backend/desktop/sa1psp.exe` (clang 23, game code `-O1`),
 the US v1.005 dump and the `SONICADV` tree, on a GeForce GTX 1070 Ti.
 
@@ -149,14 +150,103 @@ draws) are SDK-internal and never called by game code.
 
 ## 5. Desktop debug aids added
 
-`--headless` (no window; the M1 behaviour), `--scale N`, `--screenshot
-FRAME:FILE.ppm`, `--stats N` (the render counters every N frames),
-`--dump FRAME:FILE` (guest RAM), `--poke FRAME:ADDR:VALUE[:SIZE]`,
+`--headless` (no window; the M1 behaviour), `--scale N`, `--aspect
+wide|4:3`, `--screenshot FRAME:FILE.ppm`, `--stats N` (the render counters
+every N frames), `--dump FRAME:FILE` (guest RAM), `--poke
+FRAME:ADDR:VALUE[:SIZE]`, `--stick FRAME:X:Y[:HOLD]` (scripted analog
+stick), `--hwwatch FRAME:ADDR[:LEN]` (x86 debug-register write watch; each
+write logs the guest call stack), `SA1_TASK_CHECK=1` (per-frame check of the
+task lists' parent/prev links; logs the first broken one with the task's
+main), `SA1_HANG_DUMP=FILE` (guest RAM when the watchdog fires),
 `SA1_KAMUI_DUMP=<frame>` (every header, pointer hand-off and writer call of
 that frame), `SA1_MODEL_DEBUG=1`, `SA1_NOVSYNC=1`, `SA1_REPORT_TOP=N`.
 The stage variables: `0x8C7493BA` current level, `0x8C7493BC` act,
 `0x8C7493BE`/`C0` next level/act (Emerald Coast = 1, Chaos 0 = 15,
 Station Square = 26); GameMode at `0x8C760970`.
+
+## 7. The first exit-test run and what it changed
+
+The maintainer's run (controller, title → Station Square → Chaos 0 → Emerald
+Coast): four findings, in his order.
+
+**1. Hang in Emerald Coast** (watchdog at frame 28,117, about 5,000 frames
+into the stage). The stack was the game's delete-children loop
+(`0x8C098E60`) under the pier object's destructor (`O PIER`, STG01
+`0x8C903708`), called when the stage was torn down after the orca chase.
+Reproduced on the scripted route with a scripted analog stick (`--stick`)
+that runs Sonic down the pier: a new per-frame check of the task lists
+(`SA1_TASK_CHECK=1`) flagged a plank child task whose parent and previous
+links had 4 zero bytes written across them at frame 6,433, and an x86
+hardware write watch (`--hwwatch`) on that word caught the writer: the
+**real-time-clock poll on the VBlank chain** (`0x8C10BA80` → `0x8C10BD96`
+→ `0x8C10BE78`). It reads the AICA RTC through a G2 helper
+(`0x8C10D460`) that first suspends the AICA DMA channels through a control
+block only the sound driver's init sets up (`0x8C10D5A8`, never run here):
+the block pointer is NULL, the channel index is whatever lies at guest
+address 0, and the four "suspend" register writes, masked into guest RAM
+by the flat-RAM macros, land anywhere. On the console those are hardware
+registers. The raw read and the three RTC writers are now HLE entries
+(`hle/shinobi/hw.c`, next to the already wrapped `0x8C10BE0C`), so no
+recompiled code touches the G2 bus any more. The stale link then made
+`0x8C098E60`'s `while (task->child) FreeTask(task->child)` spin, because a
+child whose parent field is wrong is never unlinked. Lesson for M4: a
+register-based MMIO access that the emitter cannot see at emit time
+silently becomes a RAM access; the seam report should count them.
+
+**2. Aspect ratio.** The game projects for 640x480 and the frame is 480x272,
+and the first build stretched it. Now (`backend/draw.h`): the HLE keeps the
+game's camera and screen distance; in wide mode (default) the vertical field
+of view is kept and the frame shows 853x480 of the game's screen space
+(hor+), with the clip rectangle at `0x8C88F600` widened so the game's own
+culling keeps the objects only the wider frame shows; `--aspect 4:3`
+pillarboxes instead. 2D elements (HUD, menus, 2D sprites, textured quads)
+keep their 640x480 placement in the centred 4:3 area: the game's 2D writers
+and the native 2D entries mark the TA buffer spans they write, the parser
+tags those strips `DRAW_LAYER_2D`, and the backend uses the 4:3 projection
+for them; a 2D strip spanning the full 640 width (fades, backdrops) covers
+the whole frame. The PSP backend gets the same `layer` field.
+
+**3 and 4. Textures, polygons, fog**: see §8 (Flycast comparison).
+
+## 8. Flycast comparison (2026-10-17, second pass)
+
+Method: the replay harness's Flycast oracle (`tools/flycast/tape_oracle.lua`
+driven by a tape of the scripted route) plus a small Lua wrapper that skips
+the intro movie with Start, rewrites the stage variables to Emerald Coast
+act 1 when Chaos 0 would load (what `--poke 5290` does here), and writes a
+capture request at the same game frame the desktop screenshot was taken; a
+PowerShell loop copies the Flycast window from the screen (pausing the
+emulator opens its menu, so captures are live). Frames compared: title,
+menu, character select, Station Square (desktop 3000), Emerald Coast
+(6000, 7600).
+
+Fixed from it: the title logo (its 2D quads sit at 1/w = 2, in front of
+the old near plane: clipped), the offset colour (added after texturing;
+visible on the intro layers and characters), mip levels, and a `--no-pad`
+switch after an idle pad steered a windowed scripted run off the route.
+
+Still open:
+
+- **Sky dome texture (`sonic_sky1`, 256x256 RGB565 twiddled with mips)**
+  shows fine streaks/dots where the console shows smooth clouds. The
+  decode of that file matches an independent offline decode byte for byte
+  and the known twiddle/mip tables; bilinear filtering is confirmed active
+  (nearest vs linear renders differ). What differs from the console is not
+  yet known (candidates: the game's UV scale on the dome, or Flycast's own
+  decode showing the texture is stored differently than the header says);
+  a Flycast texture dump run was in progress when this pass ended.
+- **Station Square is lighter than the console's night tint.** The fog
+  entries the game calls: `njSetFogDensity` (stubbed) then
+  `njGenerateFogTable` (the HLE writes the default curve, ignoring the
+  density), `njSetFogTable` (near/far derived from the table: 2.7/128 at
+  the title, disabled in Station Square and Emerald Coast). So in both
+  stages the game disables table fog here; the night tint on the console
+  likely comes from the density-driven table the stub drops, or from the
+  fog mode bits per polygon. Next step: implement `0x8C652E38`
+  (density table generator, tail-called by `0x8C63FE3C`) from its
+  disassembly and compare again.
+- Specular on Sonic is weaker than the console's (offset colours are
+  small; the console's highlight may come from the intensity path).
 
 ## 6. Open items
 

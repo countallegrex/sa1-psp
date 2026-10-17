@@ -460,6 +460,8 @@ void sdk_8c63fe48(sh4_ctx *c) {         /* njSetFogTable(table): derive linear n
     if (wf <= wn) wf = wn + 1.0f;
     fog_near = wn; fog_far = wf;
     draw_set_fog(fog_color, fog_near, fog_far);
+    sa1_log("fog: table 0x%08x -> linear near %.1f far %.1f (colour 0x%08x; table[0..7] %.3f %.3f %.3f %.3f, [64] %.3f, [96] %.3f, [127] %.3f)", ARG0, wn, wf, fog_color,
+            hle_rdf(ARG0), hle_rdf(ARG0 + 4), hle_rdf(ARG0 + 8), hle_rdf(ARG0 + 12), hle_rdf(ARG0 + 256), hle_rdf(ARG0 + 384), hle_rdf(ARG0 + 508));
 }
 
 /* ---- the parser: TA parameters in guest RAM -> backend ------------------- */
@@ -699,10 +701,14 @@ void sdk_8c642440(sh4_ctx *c) {
     HLE_ENTER(0x8c642440u, "kmRender");
     (void)c;
     if (!bufs[0].base) return;
+    if (dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2)
+        sa1_log("kamui: kmRender (frame %u) op 0x%08x tr 0x%08x pt 0x%08x", hle_frame_count(), kamui_buffer_ptr(0), kamui_buffer_ptr(1), kamui_buffer_ptr(2));
     render_lists();
 }
 void sdk_8c641f00(sh4_ctx *c) {
     HLE_ENTER(0x8c641f00u, "kmFlip");
+    if (dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2)
+        sa1_log("kamui: kmFlip (frame %u, rendered %d) tr 0x%08x", hle_frame_count(), frame_rendered, kamui_buffer_ptr(1));
     if (frame_rendered) {
         if (screenshot_path) {
             if (draw_screenshot(screenshot_path) == 0) sa1_log("screenshot: %s", screenshot_path);
@@ -719,6 +725,8 @@ void sdk_8c641f00(sh4_ctx *c) {
 void sdk_8c6433e0(sh4_ctx *c) {         /* no-draw frame: keep the picture, drop the lists */
     HLE_ENTER(0x8c6433e0u, "kmSkipFrame");
     (void)c;
+    if (dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2)
+        sa1_log("kamui: kmSkipFrame (frame %u) tr 0x%08x", hle_frame_count(), kamui_buffer_ptr(1));
     buffers_reset();
 }
 
