@@ -14,10 +14,9 @@ Status, 2026-10-17:
 - **The scripted desktop run no longer traps.** It loads `B_CHAOS0` and
   `EV002B` (frame 3,119, or 5,299 with ground collision restored) and runs
   the Chaos 0 fight for as long as it is given (30,000 frames tested).
-  **The fight is not won on the scripted pad.** See §6: the M1 build has no
+  **The fight is not won on the scripted pad.** See §6: the M1 build had no
   ground collision at all, because three collision functions were wrongly
-  stubbed as TA writers. With them restored (tested in an isolated
-  worktree) Sonic stands, jumps, homing-attacks and gets hit, but blind
+  stubbed as TA writers (fixed on main since, `a2ea302`). With them restored Sonic stands, jumps, homing-attacks and gets hit, but blind
   periodic presses do not beat Chaos 0. Winning needs an input script that
   aims, which is a follow-up.
 - **MIPS size:** 7.90 MB for all 57 files together, but only one file per
@@ -256,11 +255,10 @@ five functions in that §5 list (`0x8C07E0AE`, `0x8C07E480`, `0x8C07E642`,
 `0x8C07E9E6`, `0x8C080FA2`) also only compare or test `0x10000000` as a
 value; none of the eight touches `0xE0000000` or `pref`. The 24
 store-queue writers in the same file are genuine. `hle/ninja/` belongs to
-the M2 renderer session, which has the finding. Its `ta_stubs.c` rewrite
-(not committed when this was written) lets every wrapped body run, which
-restores the three collision functions. The narrower fix is to drop the
-eight rows from `hle_wraps.tsv` and their `TA_STUB` lines together, then
-re-emit the main image.
+the M2 renderer session. **Fixed on main in `a2ea302`:** `ta_stubs.c` now
+passes every wrapped body through to the recompiled code, so ground
+collision works (M2's Emerald Coast run). Dropping the eight rows from
+`hle_wraps.tsv` together with their pass-through lines is an M2 follow-up.
 
 **With the eight restored** (a scratch worktree where the eight wrappers
 call the recompiled bodies; not committed): the opening runs longer
