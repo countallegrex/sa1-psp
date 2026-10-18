@@ -66,6 +66,24 @@ tile that looks wrong, and group the indices by the format and flags in
 their labels; each group names one decode path to fix and one synthetic
 case to add to `tests/ninja/pvr_decode_test.c`.
 
+**First review (the maintainer, 2026-10-18): 92 of the 2,514 tiles garbled, all
+one decode path**, small VQ with mipmaps (`svqmip`), 86 of them 32x32 and
+5 16x16, across all three pixel formats. Cause: the decoder sized a small
+VQ codebook from the chunk length (`(bytes - index bytes) / 8`), and every
+chunk in the game's archives carries 16 bytes of slack, so it took 67
+entries where the file has 64 (32x32 with mipmaps), 19 where it has 16
+(16x16) and 34 where it has 32 (32x32 without mipmaps), and read the
+indices 16 to 24 bytes late. The sizes are now a table by width (16 up to
+16x16; 32x32: 32, or 64 with mipmaps; 64x64: 128; above: 256), measured
+against Flycast's dumps over every small-VQ texture in the route's
+archives (32x32 with mipmaps: 61 of 97 match within rounding with 64
+entries, none with 16, 32 or 128; 16x16: 16 entries; the 64x64 values are
+the tools' documented ones, not seen on the route). Unit tests cover
+16x16 and 32x32, with and without mipmaps, in all three formats, each
+chunk carrying the slack. The 92 tiles regenerated with the fix are in
+`..\private\texreview\recheck\sheets\sheet_000.png` for the maintainer to
+confirm.
+
 ## 1. What draws, and how
 
 The design question of M2 was answered by reading the game's renderer
@@ -307,7 +325,9 @@ mipmapped, VQ, VQ-mipmapped and rectangle textures
 (`tests/ninja/pvr_decode_test.c`, in CI, no game data). VQ mipmap offsets
 were already right (no dummy); palettised mipmap chains are untested (none
 on the route). After the fix the dome matches the Flycast capture at frames
-6000 and 7600.
+6000 and 7600. The same class of error, a layout derived from the chunk
+length instead of the format's rule, was behind the 92 small-VQ tiles of
+the maintainer's review (§0).
 
 **2. Station Square tint: the fog model.** `njSetFogDensity` (`0x8C63FE3C`
 → `0x8C652E38`) is `kmSetFogDensity`: it writes its argument, the
