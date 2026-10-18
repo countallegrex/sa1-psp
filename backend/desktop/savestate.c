@@ -17,6 +17,9 @@
  * (hle/state.c): RAM, the modules' chunks, STACKS, CURRENT.
  *
  * Part of sa1-psp (MIT). */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L   /* readlink with -std=c11 */
+#endif
 #include "savestate.h"
 #include "platform_desktop.h"
 #include "sha256.h"

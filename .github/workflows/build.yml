@@ -59,7 +59,7 @@ jobs:
         run: |
           ${{ matrix.os == 'windows-latest' && 'clang' || 'cc' }} -std=c11 -D_CRT_SECURE_NO_WARNINGS \
             -Ihle -Ihle/overlay -Irecomp/emitter/runtime tests/overlay/loader_test.c \
-            hle/overlay/overlay_loader.c recomp/emitter/runtime/sh4_rt.c -o loader_test
+            hle/overlay/overlay_loader.c hle/state.c recomp/emitter/runtime/sh4_rt.c -o loader_test
           ./loader_test
       # PVR texture decoder on synthetic textures (tests/ninja/pvr_decode_test.c), no game data.
       - name: PVR decoder test

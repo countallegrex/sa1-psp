@@ -128,7 +128,8 @@ __asm__(
     "    subq $8, %rsp\n"
     "    call sa1_coro_entry_c\n"
     "    ud2\n"
-    ".section .note.GNU-stack,\"\",@progbits\n");
+    ".section .note.GNU-stack,\"\",@progbits\n"
+    ".text\n");       /* back to .text: the C below must not land in the note section */
 #define SA1_CORO_SAVE_BYTES (6 * 8)
 #endif
 
