@@ -5,7 +5,8 @@ desktop, draw order correct, no desktop-only features.
 
 Status: **renderer done; first exit-test run failed (2026-10-17), the
 hang, the aspect ratio and the three Flycast-comparison defects (§8: sky
-dome, fog, light records) fixed since; second run pending.** The desktop
+dome, fog, light records) fixed since; second run (2026-10-18) crashed in
+Emerald Coast, its seven findings fixed (§9); third run pending.** The desktop
 build draws every scene on the scripted route from guest RAM, and Emerald
 Coast when the stage variables are forced. The maintainer's controller run reached
 Emerald Coast and hung after about 80 s (§7: a stray write from the RTC
@@ -407,6 +408,144 @@ The run also showed a build hazard: the emitter leaves a copy of
 it shadow the one in the tree, so the game code compiled against a stale
 header; the runtime directory now comes first.
 
+## 9. The second exit-test run and what it changed (2026-10-18)
+
+The maintainer's second run (keyboard, no controller detected; title → Station
+Square → Chaos 0, won after two deaths → Emerald Coast) ended in a host
+stack overflow at guest frame 23,274, 5,474 frames into Emerald Coast, and
+its seven screenshots showed wedge-shaped rectangles, a boss title drawn as
+blurred squares, cutscene cameras under the police cars, and a game that
+ran too fast. The run's tape (`--record`) was 4 KB of a 23,000-frame run.
+Everything below was reproduced by replaying that tape (its 17,645 recorded
+frames) on the desktop build, with the Flycast oracle run on the same tape
+for reference frames (`tools/flycast/tape_oracle.lua` plus a wrapper that
+requests a screen capture at a desktop game frame), and with a scripted
+route into Emerald Coast for the crash. In the maintainer's order:
+
+**1. The crash: a NULL-pointer write over the BIOS vectors.** The
+exception (0xC00000FD) left no trace: the crash handler needs stack to
+walk one. What the log did have, 4,800 frames earlier at frame 18,460,
+was 64 "guest write outside RAM" reports for addresses `0x00000000` to
+`0x000000F8`, all from `fn_8c0402a4` under the motion-callback walker
+`0x8C040880` of the Emerald Coast dolphins (`O DOLPHIN`, STG01
+`0x8C901800`): the dolphin's per-node callback writes a 256-byte block
+through a NULL pointer. On the console that lands in the boot ROM and
+vanishes. Under the flat-RAM mask it landed on RAM offset 0, where the
+HLE keeps the BIOS syscall vectors (`0x8C0000B0`–`BC`, `E0`), and the
+first call through a clobbered vector ran a random function until the
+host stack was gone. `0x8C040880` is the game's `njDrawObject` with
+callbacks (`+44` child, `+48` sibling, four indirect calls per node);
+its normal depth is small (below).
+The fix is in the runtime: `sh4_rt.h` `sa1_off()` sends area-0 accesses
+(guest `0x00000000`–`0x01FFFFFF` and the P1 alias) to a 2 MB *null page*
+above the RAM window, one test and a conditional move per access (folded
+away for constant addresses; store queues and RAM keep the mask; the P2
+alias is not caught, the game never forms it). Reproduced on the scripted
+route (`--poke 5290` into Emerald Coast, `--goto 5400:4053:366` towards
+the pier): the dolphin's 64 writes now land on the null page and the
+vectors, watched with `--watch`, stay intact. The crash itself did not
+reproduce before the fix because the route never reached the vector call;
+the third run is the test.
+Two aids came out of it. A host-stack probe (`sa1_depth_hook`, sampled at
+every indirect call and HLE entry) reports per-stack high-water marks at
+exit and traps with the guest call stack 160 KB before an overflow:
+**measured on the whole route (title to Emerald Coast), main 12 KB, task
+coroutines 4 KB of their 1 MB**, so the PSP can give its task threads
+32 KB each (1 MB for the 32-task table; README §7 budgets 2 MB for
+runtime and stacks). And the crash handler now survives a stack overflow
+(64 KB guaranteed on the main thread and every fiber,
+`SetThreadStackGuarantee`), walks the backtrace from the exception
+context and ends the tape.
+
+**2. The tape.** `--record` buffered through stdio, so the crash lost all
+but the first 4 KB. The recorder now rewrites the open run-length record
+in place and flushes after every frame: a crash or a kill keeps the whole
+run, and only the `end` line is missing (the loader tolerates that). The
+truncated `tests/replay/sonic_ec1.tape` is untracked; the third run's
+`--record` overwrites it.
+
+**3. Speed.** Pacing was vsync alone, one swap per *rendered* frame, and
+the game renders every second guest frame: on the 60 Hz display it ran at
+double speed. Guest frames are now paced to a fixed 60 Hz clock
+(`draw_gl_pace`: sleep, then spin to the deadline; re-based if the run
+falls a quarter second behind) whatever the refresh rate; vsync stays on
+against tearing, `SA1_NOVSYNC=1` runs unpaced, headless and
+`--strict`/replay semantics are unchanged. The refresh rate is logged at
+startup. Checked: 900 guest frames in 15.5 s windowed.
+
+**4. The wedges: `njDrawPolygon2D`'s attributes.** The SDK body
+(`0x8C63EBC8`, disassembled) treats `attr & 0x20` as "the points are the
+polygon's outline in ring order" and reorders them 0, n−1, 1, n−2, … into
+a strip (`0x8C63E834`), and `attr & 0x40` as translucent (the header
+writer `0x8C63E258` takes it). The M2 body had 0x20 as translucent and
+0x40 as a fan whose approximation dropped the fourth point, so every
+4-point outline (the event scripts' letterbox bars, fades and subtitle
+boxes, `attr 0x60`) came out as a wedge. No PVR sprite polygons are
+involved: the parser's sprite path (type 5) is never reached on the
+route. Fixed in `draw2d.c`; and the `tex` entries of a textured 2D point
+list are 16-bit u, v pairs in 1/256 (the writer `0x8C63E8FC`), not
+floats.
+
+**5. The boss title and the subtitles.** Two texture-loading faults.
+The title's font is `SONICADV/B32ASCII.PVR` (256x256 ARGB4444, the
+32-pixel ASCII sheet), named by the game *with* its extension; the HLE
+appended `.PVR` again and looked for `B32ASCII.PVR.PVR`, so the title
+quads bound whatever texture was current (a 16x16 HUD element,
+magnified: the blurred squares). Names that already end in `.PVR` are now
+used as they are, and "Chaos 0" renders as on the console. The subtitles
+go through the message renderer (`0x8C055C4C`, every frame): it composes
+the line into a 512x64 ARGB1555 image in RAM with the game's own font
+and loads it as a *texinfo* memory texture (`njSetTextureInfo`,
+`njSetTextureName`, `njLoadTexture`, attr `0x40800000`: the name's
+pointer is an NJS_TEXINFO whose texaddr is bare texels, size and format
+from the texinfo; SDK loader `0x8C64D1A6`). The HLE's `njSetTextureName`
+stored the global index where the attribute goes, and the loader knew
+only PVR images; both are fixed (`texture.c`), and the quad's UVs were
+the 16-bit pairs of item 4. "Surrender yourself!" and the opening's lines
+now show in their boxes. A failed `njLoadTexture` entry is logged with
+its pointer and attribute.
+
+**6. Fog: not inverted.** Flycast's `fog_mode2` indexes the 128-entry
+table by `z = density / w` clamped to [1, 256): entry 0 is `w = density`,
+the *far* end, entry 127 the near end (§8 item 2). `njGenerateFogTable3`
+(disassembled) writes 1.0 at entry 0 and 0 from the first entry nearer
+than |near|; the log line, which printed `table[0] 1.000`, meant the far
+entry and now says so. Against the Flycast captures of the same tape
+(the Chaos 0 cutscene and fight in Station Square at night; Emerald
+Coast from the earlier pass) the distances match: the route's fog is
+black from 7,111 to 8,000 units and nothing nearer, on both. What was
+wrong in those frames was item 7's camera, not the fog. The per-vertex
+fog mode (TSP mode 1) is still unimplemented and unused on the route.
+
+**7. The cutscene camera: `njCameraDirFromBase` pitches.** `--aspect 4:3`
+gave the same wrong cameras, so the widened clip rectangle was cleared.
+The event scripts place every cutscene camera with
+`njCameraPosFromBase`, `njCameraDirFromBase`, `njCameraRollFromBase`,
+`njCameraYaw`, `njSetCamera` (390 calls each over the Chaos 0 arrival;
+gameplay uses none of the four "FromBase" entries, which is why gameplay
+cameras were fine). The SDK's `njCameraDirFromBase` (`0x8C64041C`)
+rotates the base direction about X, in y/z, the same pitch as
+`njCameraPitch`; the M2 body yawed it about Y, so a camera meant to look
+down from a pole looked sideways and ended up under the police cars and
+inside buildings. `njSetCamera` and `njCameraYaw` were checked against
+their disassembly and match. After the fix the arrival cutscene's shots
+(street level with the searchlight, the top-down shot over the officers,
+Chaos 0 walking in) agree with the Flycast captures of the same tape.
+The maintainer's screenshot 4 (the close-up on Sonic's legs in the Emerald Coast
+hotel) could not be replayed: his inputs after frame 17,645 were in the
+lost part of the tape; the third run will tell.
+
+**Aids added:** `--goto FRAME:X:Z[:RADIUS]` (a waypoint autopilot for
+scripted runs; the stick-to-world mapping is calibrated from the movement
+it produces, a wall swings the heading and taps A); the host-stack probe
+and its exit line; `SA1_KAMUI_DUMP` also logs every
+`njDrawPolygon2D/3D` call of the frame with texture, colour and UVs;
+`tape_oracle.lua` exports the aligned game frame for capture wrappers.
+Emerald Coast act 1's object placements (`SET0100S.BIN`, little-endian
+32-byte entries; the STG01 object list at `0x8CAA888C`, 20-byte entries)
+gave the pier's coordinates for the route: planks from (4053, 366) to
+(5053, 1096).
+
 ## 6. Open items
 
 - **The exit test.** Needs a controller run through the real route, recorded:
@@ -414,7 +553,15 @@ header; the runtime directory now comes first.
   (title → Sonic → Station Square → Chaos 0 win → Emerald Coast act 1
   complete; `tests/replay/README.md`). The Chaos 0 fight must be won (the
   overlays doc says the scripted pad cannot). M2 is ticked only after that
-  run passes.
+  run passes. Two runs so far (§7, §9); the third is pending.
+- The dolphin's NULL-pointer write (§9 item 1) is the game's own bug; the
+  null page makes it harmless, as the ROM does. The emitter could skip the
+  null-page test for constant-base accesses it can prove are RAM (it
+  already folds constants), and the PSP backend may size the page smaller
+  than 2 MB (offsets seen: up to 0xF8).
+- `--goto` cannot leave the Emerald Coast start area on its own (walls,
+  the sea); a route needs waypoints along the ring trail, and a position
+  poke does not stick (the player struct is rewritten).
 - Palettised mipmapped textures: whether their chain starts with a dummy
   texel like the 16-bit one is unverified (none on the route; §8 item 1).
 - Emitter: constants through `@-Rn` / `add #imm` so register-based MMIO
