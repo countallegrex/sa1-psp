@@ -20,3 +20,7 @@ void input_tape_frame_end(uint32_t frame);
 /* At exit (why = NULL) or on a trap ("trap"): closes the recording, prints
  * the verdict and returns the exit code to use. */
 int input_tape_finish(int code, const char *why);
+/* A save state was loaded at frame: rows due before it are marked done. */
+void input_tape_loaded(uint32_t frame);
+/* 1 when --record is active (a tape cannot start from a loaded state). */
+int input_tape_recording(void);

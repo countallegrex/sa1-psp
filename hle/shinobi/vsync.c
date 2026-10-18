@@ -16,6 +16,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../state.h"
 
 void fn_8c051790_orig(sh4_ctx *c);
 void fn_8c0517f6_orig(sh4_ctx *c);
@@ -116,4 +117,10 @@ void sdk_8c6050b0(sh4_ctx *c) {
     sdk_8c641f00(c);                             /* KAMUI end scene / flip (stub) */
     sdk_8c601e2a(c);                             /* pad server */
     hle_wr32(NJ_STAMP_OUT, shinobi_timer_count());
+}
+
+void shinobi_vsync_state(hle_state_io *io) {
+    hle_state_blob(io, "vsync.cb", &vblank_callback, sizeof vblank_callback);
+    hle_state_blob(io, "vsync.in", &vblank_in_callback, sizeof vblank_in_callback);
+    hle_state_blob(io, "vsync.in.arg", &vblank_in_arg, sizeof vblank_in_arg);
 }

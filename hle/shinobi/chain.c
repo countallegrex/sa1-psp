@@ -4,6 +4,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../state.h"
 
 #define CHAIN_MAX 16
 
@@ -56,4 +57,9 @@ void sdk_8c64594c(sh4_ctx *c) {
 void sdk_8c645c54(sh4_ctx *c) {
     HLE_ENTER(0x8c645c54u, "syChainDeleteHandler");
     RET(shinobi_chain_delete(ARG0));
+}
+
+void shinobi_chain_state(hle_state_io *io) {
+    hle_state_blob(io, "chain", chain, sizeof chain);
+    hle_state_blob(io, "chain.in", &in_callbacks, sizeof in_callbacks);
 }

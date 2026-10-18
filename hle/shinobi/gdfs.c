@@ -19,6 +19,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../state.h"
 
 static char last_opened[200];           /* the last file opened (debug aids name their source by it) */
 const char *shinobi_last_opened_file(void) { return last_opened; }
@@ -240,3 +241,13 @@ void sdk_8c60175e(sh4_ctx *c) {
 void sdk_8c65c25c(sh4_ctx *c) { HLE_ENTER(0x8c65c25cu, "ADXF file start (off)"); RET(-1); }
 void sdk_8c65c27a(sh4_ctx *c) { HLE_ENTER(0x8c65c27au, "ADXF file sectors (off)"); RET(-1); }
 void sdk_8c65c2a8(sh4_ctx *c) { HLE_ENTER(0x8c65c2a8u, "ADXF file bytes (off)"); RET(-1); }
+
+void shinobi_gdfs_state(hle_state_io *io) {
+    hle_state_blob(io, "gdfs.files", files, sizeof files);
+    hle_state_blob(io, "gdfs.work", &work_area, sizeof work_area);
+    hle_state_blob(io, "gdfs.handles", &handles_base, sizeof handles_base);
+    hle_state_blob(io, "gdfs.dir", cur_dir, sizeof cur_dir);
+    hle_state_blob(io, "gdfs.init", &initialised, sizeof initialised);
+    hle_state_blob(io, "gdfs.errfn", &err_func, sizeof err_func);
+    hle_state_blob(io, "gdfs.errarg", &err_arg, sizeof err_arg);
+}

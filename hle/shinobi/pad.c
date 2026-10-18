@@ -13,6 +13,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../state.h"
 
 #define PAD_TABLE 0x8C88E9A4u
 #define PAD_RECORD 52
@@ -82,4 +83,9 @@ void sdk_8c601e2a(sh4_ctx *c) {
     hle_wr32(r + 44, prev_on);
     prev_on = on;
     for (int u = 1; u < PAD_UNITS; u++) hle_wr32(PAD_TABLE + (uint32_t)u * PAD_RECORD, 0);
+}
+
+void shinobi_pad_state(hle_state_io *io) {
+    hle_state_blob(io, "pad.state", &hle_pad_state, sizeof hle_pad_state);
+    hle_state_blob(io, "pad.prev", &prev_on, sizeof prev_on);
 }

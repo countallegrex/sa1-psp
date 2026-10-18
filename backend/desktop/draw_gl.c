@@ -80,7 +80,11 @@ const draw_stats *draw_get_stats(void) { return &stats; }
 
 /* ---- textures ---------------------------------------------------------------- */
 #define TEX_MAX 2048
-typedef struct { uint32_t gl; int w, h; uint32_t bytes; } tex_slot;
+/* A CPU copy of every texture's pixels (and CLUT) is kept, headless too: save
+ * states carry textures from it and re-create them under the same handles
+ * (draw_gl_texture_state), and a state saved headless can load into a
+ * window.  About 6 MB at the route's peak. */
+typedef struct { uint32_t gl; int w, h; uint32_t bytes; int fmt, clut_fmt; uint32_t pix_n, clut_n; void *pix, *clut; } tex_slot;
 static tex_slot texs[TEX_MAX];
 
 #ifndef SA1_NO_SDL
@@ -97,10 +101,20 @@ static uint16_t *expand_clut(int w, int h, int bits, const uint8_t *idx, const u
 }
 #endif
 
-uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels, int clut_fmt, const void *clut) {
-    int slot;
-    for (slot = 1; slot < TEX_MAX; slot++) if (texs[slot].w == 0) break;
-    if (slot >= TEX_MAX) return 0;
+static uint32_t texture_pixel_bytes(int width, int height, int fmt) {
+    switch (fmt) {
+    case DRAW_FMT_5650: case DRAW_FMT_5551: case DRAW_FMT_4444: return (uint32_t)width * height * 2;
+    case DRAW_FMT_8888: return (uint32_t)width * height * 4;
+    case DRAW_FMT_T4: return (uint32_t)width * height / 2;
+    case DRAW_FMT_T8: return (uint32_t)width * height;
+    default: return 0;
+    }
+}
+
+/* Creates the texture in slot `slot` (0 = the first free one). */
+static uint32_t texture_create_at(int slot, int width, int height, int fmt, const void *pixels, int clut_fmt, const void *clut) {
+    if (slot == 0) for (slot = 1; slot < TEX_MAX; slot++) if (texs[slot].w == 0) break;
+    if (slot <= 0 || slot >= TEX_MAX || texs[slot].w) return 0;
     if ((width & (width - 1)) || (height & (height - 1)) || width < 1 || height < 1) {
         sa1_log("draw: texture %dx%d is not a power of two", width, height);
         return 0;
@@ -114,6 +128,12 @@ uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels,
     default: return 0;
     }
     texs[slot].w = width; texs[slot].h = height; texs[slot].bytes = bytes; texs[slot].gl = 0;
+    texs[slot].fmt = fmt; texs[slot].clut_fmt = clut_fmt;
+    texs[slot].pix_n = texture_pixel_bytes(width, height, fmt);
+    texs[slot].clut_n = fmt == DRAW_FMT_T4 ? 16 * 2 : fmt == DRAW_FMT_T8 ? 256 * 2 : 0;
+    texs[slot].pix = malloc(texs[slot].pix_n); texs[slot].clut = texs[slot].clut_n ? malloc(texs[slot].clut_n) : NULL;
+    if (texs[slot].pix) memcpy(texs[slot].pix, pixels, texs[slot].pix_n);
+    if (texs[slot].clut && clut) memcpy(texs[slot].clut, clut, texs[slot].clut_n);
     stats.textures_alive++; stats.texture_bytes += bytes;
 #ifndef SA1_NO_SDL
     if (!headless) {
@@ -153,14 +173,54 @@ uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels,
     return (uint32_t)slot;
 }
 
+uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels, int clut_fmt, const void *clut) {
+    return texture_create_at(0, width, height, fmt, pixels, clut_fmt, clut);
+}
+
 void draw_texture_destroy(uint32_t handle) {
     if (handle == 0 || handle >= TEX_MAX || texs[handle].w == 0) return;
 #ifndef SA1_NO_SDL
     if (texs[handle].gl) { GLuint id = texs[handle].gl; glDeleteTextures(1, &id); }
 #endif
     stats.textures_alive--; stats.texture_bytes -= texs[handle].bytes;
+    free(texs[handle].pix); free(texs[handle].clut);
     memset(&texs[handle], 0, sizeof texs[handle]);
     cur_valid = 0;
+}
+
+/* Save states (backend/desktop/savestate.c): every live texture from its CPU
+ * copy; a load drops the current textures and re-creates the saved ones
+ * under their handles, which guest RAM refers to. */
+#include "state.h"
+typedef struct tex_rec { uint32_t handle, pix_n, clut_n; int32_t w, h, fmt, clut_fmt; } tex_rec;
+void draw_gl_texture_state(hle_state_io *io) {
+    uint32_t count = 0;
+    if (!hle_state_loading(io)) for (int i = 1; i < TEX_MAX; i++) count += texs[i].w != 0;
+    hle_state_blob(io, "textures", &count, sizeof count);
+    if (hle_state_loading(io)) {
+        if (hle_state_error(io)) return;
+        for (int i = 1; i < TEX_MAX; i++) if (texs[i].w) draw_texture_destroy((uint32_t)i);
+        for (uint32_t k = 0; k < count; k++) {
+            tex_rec r;
+            hle_state_blob(io, "tex", &r, sizeof r);
+            uint32_t pn = 0, cn = 0;
+            const void *pix = hle_state_var(io, "tex.pix", NULL, &pn);
+            const void *clut = hle_state_var(io, "tex.clut", NULL, &cn);
+            if (hle_state_error(io)) return;
+            if (pn != r.pix_n || cn != r.clut_n || !pix) { sa1_log("draw: texture %u in the state has %u/%u bytes, expected %u/%u", r.handle, pn, cn, r.pix_n, r.clut_n); continue; }
+            if (texture_create_at((int)r.handle, r.w, r.h, r.fmt, pix, r.clut_fmt, cn ? clut : NULL) != r.handle)
+                sa1_log("draw: cannot re-create texture %u (%dx%d fmt %d)", r.handle, r.w, r.h, r.fmt);
+        }
+        return;
+    }
+    for (int i = 1; i < TEX_MAX; i++) {
+        if (!texs[i].w) continue;
+        tex_rec r = { (uint32_t)i, texs[i].pix ? texs[i].pix_n : 0, texs[i].clut ? texs[i].clut_n : 0, texs[i].w, texs[i].h, texs[i].fmt, texs[i].clut_fmt };
+        hle_state_blob(io, "tex", &r, sizeof r);
+        uint32_t pn = r.pix_n, cn = r.clut_n;
+        hle_state_var(io, "tex.pix", texs[i].pix, &pn);
+        hle_state_var(io, "tex.clut", texs[i].clut, &cn);
+    }
 }
 
 /* ---- window ------------------------------------------------------------------- */
@@ -458,9 +518,11 @@ int draw_screenshot(const char *path) {
 }
 
 /* ---- input --------------------------------------------------------------------- */
-static int mark_pressed;
+static int mark_pressed, quick_key;
 /* The mark key (F9) since the last call (desktop only; main.c). */
 int draw_gl_mark_pressed(void) { int m = mark_pressed; mark_pressed = 0; return m; }
+/* The quick save / load keys since the last call: 5 (F5), 8 (F8), or 0. */
+int draw_gl_quick_key(void) { int k = quick_key; quick_key = 0; return k; }
 
 int draw_poll_input(struct hle_pad *p, int *quit) {
     *quit = 0;
@@ -471,6 +533,8 @@ int draw_poll_input(struct hle_pad *p, int *quit) {
         if (e.type == SDL_QUIT) *quit = 1;
         if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) *quit = 1;
         if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F9 && !e.key.repeat) mark_pressed = 1;
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F5 && !e.key.repeat) quick_key = 5;
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F8 && !e.key.repeat) quick_key = 8;
         if (e.type == SDL_CONTROLLERDEVICEADDED && !pad) pad = SDL_GameControllerOpen(e.cdevice.which);
     }
     uint32_t b = 0; int x = 0, y = 0, lt = 0, rt = 0;

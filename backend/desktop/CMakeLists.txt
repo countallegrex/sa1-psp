@@ -56,7 +56,7 @@ target_compile_definitions(sa1_hle PUBLIC _CRT_SECURE_NO_WARNINGS)
 target_compile_options(sa1_hle PRIVATE -fno-strict-aliasing -ffp-contract=off -Wall -g)
 
 # The desktop half of the platform interface plus the GL renderer.
-add_library(sa1_backend_desktop OBJECT platform_desktop.c draw_gl.c backtrace_win.c)
+add_library(sa1_backend_desktop OBJECT platform_desktop.c coro_switch.c draw_gl.c backtrace_win.c)
 target_link_libraries(sa1_backend_desktop PUBLIC sa1_hle)
 target_compile_options(sa1_backend_desktop PRIVATE -Wall -g)
 if(SA1_HAVE_SDL)
@@ -76,7 +76,7 @@ if(SA1_GAME_SRCS)
   # Object libraries, not static ones: the weak stubs in hle/seam_stubs.c
   # must see every strong HLE body at link time, as in M1.
   add_executable(sa1psp
-    main.c input_tape.c
+    main.c input_tape.c savestate.c sha256.c
     $<TARGET_OBJECTS:sa1_hle> $<TARGET_OBJECTS:sa1_backend_desktop>
     ${SA1_GAME_SRCS}
     ${SA1_RECOMP_OUT}/emitter/game_table.c
@@ -92,6 +92,14 @@ if(SA1_GAME_SRCS)
   # Symbols for the trap backtrace (recompiled functions are named by guest address).
   target_compile_options(sa1psp PRIVATE -g)
   target_link_options(sa1psp PRIVATE -g)
+  # No ASLR: a save state holds native stacks, which only resume if this
+  # build's code and statics load at the same addresses every run
+  # (docs/savestate.md section 1).
+  if(WIN32)
+    target_link_options(sa1psp PRIVATE -Xlinker /DYNAMICBASE:NO)
+  else()
+    target_link_options(sa1psp PRIVATE -no-pie)
+  endif()
   target_compile_options(sa1psp PRIVATE
     -fno-strict-aliasing -ffp-contract=off -Wall
     -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable -Wno-parentheses)

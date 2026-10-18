@@ -13,6 +13,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "../hle.h"
+#include "../state.h"
 
 #define VEC_SYSINFO  0x8C0000B0u
 #define VEC_FONT     0x8C0000B4u
@@ -136,4 +137,9 @@ void hle_bios_init(void) {
         sa1_register_fn(v[i].vec, v[i].fn);
     }
     fill_sysinfo_area();
+}
+
+void hle_bios_state(hle_state_io *io) {
+    hle_state_blob(io, "gd.reqid", &gd_req_id, sizeof gd_req_id);
+    hle_state_blob(io, "gd.pending", &gd_pending, sizeof gd_pending);
 }

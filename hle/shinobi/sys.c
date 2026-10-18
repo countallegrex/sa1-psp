@@ -7,6 +7,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../state.h"
 
 static uint32_t frame_count;
 
@@ -62,3 +63,5 @@ void hle_shinobi_init(void) {
  * every handle matched. */
 void sdk_8c5ff8b8(sh4_ctx *c) { HLE_ENTER(0x8c5ff8b8u, "syLibHandleCheck(start)"); RET(0); }
 void sdk_8c5ff936(sh4_ctx *c) { HLE_ENTER(0x8c5ff936u, "syLibHandleCheck(end)"); RET(0); }
+
+void shinobi_sys_state(hle_state_io *io) { hle_state_blob(io, "sys.frame", &frame_count, sizeof frame_count); }

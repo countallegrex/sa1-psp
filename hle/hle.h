@@ -58,10 +58,14 @@ int sa1_plat_dir_list(const char *dir, void (*cb)(const char *name, uint32_t siz
  * or ucontext on desktop, threads handed a baton on the PSP.  Only one runs
  * at a time; a switch returns when another context switches back. */
 typedef struct sa1_coro sa1_coro;
-sa1_coro *sa1_plat_coro_main(void);                 /* the context main() runs on */
+sa1_coro *sa1_plat_coro_main(void);                 /* the context the game boots on (the root task) */
 sa1_coro *sa1_plat_coro_create(void (*fn)(void *arg), void *arg, unsigned stack_bytes);
 void sa1_plat_coro_switch(sa1_coro *to);            /* from the running context */
 void sa1_plat_coro_destroy(sa1_coro *co);           /* never the running one */
+/* A small stable number per context and back (save states store contexts
+ * by number: docs/savestate.md). */
+int sa1_plat_coro_index(const sa1_coro *co);
+sa1_coro *sa1_plat_coro_by_index(int index);
 
 /* ---- input ---------------------------------------------------------------- */
 /* Dreamcast controller state, active-high: C 1, B 2, A 4, Start 8, Up 0x10,

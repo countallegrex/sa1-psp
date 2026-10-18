@@ -30,6 +30,8 @@
 EBOOT*
 recomp/out/
 recomp/**/generated/
+# save states hold guest RAM (docs/savestate.md)
+*.state
 assets_out/
 ms0/
 # the private side of the project (lives one level up, but belt and braces)

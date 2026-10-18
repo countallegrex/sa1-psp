@@ -12,6 +12,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../state.h"
 
 #define BLOCK_MAX 1024
 #define ALIGN 32u
@@ -106,4 +107,13 @@ void sdk_8c6021d6(sh4_ctx *c) {
 void sdk_8c602288(sh4_ctx *c) {
     HLE_ENTER(0x8c602288u, "syFree");
     if (ARG0 && heap_free(ARG0) != 0) sa1_log("syFree(0x%08x): not a live block", ARG0);
+}
+
+void shinobi_memory_state(hle_state_io *io) {
+    hle_state_blob(io, "heap.blocks", blocks, sizeof blocks);
+    hle_state_blob(io, "heap.n", &nblocks, sizeof nblocks);
+    hle_state_blob(io, "heap.base", &heap_base, sizeof heap_base);
+    hle_state_blob(io, "heap.size", &heap_size, sizeof heap_size);
+    hle_state_blob(io, "heap.used", &heap_used, sizeof heap_used);
+    hle_state_blob(io, "heap.peak", &heap_peak, sizeof heap_peak);
 }

@@ -21,6 +21,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "../hle.h"
+#include "../state.h"
 
 #include <string.h>
 
@@ -212,3 +213,23 @@ void fn_8c099b2c(sh4_ctx *c) {
 uint32_t hle_task_switches(void) { return switches; }
 /* The guest task record whose coroutine runs now (0: the main context). */
 uint32_t hle_task_running(void) { return running && running->coro != sa1_plat_coro_main() ? running->task : 0; }
+
+/* ---- save states (hle/state.h, docs/savestate.md) ---------------------------
+ * The table, each task's coroutine as its slot number, the running task.
+ * gctx is re-bound by every wrapped entry before it is used, so it is not
+ * part of the state. */
+void hle_task_state(hle_state_io *io) {
+    int32_t coro[TASK_MAX], run = -1;
+    if (!hle_state_loading(io)) {
+        for (int i = 0; i < TASK_MAX; i++) coro[i] = tasks[i].coro ? sa1_plat_coro_index(tasks[i].coro) : -1;
+        run = running ? (int32_t)(running - tasks) : -1;
+    }
+    hle_state_blob(io, "tasks", tasks, sizeof tasks);
+    hle_state_blob(io, "tasks.coro", coro, sizeof coro);
+    hle_state_blob(io, "tasks.running", &run, sizeof run);
+    hle_state_blob(io, "tasks.switches", &switches, sizeof switches);
+    if (hle_state_loading(io) && !hle_state_error(io)) {
+        for (int i = 0; i < TASK_MAX; i++) tasks[i].coro = coro[i] >= 0 ? sa1_plat_coro_by_index(coro[i]) : NULL;
+        running = run >= 0 && run < TASK_MAX ? &tasks[run] : NULL;
+    }
+}

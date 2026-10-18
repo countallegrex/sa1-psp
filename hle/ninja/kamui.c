@@ -24,6 +24,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "ninja.h"
+#include "../state.h"
 #include "../shinobi/shinobi.h"
 
 #include <stdio.h>
@@ -876,3 +877,28 @@ void kamui_draw_end(sh4_ctx *c) {
 }
 int kamui_select_texture(uint32_t n) { return select_texture(n, KM_CTX_TSP, KM_CTX_TCW); }
 uint32_t kamui_clear_color(void) { return clear_color; }
+
+/* ---- save states (hle/state.h, docs/savestate.md) ----------------------------
+ * The context addresses, the buffers, the clear colour, the fog model and
+ * the 2D ranges of the frame in progress.  Statistics and the per-render
+ * scratch arrays are not state.  After a load the fog is pushed to the
+ * backend again (GL fog is native). */
+void kamui_state(hle_state_io *io) {
+    hle_state_blob(io, "km.sh", &sh_addr, sizeof sh_addr);
+    hle_state_blob(io, "km.desc", &desc_addr, sizeof desc_addr);
+    hle_state_blob(io, "km.bufs", bufs, sizeof bufs);
+    hle_state_blob(io, "km.clear", &clear_color, sizeof clear_color);
+    hle_state_blob(io, "km.fog.near", &fog_near, sizeof fog_near);
+    hle_state_blob(io, "km.fog.far", &fog_far, sizeof fog_far);
+    hle_state_blob(io, "km.fog.color", &fog_color, sizeof fog_color);
+    hle_state_blob(io, "km.fog.dens", &fog_density, sizeof fog_density);
+    hle_state_blob(io, "km.fog.reg", &fog_density_reg, sizeof fog_density_reg);
+    hle_state_blob(io, "km.fog.table", fog_table, sizeof fog_table);
+    hle_state_blob(io, "km.fog.set", &fog_table_set, sizeof fog_table_set);
+    hle_state_blob(io, "km.r2d", ranges2d, sizeof ranges2d);
+    hle_state_blob(io, "km.r2d.n", nranges2d, sizeof nranges2d);
+    hle_state_blob(io, "km.mark.depth", &mark_depth, sizeof mark_depth);
+    hle_state_blob(io, "km.mark.start", mark_start, sizeof mark_start);
+    hle_state_blob(io, "km.rendered", &frame_rendered, sizeof frame_rendered);
+    if (hle_state_loading(io) && !hle_state_error(io)) draw_set_fog(fog_color, fog_near, fog_far);
+}

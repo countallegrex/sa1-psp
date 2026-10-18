@@ -9,6 +9,9 @@
  *
  * Part of sa1-psp (MIT). */
 #include "overlay_loader.h"
+#include "../state.h"
+
+#include <string.h>
 
 void fn_8c09da44_orig(sh4_ctx *c);
 void fn_8c099872_orig(sh4_ctx *c);
@@ -124,4 +127,30 @@ void fn_8c099872(sh4_ctx *c) {
     guest_string(c->r[4], name, sizeof name);
     hle_overlay_load_begin(name, slot_base[SA1_SLOT_AREA]);
     fn_8c099872_orig(c);
+}
+
+/* Save states: the installed tables, by overlay name; a load looks each name
+ * up in this build's registry (an overlay that was not emitted into this
+ * build is logged and left empty). */
+void hle_overlay_state(hle_state_io *io) {
+    char names[SA1_SLOT_COUNT][16];
+    memset(names, 0, sizeof names);
+    if (!hle_state_loading(io))
+        for (int s = 0; s < SA1_SLOT_COUNT; s++) {
+            const sa1_overlay *ov = sa1_overlay_get(s);
+            if (ov) { strncpy(names[s], ov->name, 15); names[s][15] = 0; }
+        }
+    hle_state_blob(io, "overlays", names, sizeof names);
+    if (!hle_state_loading(io) || hle_state_error(io)) return;
+    for (int s = 0; s < SA1_SLOT_COUNT; s++) {
+        const sa1_overlay *ov = NULL;
+        if (names[s][0]) {
+            for (unsigned i = 0; i < hle_overlay_file_count && !ov; i++) {
+                const hle_overlay_file *f = &hle_overlay_files[i];
+                if (f->ov && f->ov->name && same_name(f->ov->name, names[s])) ov = f->ov;
+            }
+            if (!ov) sa1_log("overlay: state has %s in slot %d, which this build did not emit", names[s], s);
+        }
+        sa1_overlay_set(s, ov);
+    }
 }

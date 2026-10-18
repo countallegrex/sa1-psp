@@ -19,6 +19,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../state.h"
 
 #include <time.h>
 
@@ -123,3 +124,11 @@ static void rtc_write(sh4_ctx *c, uint32_t addr, const char *name) {
 void fn_8c10bed4(sh4_ctx *c) { rtc_write(c, 0x8c10bed4u, "syRtc write enable (A-tail)"); }
 void fn_8c10befc(sh4_ctx *c) { rtc_write(c, 0x8c10befcu, "syRtc write low (A-tail)"); }
 void fn_8c10bf22(sh4_ctx *c) { rtc_write(c, 0x8c10bf22u, "syRtc write high (A-tail)"); }
+
+void shinobi_hw_state(hle_state_io *io) {
+    hle_state_blob(io, "tmu.start", &tmu_tcnt1_start, sizeof tmu_tcnt1_start);
+    hle_state_blob(io, "tmu.tcor1", &tmu_tcor1, sizeof tmu_tcor1);
+    hle_state_blob(io, "tmu.tstr", &tmu_tstr, sizeof tmu_tstr);
+    hle_state_blob(io, "tmu.tcr1", &tmu_tcr1, sizeof tmu_tcr1);
+    hle_state_blob(io, "tmu.t0", &tmu_tcnt1_t0, sizeof tmu_tcnt1_t0);
+}

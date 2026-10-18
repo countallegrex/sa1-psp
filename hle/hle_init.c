@@ -3,6 +3,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
+#include "state.h"
 
 void hle_bios_init(void);     /* hle/bios/syscalls.c */
 void hle_shinobi_init(void);  /* hle/shinobi/sys.c */
@@ -33,4 +34,23 @@ void hle_init(void) {
     hle_bios_init();
     hle_shinobi_init();
     hle_movie_init();
+}
+
+/* Save states: every module's state, in one fixed order (the inventory in
+ * docs/savestate.md section 2). */
+void hle_state_all(hle_state_io *io) {
+    hle_task_state(io);
+    shinobi_sys_state(io);
+    shinobi_timer_state(io);
+    shinobi_hw_state(io);
+    shinobi_vsync_state(io);
+    shinobi_pad_state(io);
+    shinobi_gdfs_state(io);
+    shinobi_memory_state(io);
+    shinobi_chain_state(io);
+    shinobi_cfg_state(io);
+    hle_bios_state(io);
+    hle_overlay_state(io);
+    kamui_state(io);
+    texture_state(io);
 }

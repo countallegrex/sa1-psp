@@ -3,6 +3,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../state.h"
 
 /* syCfg: 0x8C5FF2CC Init(work) -> 0; 0x8C5FF2DE Exit -> 0;
  * 0x8C5FF31E GetSoundMode(&mode) -> *mode = 0 (stereo);
@@ -77,4 +78,9 @@ void sdk_8c604500(sh4_ctx *c) {
     HLE_ENTER(0x8c604500u, "memcpy (SDK)");
     uint32_t d = ARG0, s = ARG1, n = ARG2;
     for (uint32_t i = 0; i < n; i++) hle_wr8(d + i, hle_rd8(s + i));
+}
+
+void shinobi_cfg_state(hle_state_io *io) {
+    hle_state_blob(io, "bu.complete", &bu_complete_cb, sizeof bu_complete_cb);
+    hle_state_blob(io, "bu.progress", &bu_progress_cb, sizeof bu_progress_cb);
 }

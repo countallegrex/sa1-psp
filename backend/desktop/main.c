@@ -7,6 +7,15 @@
  *          [--texdump DIR]  (every decoded texture as PPM; F9 in the window, or --mark FRAME, saves a
  *                            screenshot there and logs the textures bound in that frame)
  *          [--aspect wide|4:3] [--no-pad] [--goto FRAME:X:Z[:RADIUS]]...
+ *          [--save FRAME:FILE]... [--load FILE] [--quick FILE]
+ *
+ * --save writes a save state (guest RAM, the HLE's state, the task
+ * coroutines' stacks: docs/savestate.md) at guest frame FRAME, where --dump
+ * writes; --load restores one before the first frame and continues from it;
+ * F5 / F8 in the window save / load --quick (default quick.state).  The
+ * game runs on coroutines at fixed addresses under a supervisor
+ * (backend/desktop/savestate.c), which is what makes the stacks portable
+ * between runs of one build.
  *
  * Without --headless an SDL2 window opens at 480x272 times --scale (2 by
  * default) with an OpenGL 1.x fixed-function context (backend/draw.h), and
@@ -44,6 +53,8 @@
 #include "hle.h"
 #include "../draw.h"
 #include "input_tape.h"
+#include "platform_desktop.h"
+#include "savestate.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,10 +92,15 @@ static int nshots, ndumps;
 static struct { uint32_t frame, addr; int len; } hwwatch;   /* --hwwatch FRAME:ADDR[:LEN]: hardware write watch */
 static struct { uint32_t frame, addr, value, size; } pokes[SHOT_MAX];
 static int npokes;
+static struct { uint32_t frame; const char *path; } saves[SHOT_MAX];   /* --save FRAME:FILE */
+static int nsaves;
+static const char *load_path, *quick_path = "quick.state";
 void kamui_report(void);            /* hle/ninja/kamui.c: renderer counters */
 void kamui_mark_frame(const char *dir);
 void texture_set_dump_dir(const char *dir, unsigned min_w);
 int draw_gl_mark_pressed(void);     /* draw_gl.c: F9 */
+int draw_gl_quick_key(void);        /* draw_gl.c: F5 = 5, F8 = 8 */
+void draw_gl_texture_state(hle_state_io *io);
 static const char *texdump_dir;     /* --texdump DIR: every decoded texture, and the F9 marks */
 static uint32_t mark_frames[SHOT_MAX]; static int nmarks;   /* --mark FRAME: the F9 mark from a script */
 void kamui_set_screenshot(const char *path);
@@ -139,7 +155,10 @@ static void stack_report(void) {
  * faulting stack, so main() and every fiber keep 64 KB in reserve
  * (SetThreadStackGuarantee) for the stack-overflow case; the backtrace is
  * walked from the exception context. */
+static int crash_reported;
 static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
+    if (crash_reported) return EXCEPTION_EXECUTE_HANDLER;
+    crash_reported = 1;
     sa1_log("crash: exception 0x%08lx at %p (guest frame %u)", ep->ExceptionRecord->ExceptionCode,
             ep->ExceptionRecord->ExceptionAddress, hle_frame_count());
     if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
@@ -156,6 +175,24 @@ static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
     stack_report();
     if (log_file) fflush(log_file);
     return EXCEPTION_EXECUTE_HANDLER;
+}
+/* The game runs on coroutine stacks of our own (platform_desktop.c), whose
+ * bottom frame has no unwind information, so the frame-based dispatch that
+ * would reach the unhandled-exception filter stops short on them.  A
+ * vectored handler sees every exception first; for the fatal codes it runs
+ * the same report and lets the process die.  Single-step (--hwwatch), guard
+ * pages and breakpoints pass through untouched. */
+static LONG CALLBACK on_crash_vectored(EXCEPTION_POINTERS *ep) {
+    switch (ep->ExceptionRecord->ExceptionCode) {
+    case EXCEPTION_ACCESS_VIOLATION: case EXCEPTION_ILLEGAL_INSTRUCTION: case EXCEPTION_STACK_OVERFLOW:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO: case EXCEPTION_PRIV_INSTRUCTION: case EXCEPTION_IN_PAGE_ERROR:
+    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+        on_crash(ep);
+        TerminateProcess(GetCurrentProcess(), (UINT)ep->ExceptionRecord->ExceptionCode);
+        return EXCEPTION_CONTINUE_SEARCH;
+    default:
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
 }
 #endif
 
@@ -307,6 +344,12 @@ static void on_frame(uint32_t frame) {
         FILE *o = fopen(dumps[i].path, "wb");
         if (o) { fwrite(sa1_ram, 1, SA1_RAM_SIZE + SA1_RAM_EXTRA, o); fclose(o); sa1_log("dump: %s (%u bytes, lists included)", dumps[i].path, SA1_RAM_SIZE + SA1_RAM_EXTRA); }
     }
+    for (int i = 0; i < nsaves; i++) if (saves[i].frame == frame) savestate_save(saves[i].path);   /* the state at the dump point */
+    if (!headless) {
+        int k = draw_gl_quick_key();
+        if (k == 5) savestate_save(quick_path);
+        else if (k == 8 && savestate_load(quick_path) != 0) sa1_log("quick load: %s not loaded", quick_path);
+    }
     input_tape_frame_end(frame);
     if (stats_every && frame % (uint32_t)stats_every == 0) kamui_report();
     if (frame_limit && frame >= frame_limit) {
@@ -317,6 +360,49 @@ static void on_frame(uint32_t frame) {
         sa1_log("time limit reached");
         report_and_exit(0);
     }
+}
+
+/* The game, on the root coroutine (savestate_supervise). */
+static void boot(void *arg) {
+    (void)arg;
+    memset(&ctx, 0, sizeof ctx);
+    ctx.r[15] = 0x8C00F400u;
+    ctx.fpscr = 0x00040001u;
+    ctx.vbr = 0x8C000000u;
+    sa1_log("boot: entering fn_8c010000");
+    fn_8c010000(&ctx);
+    sa1_log("boot: fn_8c010000 returned (r0=%08x)", ctx.r[0]);
+    report_and_exit(0);
+}
+
+/* Save states: this file's share (docs/savestate.md section 2): the live
+ * register file and the --goto autopilot, which steers from past positions. */
+static void main_state(hle_state_io *io) {
+    hle_state_blob(io, "main.ctx", &ctx, sizeof ctx);
+    hle_state_blob(io, "goto.cur", &goto_cur, sizeof goto_cur);
+    hle_state_blob(io, "goto.cal", &goto_cal, sizeof goto_cal);
+    hle_state_blob(io, "goto.nudge", &goto_nudge, sizeof goto_nudge);
+    hle_state_blob(io, "goto.theta", &goto_theta, sizeof goto_theta);
+    hle_state_blob(io, "goto.best", &goto_best, sizeof goto_best);
+    hle_state_blob(io, "goto.px0", &goto_px0, sizeof goto_px0);
+    hle_state_blob(io, "goto.pz0", &goto_pz0, sizeof goto_pz0);
+    hle_state_blob(io, "goto.ux", &goto_ux, sizeof goto_ux);
+    hle_state_blob(io, "goto.uz", &goto_uz, sizeof goto_uz);
+    hle_state_blob(io, "goto.progress", &goto_progress_frame, sizeof goto_progress_frame);
+}
+static void state_meta_fill(savestate_meta *m) {
+    m->frame = hle_frame_count();
+    m->flags = (hle_strict ? SAVESTATE_STRICT : 0) | (hle_aspect_wide ? SAVESTATE_WIDE : 0);
+    m->rtc_epoch = hle_rtc_epoch;
+}
+static void state_loaded(const savestate_meta *m) {
+    if (!!(m->flags & SAVESTATE_STRICT) != !!hle_strict)
+        sa1_log("savestate: the state was saved %s --strict and this run is %s; the runs will differ", (m->flags & SAVESTATE_STRICT) ? "with" : "without", hle_strict ? "strict" : "not");
+    if (!!(m->flags & SAVESTATE_WIDE) != !!hle_aspect_wide)
+        sa1_log("savestate: the state was saved with the %s aspect; this run draws %s (the game's clip rectangle came from the saving run)", (m->flags & SAVESTATE_WIDE) ? "wide" : "4:3", hle_aspect_wide ? "wide" : "4:3");
+    if (m->rtc_epoch != hle_rtc_epoch)
+        sa1_log("savestate: the state's clock epoch is %lld, this run's %lld; strict runs will differ", (long long)m->rtc_epoch, (long long)hle_rtc_epoch);
+    input_tape_loaded(m->frame);
 }
 
 static int load_image(const char *path) {
@@ -358,6 +444,14 @@ int main(int argc, char **argv) {
             hwwatch.addr = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 16) : 0;
             hwwatch.len = *end == ':' ? atoi(end + 1) : 4;
         }
+        else if (!strcmp(argv[i], "--save") && i + 1 < argc && nsaves < SHOT_MAX) {   /* FRAME:FILE */
+            char *spec = argv[++i], *end;
+            saves[nsaves].frame = (uint32_t)strtoul(spec, &end, 0);
+            saves[nsaves].path = *end == ':' ? end + 1 : "frame.state";
+            nsaves++;
+        }
+        else if (!strcmp(argv[i], "--load") && i + 1 < argc) load_path = argv[++i];
+        else if (!strcmp(argv[i], "--quick") && i + 1 < argc) quick_path = argv[++i];
         else if (!strcmp(argv[i], "--dump") && i + 1 < argc && ndumps < SHOT_MAX) {
             char *spec = argv[++i], *end;
             dumps[ndumps].frame = (uint32_t)strtoul(spec, &end, 0);
@@ -406,6 +500,7 @@ int main(int argc, char **argv) {
     sa1_set_log_sink(log_sink);
 #ifdef _WIN32
     SetUnhandledExceptionFilter(on_crash);
+    AddVectoredExceptionHandler(0, on_crash_vectored);
     { ULONG guarantee = 64 * 1024; SetThreadStackGuarantee(&guarantee); }
 #endif
     sa1_depth_hook = stack_probe;
@@ -415,23 +510,21 @@ int main(int argc, char **argv) {
     sa1_trace_frame = hle_frame_count;
     plat_watchdog_start(hle_frame_count, 10);   /* a guest loop with no frame progress is a bug */
 
-    sa1_ram = calloc(SA1_RAM_ALLOC, 1);
-    if (!sa1_ram) { fprintf(stderr, "cannot allocate guest RAM\n"); return 1; }
+    if (sa1_plat_ram_alloc() != 0) { fprintf(stderr, "cannot map guest RAM at its fixed address (docs/savestate.md section 1)\n"); return 1; }
     if (load_image(bin) != 0) return 1;
     if (input_tape_start(bin) != 0) return 2;
+    if (load_path && input_tape_recording()) { fprintf(stderr, "--record cannot start from a loaded state (a tape starts at frame 1)\n"); return 2; }
     if (!frame_limit) frame_limit = input_tape_frames();
     plat_set_data_root(root);
     hle_init();
     if (draw_init(scale, headless) != 0 && !headless) { sa1_log("no window; running headless"); headless = 1; }
     draw_set_aspect(hle_aspect_wide);
 
-    memset(&ctx, 0, sizeof ctx);
-    ctx.r[15] = 0x8C00F400u;
-    ctx.fpscr = 0x00040001u;
-    ctx.vbr = 0x8C000000u;
-    sa1_log("boot: entering fn_8c010000");
-    fn_8c010000(&ctx);
-    sa1_log("boot: fn_8c010000 returned (r0=%08x)", ctx.r[0]);
+    savestate_add("hle", hle_state_all);
+    savestate_add("main", main_state);
+    savestate_add("textures", draw_gl_texture_state);
+    savestate_set_meta(state_meta_fill, state_loaded);
+    if (savestate_supervise(boot, NULL, load_path) != 0) { report_and_exit(1); return 1; }
     report_and_exit(0);
     return 0;
 }

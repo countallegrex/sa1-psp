@@ -7,6 +7,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../state.h"
 
 /* Guest time is virtual: 1/60 s per frame, plus the host time elapsed since
  * the frame began (capped below a frame) so that a busy-wait on the timer
@@ -41,4 +42,11 @@ uint32_t shinobi_timer_count(void) {
 void sdk_8c60260e(sh4_ctx *c) {
     HLE_ENTER(0x8c60260eu, "syTmrGetCount");
     RET(shinobi_timer_count());
+}
+
+/* Save states: the strict-mode sub-frame clock.  frame_t0 is host time and
+ * re-bases itself on the first read after a load. */
+void shinobi_timer_state(hle_state_io *io) {
+    hle_state_blob(io, "timer.seen", &frame_seen, sizeof frame_seen);
+    hle_state_blob(io, "timer.reads", &reads_in_frame, sizeof reads_in_frame);
 }
