@@ -535,6 +535,32 @@ The maintainer's screenshot 4 (the close-up on Sonic's legs in the Emerald Coast
 hotel) could not be replayed: his inputs after frame 17,645 were in the
 lost part of the tape; the third run will tell.
 
+**9. Collision ("seemed off too"): not reproduced.** Two recorded tapes
+through the Flycast oracle (`tools/flycast/run_oracle.py`; for the second
+a wrapper that applies the route's `--poke 5290` on the console side
+when Chaos 0 would load), comparing the watched player position and
+ground height by game frame. Station Square, 2,222 game frames of the
+opening (the event moves Sonic between shots; the diff's one-frame slips
+are those cuts): x, z identical, y within 0.012 units. Emerald Coast,
+955 game frames of which 250 moving at full speed, 1,100 units along the
+beach under a scripted stick: never outside the harness tolerance
+(4 units), ground height (y) within 0.39 units throughout, rings and
+lives identical; x and z differ by up to 6.6 units for about a hundred
+frames while running (one game frame of motion: the console's stage
+switch lands one frame off the desktop's poke) and settle to 0.0003
+units in x and 2.9 in z at the end. What the maintainer saw was the camera of
+item 7, which makes any collision look wrong. Checked alongside: the
+eight collision and flag-test functions once stubbed as TA writers
+(`docs/overlays-sonic.md`) run their recompiled bodies through the
+pass-through wrappers (`ta_stubs.c` `TA_PASS`; the rows are still in
+`hle_wraps.tsv`, dropping them means a re-emit); SR.RB bank switching
+occurs only in the interrupt and `longjmp` code of the Katana tail, not
+in game code; and every FPSCR write in the recompiled code is in that
+tail too, so on the console the game runs in the boot rounding mode
+(round to zero, FPSCR 0x00040001) while the host rounds to nearest, and
+`fsrra`/`fsca` are `1/sqrtf` and `sinf`/`cosf`. That is the likeliest
+source of the sub-unit y differences; it does not reach collision.
+
 **Aids added:** `--goto FRAME:X:Z[:RADIUS]` (a waypoint autopilot for
 scripted runs; the stick-to-world mapping is calibrated from the movement
 it produces, a wall swings the heading and taps A); the host-stack probe
@@ -559,6 +585,10 @@ gave the pier's coordinates for the route: planks from (4053, 366) to
   null-page test for constant-base accesses it can prove are RAM (it
   already folds constants), and the PSP backend may size the page smaller
   than 2 MB (offsets seen: up to 0xF8).
+- Rounding mode: the console runs the game in round-to-zero (§9 item 9);
+  the host rounds to nearest. Positions agree to well under a unit, so it
+  stays as it is; setting the host FPU mode at startup is the lever if a
+  later comparison needs bit-exact floats (the HLE math would run in it too).
 - `--goto` cannot leave the Emerald Coast start area on its own (walls,
   the sea); a route needs waypoints along the ring trail, and a position
   poke does not stick (the player struct is rewritten).
