@@ -107,6 +107,54 @@ static void test_vq(int mips) {
     free(p); free(data);
 }
 
+/* Small VQ (data formats 0x10 / 0x11): the codebook has `entries` entries by
+ * texture size; block (bx, by) uses code morton(bx, by) % entries and every
+ * texel of code k is the format's encoding of (k, k + 1).  The chunk carries
+ * the 16 bytes of slack the game's files have, which a decoder that sizes
+ * the codebook from the chunk length gets wrong. */
+static uint32_t enc(int pixfmt, uint32_t x, uint32_t y) {
+    switch (pixfmt) {
+    case 0: return 0x8000u | (x & 31) << 10 | (y & 31) << 5 | ((x + y) & 31);          /* ARGB1555 */
+    case 2: return 0xF000u | (x & 15) << 8 | (y & 15) << 4 | ((x + y) & 15);           /* ARGB4444 */
+    default: return texel565(x, y);
+    }
+}
+static uint32_t enc_psp(int pixfmt, uint32_t x, uint32_t y) {
+    uint32_t v = enc(pixfmt, x, y);
+    switch (pixfmt) {
+    case 0: return (v & 0x8000) | (v & 0x7C00) >> 10 | (v & 0x03E0) | (v & 0x001F) << 10;
+    case 2: return (v & 0xF000) | (v & 0x0F00) >> 8 | (v & 0x00F0) | (v & 0x000F) << 8;
+    default: return psp565(x, y);
+    }
+}
+static void test_small_vq(uint32_t w, int mips, uint32_t entries, int pixfmt) {
+    uint32_t hw = w / 2;
+    uint32_t mip_bytes = 0;
+    if (mips) for (uint32_t k = 0; (1u << k) < w; k++) mip_bytes += k < 2 ? 1 : 1u << (2 * (k - 1));
+    uint32_t dn = entries * 8 + mip_bytes + hw * hw + 16;      /* + the slack */
+    uint8_t *data = calloc(dn, 1);
+    for (uint32_t k = 0; k < entries; k++) {
+        uint8_t *e = data + k * 8;
+        put16(e, enc(pixfmt, k, k + 1)); put16(e + 2, enc(pixfmt, k, k + 1)); put16(e + 4, enc(pixfmt, k, k + 1)); put16(e + 6, enc(pixfmt, k, k + 1));
+    }
+    for (uint32_t i = 0; i < mip_bytes; i++) data[entries * 8 + i] = (uint8_t)(entries - 1);   /* smaller levels: a wrong base reads these */
+    for (uint32_t by = 0; by < hw; by++) for (uint32_t bx = 0; bx < hw; bx++)
+        data[entries * 8 + mip_bytes + morton(bx, by)] = (uint8_t)(morton(bx, by) % entries);
+    for (uint32_t i = dn - 16; i < dn; i++) data[i] = 0xEE;
+    uint32_t n; uint8_t *p = chunk(pixfmt, mips ? 0x11 : 0x10, w, w, data, dn, 0, &n);
+    pvr_info info; uint16_t *img = calloc(w * w, 2); int fmt = -1;
+    char what[64]; snprintf(what, sizeof what, "small vq%s %ux%u pixfmt %d", mips ? "+mips" : "", w, w, pixfmt);
+    CHECK(pvr_parse(p, n, &info) == PVR_OK, "%s: parse", what);
+    CHECK(pvr_decode(&info, NULL, img, &fmt) == PVR_OK, "%s: decode", what);
+    int bad = 0;
+    for (uint32_t y = 0; y < w; y++) for (uint32_t x = 0; x < w; x++) {
+        uint32_t k = morton(x / 2, y / 2) % entries;
+        if (img[y * w + x] != enc_psp(pixfmt, k, k + 1)) { if (bad < 2) printf("  %s: texel (%u,%u) = 0x%04x, want 0x%04x\n", what, x, y, img[y * w + x], (unsigned)enc_psp(pixfmt, k, k + 1)); bad++; }
+    }
+    CHECK(bad == 0, "%s: %d texels wrong", what, bad);
+    free(p); free(data); free(img);
+}
+
 static void test_rectangle(void) {
     enum { W = 32, H = 8 };
     uint8_t data[W * H * 2];
@@ -150,6 +198,12 @@ int main(void) {
     test_twiddled_mips();
     test_vq(0);
     test_vq(1);
+    for (int pf = 0; pf < 3; pf++) {
+        test_small_vq(16, 1, 16, pf);
+        test_small_vq(32, 1, 64, pf);
+        test_small_vq(32, 0, 32, pf);
+        test_small_vq(16, 0, 16, pf);
+    }
     test_rectangle();
     test_errors();
     if (failures) { printf("%d failure(s)\n", failures); return 1; }

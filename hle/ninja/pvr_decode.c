@@ -71,6 +71,22 @@ static uint32_t vq_mip_offset(int log2w) {
     return bytes;
 }
 
+/* Small VQ (data formats 0x10 / 0x11): the codebook has fewer than 256
+ * entries, by texture size: 16 up to 16x16, 32 at 32x32 (64 with mipmaps),
+ * 128 at 64x64, 256 above.  Measured on the M2 route's archives against
+ * Flycast's decoded textures (32x32 with mipmaps: 61 of 97 match with 64
+ * entries, none with the other sizes; 16x16: 16 entries; 32x32 without
+ * mipmaps: 32).  Deriving the size from the chunk length, as the first
+ * decoder did, overshoots because a chunk carries 16 bytes of slack, and
+ * read the indices 16 to 24 bytes late: the maintainer's 92 garbled tiles.  The
+ * 64x64 sizes are the tools' documented values, not yet seen on the route. */
+static uint32_t small_vq_entries(uint32_t w, int mips) {
+    if (w <= 16) return 16;
+    if (w == 32) return mips ? 64 : 32;
+    if (w == 64) return 128;
+    return 256;
+}
+
 static uint32_t yuv_to_565(int y, int u, int v) {
     int r = y + (int)(1.402f * (v - 128)), g = y - (int)(0.344f * (u - 128) + 0.714f * (v - 128)), b = y + (int)(1.772f * (u - 128));
     if (r < 0) r = 0; if (r > 255) r = 255;
@@ -132,14 +148,8 @@ int pvr_decode(const pvr_info *info, const uint32_t *palette, uint16_t *img, int
         break;
     }
     case 3: case 4: case 0x10: case 0x11: {            /* VQ: 256-entry codebook of 2x2 texels, twiddled indices */
-        uint32_t cb_entries = 256;
         int mips = (datafmt == 4 || datafmt == 0x11);
-        if (datafmt >= 0x10) {               /* small VQ: the codebook shrinks with the texture */
-            uint32_t idx_bytes = (w * h) / 4;
-            if (mips) idx_bytes += vq_mip_offset(log2u(w));
-            cb_entries = dn > idx_bytes ? (dn - idx_bytes) / 8 : 0;
-            if (cb_entries > 256) cb_entries = 256;
-        }
+        uint32_t cb_entries = datafmt >= 0x10 ? small_vq_entries(w, mips) : 256;
         uint32_t cb_bytes = cb_entries * 8;
         uint32_t base = cb_bytes + (mips ? vq_mip_offset(log2u(w)) : 0);
         uint32_t hw = w / 2, hh = h / 2;
