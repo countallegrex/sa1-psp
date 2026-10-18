@@ -24,6 +24,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "ninja.h"
+#include "../state.h"
 #include "pvr_decode.h"
 #include "../shinobi/shinobi.h"
 
@@ -83,22 +84,41 @@ static const char *datafmt_name(int f) {
     }
 }
 static int datafmt_mips(int f) { return f == 2 || f == 4 || f == 6 || f == 8 || f == 0x11; }
+static uint32_t decode_info(const pvr_info *pinfo, int *out_w, int *out_h, int *out_fmt, uint32_t *out_bytes);
 static uint32_t decode_pvrt(const uint8_t *p, uint32_t n, int *out_w, int *out_h, int *out_fmt, uint32_t *out_bytes, uint32_t *gbix_out) {
     pvr_info info;
     int r = pvr_parse(p, n, &info);
     if (gbix_out) *gbix_out = r == PVR_ERR_HEADER ? PVR_NO_GINDEX : info.gbix;
     if (r == PVR_ERR_HEADER) return 0;
-    uint32_t w = info.w, h = info.h;
-    int pixfmt = info.pixfmt, datafmt = info.datafmt;
     if (r == PVR_ERR_SIZE) {
-        sa1_log("texture: unsupported size %ux%u (fmt %d/%d)", w, h, pixfmt, datafmt);
+        sa1_log("texture: unsupported size %ux%u (fmt %d/%d)", info.w, info.h, info.pixfmt, info.datafmt);
         return 0;
     }
+    return decode_info(&info, out_w, out_h, out_fmt, out_bytes);
+}
+/* Raw texels (no chunk headers) described by an NJS_TEXINFO: the message
+ * renderer composes each subtitle line into such an image (type 0x900:
+ * rectangle, ARGB1555) and loads it through the texinfo form. */
+static uint32_t decode_raw(const uint8_t *p, uint32_t n, uint32_t w, uint32_t h, int pixfmt, int datafmt, int *out_w, int *out_h, int *out_fmt, uint32_t *out_bytes) {
+    pvr_info info;
+    memset(&info, 0, sizeof info);
+    if (w < 8 || h < 8 || w > 1024 || h > 1024 || (w & (w - 1)) || (h & (h - 1))) {
+        sa1_log("texture: raw texels %ux%u (fmt %d/%d): unsupported size", w, h, pixfmt, datafmt);
+        return 0;
+    }
+    info.w = w; info.h = h; info.pixfmt = pixfmt; info.datafmt = datafmt; info.gbix = PVR_NO_GINDEX;
+    info.data = p; info.data_len = n < w * h * 2 ? n : w * h * 2;
+    return decode_info(&info, out_w, out_h, out_fmt, out_bytes);
+}
+static uint32_t decode_info(const pvr_info *pinfo, int *out_w, int *out_h, int *out_fmt, uint32_t *out_bytes) {
+    const pvr_info info = *pinfo;
+    uint32_t w = info.w, h = info.h;
+    int pixfmt = info.pixfmt, datafmt = info.datafmt;
     uint16_t *img = calloc((size_t)w * h, 2);
     if (!img) return 0;
     static int tex_log = -1;
     if (tex_log < 0) tex_log = getenv("SA1_TEX_LOG") != NULL;       /* debug aid: every decode */
-    if (tex_log) sa1_log("texture: decode %s %ux%u pixel %d data 0x%x size %u avail %u", decode_name, w, h, pixfmt, datafmt, info.data_len + 8, n);
+    if (tex_log) sa1_log("texture: decode %s %ux%u pixel %d data 0x%x size %u", decode_name, w, h, pixfmt, datafmt, info.data_len + 8);
     int fmt = DRAW_FMT_5650;
     if (pvr_decode(&info, palette, img, &fmt) != PVR_OK) {
         sa1_log("texture: data format 0x%x not supported (pixel format %d, %ux%u)", datafmt, pixfmt, w, h);
@@ -155,11 +175,14 @@ static uint32_t size_code(int w, int h) {
     return (cu & 7) << 3 | (cv & 7);
 }
 
-/* Loads the PVR-T at host memory p into a memlist entry; returns the entry index or -1. */
-static int load_entry(const uint8_t *p, uint32_t n, uint32_t gbix_hint, const char *what) {
+/* Loads the PVR-T at host memory p into a memlist entry; returns the entry
+ * index or -1.  raw_w/raw_h non-zero: p holds bare texels of that size in
+ * format raw_fmt (pixel format low byte, data format high byte). */
+static int load_entry_ex(const uint8_t *p, uint32_t n, uint32_t gbix_hint, const char *what, uint32_t raw_w, uint32_t raw_h, uint32_t raw_fmt) {
     int w, h, pixfmt; uint32_t bytes, gbix = 0xFFFFFFFFu;
     decode_name = what;
-    uint32_t handle = decode_pvrt(p, n, &w, &h, &pixfmt, &bytes, &gbix);
+    uint32_t handle = raw_w ? decode_raw(p, n, raw_w, raw_h, (int)(raw_fmt & 0xFF), (int)(raw_fmt >> 8), &w, &h, &pixfmt, &bytes)
+                            : decode_pvrt(p, n, &w, &h, &pixfmt, &bytes, &gbix);
     if (gbix == 0xFFFFFFFFu) gbix = gbix_hint;
     if (!handle) { sa1_log("texture: %s: decode failed", what); return -1; }
     int shared = find_gbix(gbix);
@@ -186,6 +209,7 @@ static int load_entry(const uint8_t *p, uint32_t n, uint32_t gbix_hint, const ch
     hle_wr32(e + 64, 1);
     return i;
 }
+static int load_entry(const uint8_t *p, uint32_t n, uint32_t gbix_hint, const char *what) { return load_entry_ex(p, n, gbix_hint, what, 0, 0, 0); }
 
 static void release_entry(uint32_t e) {
     if (!memlist_base || e < memlist_base || e >= memlist_base + memlist_count * ENTRY_SIZE) return;
@@ -234,6 +258,7 @@ void texture_init(void) { memset(slots, 0, sizeof slots); total_bytes = 0; ntex 
 #define ATTR_MEMORY      0x40000000u
 #define ATTR_FRAMEBUFFER 0x20000000u
 #define ATTR_LOADED      0x01000000u
+#define ATTR_TEXINFO     0x00800000u   /* with MEMORY: filename -> NJS_TEXINFO, whose texaddr is the PVR image (SDK loader 0x8C64D1A6) */
 
 static void texname_string(uint32_t texname, char *out, unsigned n) {
     uint32_t fn = hle_rd32(texname);
@@ -248,14 +273,29 @@ static int load_texname(uint32_t texname) {
     uint32_t attr = hle_rd32(texname + 4), fn = hle_rd32(texname);
     if (attr & ATTR_FRAMEBUFFER) return -1;
     if (attr & ATTR_MEMORY) {
+        uint32_t hint = (attr & ATTR_GLOBALINDEX) ? (attr & 0x00FFFFFFu) : 0xFFFFFFFFu;
+        if (attr & ATTR_TEXINFO) {               /* the texinfo form: its texaddr is the image, +8 of the name the global index */
+            uint32_t info = fn;
+            if (!info || !hle_in_ram(info)) return -1;
+            hint = hle_rd32(texname + 8);
+            fn = hle_rd32(info);
+            if (!fn || !hle_in_ram(fn)) return -1;
+            uint32_t avail = SA1_RAM_SIZE + SA1_RAM_EXTRA - (fn & SA1_RAM_MASK), magic = hle_rd32(fn);
+            if (magic != MAGIC_GINDEX && magic != MAGIC_TEXTURE)   /* bare texels: size and format from the texinfo (SDK loader 0x8C64D324) */
+                return load_entry_ex(hle_ptr(fn), avail, hint, "texinfo texels", hle_rd32(info + 16), hle_rd32(info + 20), hle_rd32(info + 4) >> 16);
+            return load_entry(hle_ptr(fn), avail, hint, "texinfo texture");
+        }
         if (!fn || !hle_in_ram(fn)) return -1;
         uint32_t avail = SA1_RAM_SIZE + SA1_RAM_EXTRA - (fn & SA1_RAM_MASK);
-        return load_entry(hle_ptr(fn), avail, (attr & ATTR_GLOBALINDEX) ? (attr & 0x00FFFFFFu) : 0xFFFFFFFFu, "memory texture");
+        return load_entry(hle_ptr(fn), avail, hint, "memory texture");
     }
     char name[40], rel[160], path[200];
     texname_string(texname, name, sizeof name);
     if (!name[0]) return -1;
-    snprintf(rel, sizeof rel, "%s.PVR", name);
+    size_t len = strlen(name);
+    int has_ext = len > 4 && (name[len - 4] == '.') && (name[len - 3] | 0x20) == 'p' && (name[len - 2] | 0x20) == 'v' && (name[len - 1] | 0x20) == 'r';
+    if (has_ext) snprintf(rel, sizeof rel, "%s", name);   /* the boss-name font B32ASCII.PVR names itself with the extension */
+    else snprintf(rel, sizeof rel, "%s.PVR", name);
     shinobi_gdfs_path(path, sizeof path, rel);
     uint32_t size = 0;
     if (sa1_plat_file_size(path, &size) != 0 || size == 0) { sa1_log("texture: %s not found", path); return -1; }
@@ -292,7 +332,14 @@ void sdk_8c608c82(sh4_ctx *c) {         /* njLoadTexture(texlist) */
         uint32_t attr = hle_rd32(tn + 4);
         if ((attr & ATTR_LOADED) && hle_rd32(tn + 8)) continue;
         int e = load_texname(tn);
-        if (e < 0) { if (!fail) hle_wr32(G_TEX_FAILIDX, i); fail = 1; hle_wr32(tn + 8, 0); continue; }
+        if (e < 0) {
+            if (!fail) hle_wr32(G_TEX_FAILIDX, i);
+            fail = 1; hle_wr32(tn + 8, 0);
+            uint32_t p = hle_rd32(tn); char raw[33] = "";
+            for (int k = 0; k < 16 && p && hle_in_ram(p); k++) snprintf(raw + 2 * k, 3, "%02x", hle_rd8(p + (uint32_t)k));
+            sa1_log("texture: texlist 0x%08x entry %u not loaded: ptr 0x%08x attr 0x%08x [%s]", tl, i, p, attr, raw);
+            continue;
+        }
         hle_wr32(tn + 8, entry_addr((uint32_t)e));
         loaded++;
     }
@@ -399,7 +446,25 @@ void sdk_8c608914(sh4_ctx *c) {         /* njSetTextureInfo(info, tex, type, w, 
     HLE_ENTER(0x8c608914u, "njSetTextureInfo");
     hle_wr32(ARG0, ARG1); hle_wr32(ARG0 + 4, ARG2 << 16); hle_wr32(ARG0 + 16, ARG3); hle_wr32(ARG0 + 20, STACK_ARG(0));
 }
-void sdk_8c608922(sh4_ctx *c) {         /* njSetTextureName(name, addr, attr) */
+/* njSetTextureName(name, addr, globalIndex, attr): filename = addr, attr,
+ * and the global index in the texaddr slot until the texture is loaded
+ * (the SDK body 0x8C608922).  The message renderer (0x8C055C4C) builds the
+ * subtitle texture this way every frame: an NJS_TEXINFO whose texaddr is a
+ * PVR image the game composed in RAM, attr 0x40800000. */
+void sdk_8c608922(sh4_ctx *c) {
     HLE_ENTER(0x8c608922u, "njSetTextureName");
-    hle_wr32(ARG0, ARG1); hle_wr32(ARG0 + 4, ARG2); hle_wr32(ARG0 + 8, 0);
+    hle_wr32(ARG0, ARG1); hle_wr32(ARG0 + 4, ARG3); hle_wr32(ARG0 + 8, ARG2);
+}
+
+/* ---- save states (hle/state.h, docs/savestate.md) ----------------------------
+ * The memory list mirror and the palette.  The backend textures behind the
+ * handles are the backend's to save (the handles also sit in guest RAM). */
+void texture_state(hle_state_io *io) {
+    hle_state_blob(io, "tex.base", &memlist_base, sizeof memlist_base);
+    hle_state_blob(io, "tex.count", &memlist_count, sizeof memlist_count);
+    hle_state_blob(io, "tex.slots", slots, sizeof slots);
+    hle_state_blob(io, "tex.bytes", &total_bytes, sizeof total_bytes);
+    hle_state_blob(io, "tex.n", &ntex, sizeof ntex);
+    hle_state_blob(io, "tex.palette", palette, sizeof palette);
+    hle_state_blob(io, "tex.index", &decode_index, sizeof decode_index);
 }

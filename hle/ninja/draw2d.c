@@ -16,8 +16,10 @@
  *   0x20 polygon (the points are the outline in ring order: the SDK's
  *   writer 0x8C63E834 reorders them 0, n-1, 1, n-2, ... into a strip),
  *   0x40 translucent (the header writer 0x8C63E258 takes attr & 0x40),
- *   0x80000000 textured.  Without 0x20 the points are a strip as given.
- *   The event scripts draw the letterbox bars and fades with 0x20.
+ *   0x80000000 textured (tex: 16-bit u, v pairs in 1/256).  Without 0x20
+ *   the points are a strip as given.  The event scripts draw the letterbox
+ *   bars and fades with 0x20; the message renderer draws each subtitle
+ *   line as a textured quad (texture.c, the texinfo form).
  *   njDrawPolygon3D (0x8C63CE24): NJS_POINT3COL through XMTRX, attr 0x40
  *   translucent, 0x80000000 textured.
  *
@@ -167,6 +169,15 @@ static void point_list(sh4_ctx *c, uint32_t pl, uint32_t n, float z, uint32_t at
     int ring = !is3d && !lines && (attr & 0x20);   /* outline order -> strip, as 0x8C63E834 */
     uint32_t a = textured ? (trans ? KM_ATTR_TRANS_TEX : KM_ATTR_OPAQUE_TEX) : (trans ? KM_ATTR_TRANS_FLAT : KM_ATTR_OPAQUE_FLAT);
     int list = kamui_draw_begin(c, a, 0, KM_TEX_NONE, 0);
+    if (kamui_ptr_trace()) {
+        char td[64] = "";
+        if (textured) texture_describe(hle_rd32(KM_CTX_TCW) & 0x1FFFFFu, td, sizeof td);
+        sa1_log("njDrawPolygon%s: %u points attr 0x%08x z %g textured %d trans %d ring %d -> list %d, tcw 0x%08x [%s] tsp 0x%08x; p0 (%g, %g) col 0x%08x uv (%g, %g); p2 (%g, %g) uv (%g, %g)",
+                is3d ? "3D" : lines ? "2D lines" : "2D", num, attr, z, textured, trans, ring, list, hle_rd32(KM_CTX_TCW), td, hle_rd32(KM_CTX_TSP),
+                hle_rdf(pts), hle_rdf(pts + 4), cols ? hle_rd32(cols) : 0xFFFFFFFFu, texs ? (is3d ? hle_rdf(texs) : hle_rd16(texs) / 256.0f) : 0.0f, texs ? (is3d ? hle_rdf(texs + 4) : hle_rd16(texs + 2) / 256.0f) : 0.0f,
+                num > 2 ? hle_rdf(pts + 2 * (is3d ? 12 : 8)) : 0.0f, num > 2 ? hle_rdf(pts + 2 * (is3d ? 12 : 8) + 4) : 0.0f,
+                texs && num > 2 ? (is3d ? hle_rdf(texs + 16) : hle_rd16(texs + 8) / 256.0f) : 0.0f, texs && num > 2 ? (is3d ? hle_rdf(texs + 20) : hle_rd16(texs + 10) / 256.0f) : 0.0f);
+    }
     float dist = hle_rdf(NJ_G_DIST), cx = hle_rdf(NJ_G_CX), cy = hle_rdf(NJ_G_CY), ax = hle_rdf(NJ_G_AX), ay = hle_rdf(NJ_G_AY), clipn = hle_rdf(NJ_G_CLIPN);
     uint32_t stride = is3d ? 12 : 8;
     float px = 0, py = 0, pz = z;
@@ -197,7 +208,10 @@ static void point_list(sh4_ctx *c, uint32_t pl, uint32_t n, float z, uint32_t at
         float x = hle_rdf(pts + k * stride), y = hle_rdf(pts + k * stride + 4);
         float zz = z;
         uint32_t col = cols ? hle_rd32(cols + k * 4) : 0xFFFFFFFFu;
-        float u = textured ? hle_rdf(texs + k * 8) : 0, v = textured ? hle_rdf(texs + k * 8 + 4) : 0;
+        /* 2D texture coordinates are 16-bit pairs in 1/256 (the SDK writer
+         * 0x8C63E8FC reads mov.w at tex + 4 i and + 2); the subtitle quad
+         * uses (0,0) (0,256) (256,256) (256,0) */
+        float u = textured ? (float)(int16_t)hle_rd16(texs + k * 4) / 256.0f : 0, v = textured ? (float)(int16_t)hle_rd16(texs + k * 4 + 2) / 256.0f : 0;
         if (lines) {
             if (i > 0) {   /* a 1-pixel quad from the previous point to this one */
                 float dx = x - px, dy = y - py, l = sqrtf(dx * dx + dy * dy);

@@ -36,6 +36,7 @@ int kamui_put_vertex(int list, uint32_t pcw, float x, float y, float z, float u,
 void kamui_draw_end(sh4_ctx *c);
 /* Bracket writes of 2D elements (HUD, menus, 2D sprites): the parameters
  * written in between are drawn in the 4:3 area (draw.h, DRAW_LAYER_2D). */
+int kamui_ptr_trace(void);            /* SA1_KAMUI_DUMP: this frame is being traced */
 void kamui_mark2d_begin(void);
 void kamui_mark2d_end(void);
 int kamui_select_texture(uint32_t n);
