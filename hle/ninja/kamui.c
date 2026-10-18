@@ -463,8 +463,9 @@ static void fog_apply(const char *why) {
         fog_near = wn; fog_far = wf;
     }
     draw_set_fog(fog_color, fog_near, fog_far);
-    sa1_log("fog: %s: density %g (reg 0x%04x), colour 0x%08x -> linear near %.1f far %.1f (table[0] %.3f [64] %.3f [127] %.3f)", why,
-            fog_density, fog_density_reg, fog_color, fog_near, fog_far, fog_table[0], fog_table[64], fog_table[127]);
+    /* entry 0 is the far end (w = density), entry 127 the near end (w = density / 248) */
+    sa1_log("fog: %s: density %g (reg 0x%04x), colour 0x%08x -> linear from w %.1f (fog 0) to %.1f (fog 1); table far[0] %.3f, [64] %.3f (w %.1f), near[127] %.3f", why,
+            fog_density, fog_density_reg, fog_color, fog_near, fog_far, fog_table[0], fog_table[64], fog_density / fog_entry_z(64), fog_table[127]);
 }
 static void fog_set_density_reg(uint32_t reg) {
     fog_density_reg = reg & 0xFFFFu;

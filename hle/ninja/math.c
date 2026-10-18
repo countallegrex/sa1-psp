@@ -403,11 +403,16 @@ void sdk_8c6404c8(sh4_ctx *c) {         /* roll = base roll + ang */
     HLE_ENTER(0x8c6404c8u, "njCameraRollFromBase");
     uint32_t cam = cam_arg(ARG0); hle_wr32(cam + CAM_ROLL, hle_rd32(cam + CAM_BROLL) + ARG1);
 }
-void sdk_8c64041c(sh4_ctx *c) {         /* dir = base dir rotated about Y by ang */
+/* dir = base dir pitched about X by ang (the SDK body 0x8C64041C: the
+ * same y/z rotation as njCameraPitch, from the base copy).  The event
+ * scripts place their cameras with PosFromBase, DirFromBase (pitch),
+ * RollFromBase, then njCameraYaw and njSetCamera; the M2 body yawed here,
+ * which put the Chaos 0 cutscene camera under the police cars. */
+void sdk_8c64041c(sh4_ctx *c) {
     HLE_ENTER(0x8c64041cu, "njCameraDirFromBase");
     uint32_t cam = cam_arg(ARG0); float s = sinf(ang_rad(ARG1)), co = cosf(ang_rad(ARG1));
     float x = hle_rdf(cam + CAM_BDIR), y = hle_rdf(cam + CAM_BDIR + 4), z = hle_rdf(cam + CAM_BDIR + 8);
-    hle_wrf(cam + CAM_DIR, x * co + z * s); hle_wrf(cam + CAM_DIR + 4, y); hle_wrf(cam + CAM_DIR + 8, z * co - x * s);
+    hle_wrf(cam + CAM_DIR, x); hle_wrf(cam + CAM_DIR + 4, y * co - z * s); hle_wrf(cam + CAM_DIR + 8, z * co + y * s);
 }
 void sdk_8c64065c(sh4_ctx *c) {         /* pos = base pos + (x, y, z) */
     HLE_ENTER(0x8c64065cu, "njCameraPosFromBase");

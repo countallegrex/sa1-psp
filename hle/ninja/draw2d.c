@@ -13,7 +13,11 @@
  *   njDrawPolygon (0x8C63EC58): NJS_POLYGON_VTX {x, y, z, col}, type 0.
  *   njDrawTexture (0x8C63ED08): NJS_TEXTURE_VTX {x, y, z, u, v, col}, type 3.
  *   njDrawPolygon2D (0x8C63EBC8): NJS_POINT2COL {p, col, tex, num}, attr
- *   0x20 translucent, 0x40 fan, 0x80000000 textured.
+ *   0x20 polygon (the points are the outline in ring order: the SDK's
+ *   writer 0x8C63E834 reorders them 0, n-1, 1, n-2, ... into a strip),
+ *   0x40 translucent (the header writer 0x8C63E258 takes attr & 0x40),
+ *   0x80000000 textured.  Without 0x20 the points are a strip as given.
+ *   The event scripts draw the letterbox bars and fades with 0x20.
  *   njDrawPolygon3D (0x8C63CE24): NJS_POINT3COL through XMTRX, attr 0x40
  *   translucent, 0x80000000 textured.
  *
@@ -159,8 +163,8 @@ static void point_list(sh4_ctx *c, uint32_t pl, uint32_t n, float z, uint32_t at
     if (!num || num > 4096) num = n;
     if (!pts || num < (lines ? 2u : 3u)) return;
     int textured = (attr & 0x80000000u) && texs != 0;
-    int trans = is3d ? (attr & 0x40) != 0 : (attr & 0x20) != 0;
-    int fan = !is3d && (attr & 0x40);
+    int trans = (attr & 0x40) != 0;
+    int ring = !is3d && !lines && (attr & 0x20);   /* outline order -> strip, as 0x8C63E834 */
     uint32_t a = textured ? (trans ? KM_ATTR_TRANS_TEX : KM_ATTR_OPAQUE_TEX) : (trans ? KM_ATTR_TRANS_FLAT : KM_ATTR_OPAQUE_FLAT);
     int list = kamui_draw_begin(c, a, 0, KM_TEX_NONE, 0);
     float dist = hle_rdf(NJ_G_DIST), cx = hle_rdf(NJ_G_CX), cy = hle_rdf(NJ_G_CY), ax = hle_rdf(NJ_G_AX), ay = hle_rdf(NJ_G_AY), clipn = hle_rdf(NJ_G_CLIPN);
@@ -189,7 +193,7 @@ static void point_list(sh4_ctx *c, uint32_t pl, uint32_t n, float z, uint32_t at
     }
     for (uint32_t i = 0; i < num; i++) {
         uint32_t k = i;
-        if (fan && i >= 3) k = (i & 1) ? 0 : i;    /* fan as a strip: 0,1,2,0,3,0,4... approximated by re-centring */
+        if (ring) k = (i & 1) ? num - 1 - i / 2 : i / 2;   /* 0, n-1, 1, n-2, 2, ... */
         float x = hle_rdf(pts + k * stride), y = hle_rdf(pts + k * stride + 4);
         float zz = z;
         uint32_t col = cols ? hle_rd32(cols + k * 4) : 0xFFFFFFFFu;
