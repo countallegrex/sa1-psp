@@ -87,9 +87,32 @@ jobs:
         run: |
           ${{ matrix.os == 'windows-latest' && 'clang' || 'cc' }} -std=c11 -Wall -D_CRT_SECURE_NO_WARNINGS \
             -Ihle -Irecomp/emitter/runtime -Ibackend/desktop tests/replay/tape_format_test.c \
-            backend/desktop/input_tape.c recomp/emitter/runtime/sh4_rt.c \
+            backend/desktop/input_tape.c backend/desktop/sha256.c recomp/emitter/runtime/sh4_rt.c \
             ${{ matrix.os == 'windows-latest' && ' ' || '-lm' }} -o tape_format_test
       - run: python tests/replay/run_synthetic.py ./tape_format_test
+
+  # Save states on synthetic data (docs/savestate.md section 5): the
+  # fixed-address coroutines, the chunk writer, the byte-run packer and the
+  # build check, in two processes.  Linked without ASLR like sa1psp.
+  savestate:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build the save-state test
+        shell: bash
+        run: |
+          ${{ matrix.os == 'windows-latest' && 'clang' || 'cc' }} -std=c11 -Wall -D_CRT_SECURE_NO_WARNINGS \
+            -Ihle -Irecomp/emitter/runtime -Ibackend -Ibackend/desktop tests/savestate/savestate_test.c \
+            backend/desktop/platform_desktop.c backend/desktop/coro_switch.c backend/desktop/savestate.c \
+            backend/desktop/sha256.c hle/state.c recomp/emitter/runtime/sh4_rt.c \
+            ${{ matrix.os == 'windows-latest' && '-Xlinker /DYNAMICBASE:NO' || '-no-pie -lm' }} -o savestate_test
+      - run: python tests/savestate/run_synthetic.py ./savestate_test
 
   # Desktop target with clang + Ninja, then run the hello-world.
   desktop:

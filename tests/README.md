@@ -13,3 +13,6 @@ it is unset. No fixture in this directory may be derived from the game.
   input and the SHA-256 of the title it was recorded on; a check file holds
   guest addresses and the values a good run had there (mode numbers, ring
   counts, positions). Neither contains any of the game's code or data.
+- `savestate/`: the save-state machinery (`backend/desktop/savestate.c`,
+  the fixed-address coroutines) on a synthetic run: saved by one process,
+  resumed by another (no game data). `docs/savestate.md`.

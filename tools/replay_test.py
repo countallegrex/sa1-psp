@@ -9,6 +9,14 @@ drift are reported but pass.  Skips cleanly (exit 0) when SA1_DUMP is unset.
 
   SA1_DUMP=..\\private\\dump\\sa1_us_1005 python tools/replay_test.py
   python tools/replay_test.py --update title_menu    # regenerate a check file
+  python tools/replay_test.py --savestate            # save states: load at 3000, identical at 6000
+
+--savestate records the scripted route (the M1 presses and the Emerald
+Coast pokes at 5290) in strict mode with --save 3000 and --save 6000 and
+--dump 6000, then replays the tape from the 3000 state to 6000 with the
+same --dump and --save: the RAM dumps must be byte-identical, and so must
+every chunk of the two 6000 states but the coroutine stacks (dead bytes
+between frames differ; docs/savestate.md section 5).
 
 The game data is $SA1_DUMP/data (1ST_READ.BIN and SONICADV/).  The
 executable is --exe, $SA1_EXE, or the first of build-desktop/ and
@@ -27,8 +35,15 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TAPES = os.path.join(ROOT, "tests", "replay")
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+import state_diff  # noqa: E402
 import tape_expect  # noqa: E402
 import tape_io  # noqa: E402
+
+# The scripted route (docs/m2-render-report.md section 2): title, Start, new
+# Sonic story, file select, Station Square, then the stage variables poked to
+# Emerald Coast act 1 at frame 5290 when Chaos 0 would load.
+ROUTE_PRESSES = ["--press", "500:8:4", "--press", "900:8:4", "--press", "1300:4:4", "--press", "1700:4:4", "--press", "2100:4:4"]
+ROUTE_POKES = ["--poke", "5290:8c7493ba:1:2", "--poke", "5290:8c7493bc:0:2", "--poke", "5290:8c7493be:1:2", "--poke", "5290:8c7493c0:0:2"]
 
 
 def tape_end(path):
@@ -73,9 +88,42 @@ def verdict(code, log):
     return ok, drift, why
 
 
+def savestate_check(exe, data, tmp, save_at=3000, end=6000):
+    """Straight run with saves at save_at and end, then a run loaded at save_at;
+    the dumps at end must be identical.  Returns 0 or 1."""
+    j = lambda name: os.path.join(tmp, name)  # noqa: E731
+    print("savestate: straight run to %d (save at %d and %d) ..." % (end, save_at, end))
+    code, text = run(exe, data, ["--record", j("route.tape"), "--frames", str(end), "--save", "%d:%s" % (save_at, j("a.state")),
+                                 "--save", "%d:%s" % (end, j("a_end.state")), "--dump", "%d:%s" % (end, j("a.bin"))] + ROUTE_PRESSES + ROUTE_POKES, j("a.log"))
+    if code != 0 or not os.path.isfile(j("a.state")):
+        print("savestate: FAIL the straight run exited %d; log %s" % (code, j("a.log")))
+        return 1
+    print("savestate: run loaded from %d to %d ..." % (save_at, end))
+    code, text = run(exe, data, ["--replay", j("route.tape"), "--load", j("a.state"), "--frames", str(end),
+                                 "--save", "%d:%s" % (end, j("b_end.state")), "--dump", "%d:%s" % (end, j("b.bin"))] + ROUTE_POKES, j("b.log"))
+    if code != 0 or not os.path.isfile(j("b.bin")):
+        print("savestate: FAIL the loaded run exited %d; log %s" % (code, j("b.log")))
+        return 1
+    a, b = open(j("a.bin"), "rb").read(), open(j("b.bin"), "rb").read()
+    if a != b:
+        first = next(i for i in range(min(len(a), len(b))) if a[i] != b[i])
+        print("savestate: FAIL the dumps at %d differ (%d bytes vs %d, first at guest 0x%08x)" % (end, len(a), len(b), 0x8C000000 + first))
+        return 1
+    ha, ca = state_diff.read_state(j("a_end.state"))
+    hb, cb = state_diff.read_state(j("b_end.state"))
+    bad = [na for (na, pa), (nb, pb) in zip(ca, cb) if (na != nb or pa != pb) and na not in ("stack", "stack.bytes")]
+    if len(ca) != len(cb) or bad:
+        print("savestate: FAIL the %d states differ outside the stacks: %s" % (end, ", ".join(bad) or "chunk count"))
+        return 1
+    print("savestate: pass  dump at %d identical (%d bytes); states at %d identical outside the stacks (%d chunks, %d bytes packed); state at %d is %d bytes"
+          % (end, len(a), end, len(ca), ha["packed_len"], save_at, os.path.getsize(j("a.state"))))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--exe", help="sa1psp executable")
+    ap.add_argument("--savestate", action="store_true", help="save-state self-check on the scripted route (docs/savestate.md section 5)")
     ap.add_argument("--update", metavar="NAME", action="append", default=[],
                     help="regenerate NAME.check from a traced replay of NAME.tape (repeatable)")
     ap.add_argument("--keep", action="store_true", help="keep the run logs (printed paths)")
@@ -98,6 +146,8 @@ def main(argv=None):
 
     tmp = tempfile.mkdtemp(prefix="sa1-replay-")
     watch = os.path.join(TAPES, "watch.txt")
+    if a.savestate:
+        return savestate_check(exe, data, tmp)
     for name in a.update:
         tape = os.path.join(TAPES, name + ".tape")
         trace, log = os.path.join(tmp, name + ".tsv"), os.path.join(tmp, name + "-update.log")

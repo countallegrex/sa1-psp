@@ -60,6 +60,43 @@ results screen. Then `python tools/replay_test.py --update sonic_ec1` and
 If the replay does not follow the recording, that is a determinism bug:
 keep the tape and report it.
 
+## Save states
+
+A save state (`docs/savestate.md`) is the run at one frame hook: guest RAM,
+the HLE's state outside it and the native stacks of the game's tasks. It
+loads back to exactly that point, so a debug run can start where the
+problem is instead of at the title. States are tied to one build of
+`sa1psp` (they hold native stacks; the loader checks the executable's
+hash) and hold guest RAM, so `*.state` is git-ignored.
+
+```
+sa1psp <1ST_READ.BIN> <data root> --strict --save 3000:ss.state --press 500:8:4 ...
+sa1psp <1ST_READ.BIN> <data root> --strict --load ss.state --frames 6000 --dump 6000:ram.bin ...
+```
+
+* `--save FRAME:FILE` (repeatable) writes the state at guest frame FRAME,
+  at the point where `--dump` writes: after that frame's `--poke`s.
+* `--load FILE` restores it before the first frame and continues; the
+  options of the loading run apply from there (`--frames`, `--dump`,
+  `--check`, `--replay` with the tape the saving run used, `--press`/`--poke`
+  for later frames). `--record` cannot be combined with `--load` (a tape
+  starts at frame 1). Check rows due before the loaded frame are skipped.
+* In the window, **F5** saves and **F8** loads `quick.state` in the current
+  directory (`--quick FILE` to rename). F8 works at any time in the run.
+* A load with another `--strict`/`--epoch`/`--aspect` setting than the save
+  is logged and allowed; strict runs then differ from the saving one.
+* `python tools/state_diff.py A.state [B.state]` lists a state's chunks or
+  reports the first difference between two.
+
+Proof (`python tools/replay_test.py --savestate`, with `SA1_DUMP`): the
+scripted route is recorded to a tape in strict mode with `--save 3000`,
+`--save 6000` and `--dump 6000`; a second run replays the tape from the
+3000 state to 6000 with the same `--dump` and `--save`. The 18 MB dumps
+are byte-identical, and the two 6000 states agree in every chunk but the
+coroutine stacks (28 dead bytes between frames). The 3000 state is 17 MB
+(36 MB of guest window and 6 MB of textures, packed as byte runs). CI runs
+the same machinery on synthetic data (`tests/savestate/`).
+
 ## Strict mode and what had to be pinned
 
 `--strict` (implied by `--record` and `--replay`) makes a run a function of
