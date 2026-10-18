@@ -2,10 +2,11 @@
 
     python tools/texsheet.py <dump dir> <out dir> [--tile 96] [--cols 8] [--rows 8]
 
-<dump dir> holds the PPMs the desktop build writes with --texdump DIR
-(named <index>_<gbix>_<fmt>_<flags>_<w>x<h>_<mips>.ppm).  Each sheet tiles
-up to cols x rows of them in index order, scaled to fit the tile (nearest
-neighbour, aspect kept, alpha ignored), with a label of index, pixel format
+<dump dir> holds the PAMs (RGB + alpha) the desktop build writes with
+--texdump DIR (named <index>_<gbix>_<fmt>_<flags>_<w>x<h>_<mips>.pam; plain
+PPMs are accepted too).  Each sheet tiles up to cols x rows of them in index
+order, scaled to fit the tile (nearest neighbour, aspect kept, alpha
+composited over a grey checkerboard), with a label of index, pixel format
 and data format under each; sheets are written as sheet_NNN.png to <out dir>
 and an index.txt lists which files went on which sheet.  To review: look at
 the sheets, note the index of every tile that looks wrong, and group the
@@ -45,11 +46,26 @@ FONT = {
 }
 
 
-def read_ppm(path):
+def read_image(path):
+    """PPM (P6, RGB) or PAM (P7, RGB_ALPHA): width, height, RGBA bytes."""
     d = open(path, 'rb').read()
+    if d.startswith(b'P7'):
+        hdr, body = d.split(b'ENDHDR\n', 1)
+        fields = dict(l.split(None, 1) for l in hdr.decode('latin-1').splitlines()[1:] if ' ' in l)
+        w, h, depth = int(fields['WIDTH']), int(fields['HEIGHT']), int(fields['DEPTH'])
+        if depth == 4:
+            return w, h, body[:w * h * 4]
+        out = bytearray()
+        for i in range(w * h):
+            out += body[i * depth:i * depth + 3] + b'\xff'
+        return w, h, bytes(out)
     parts = d.split(b'\n', 3)
     w, h = map(int, parts[1].split())
-    return w, h, parts[3]
+    pix = parts[3]
+    out = bytearray()
+    for i in range(w * h):
+        out += pix[i * 3:i * 3 + 3] + b'\xff'
+    return w, h, bytes(out)
 
 
 def write_png(path, w, h, rows):
@@ -87,7 +103,7 @@ def main(argv):
         elif argv[i] == '--cols': cols = int(argv[i + 1]); i += 2
         elif argv[i] == '--rows': rows = int(argv[i + 1]); i += 2
         else: print('unknown option', argv[i]); return 2
-    pat = re.compile(r'^(\d+)_(\d+)_([^_]+)_([^_]+)_(\d+)x(\d+)_(\d)\.ppm$')
+    pat = re.compile(r'^(\d+)_(\d+)_([^_]+)_([^_]+)_(\d+)x(\d+)_(\d)\.(?:ppm|pam)$')
     files = []
     for f in os.listdir(src):
         m = pat.match(f)
@@ -107,7 +123,7 @@ def main(argv):
         canvas = [bytearray(b'\x30' * (W * 3)) for _ in range(H)]
         for k, (idx, f, fmt, flags, w, h, mips) in enumerate(files[sheet * per:(sheet + 1) * per]):
             cx, cy = (k % cols) * cell_w + 2, (k // cols) * cell_h + 2
-            tw, th, pix = read_ppm(os.path.join(src, f))
+            tw, th, pix = read_image(os.path.join(src, f))
             s = min(tile / tw, tile / th)
             dw, dh = max(1, int(tw * s)), max(1, int(th * s))
             ox, oy = cx + (tile - dw) // 2, cy + (tile - dh) // 2
@@ -116,7 +132,11 @@ def main(argv):
                 row = canvas[oy + y]
                 for x in range(dw):
                     sx = min(tw - 1, int(x / s))
-                    row[(ox + x) * 3:(ox + x) * 3 + 3] = pix[(sy * tw + sx) * 3:(sy * tw + sx) * 3 + 3]
+                    k = (sy * tw + sx) * 4
+                    a = pix[k + 3]
+                    # alpha composited over an 8-px grey checkerboard, so transparency is visible
+                    bg = 0x90 if ((x // 8) + (y // 8)) & 1 else 0x60
+                    row[(ox + x) * 3:(ox + x) * 3 + 3] = bytes((pix[k + c] * a + bg * (255 - a)) // 255 for c in range(3))
             draw_text(canvas, W, cx, cy + tile + 2, '%04d %s' % (idx, fmt))
             draw_text(canvas, W, cx, cy + tile + 11, '%s %dx%d%s' % (flags, w, h, ' M' if mips == '1' else ''))
             index.write('sheet_%03d tile %2d: %s\n' % (sheet, k, f))

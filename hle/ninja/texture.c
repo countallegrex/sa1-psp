@@ -65,8 +65,8 @@ static const char *decode_name = "";      /* the texture being decoded, for the 
 static uint32_t decode_index;              /* running number of decodes (the review index) */
 static int decode_datafmt;
 /* Review aid (--texdump DIR / SA1_TEX_DUMP_DIR): every decoded texture as
- * <index>_<gbix>_<fmt>_<flags>_<w>x<h>_<mips>.ppm; tools/texsheet.py tiles
- * a directory of them into labelled contact sheets. */
+ * <index>_<gbix>_<fmt>_<flags>_<w>x<h>_<mips>.pam (RGB + alpha);
+ * tools/texsheet.py tiles a directory of them into labelled contact sheets. */
 static const char *dump_dir;
 static unsigned dump_min_w = 128;
 void texture_set_dump_dir(const char *dir, unsigned min_w) { dump_dir = dir; dump_min_w = min_w; }
@@ -113,17 +113,19 @@ static uint32_t decode_pvrt(const uint8_t *p, uint32_t n, int *out_w, int *out_h
     }
     if (dump_dir && w >= dump_min_w) {
         char path[512]; FILE *o;
-        snprintf(path, sizeof path, "%s/%04u_%u_%s_%s_%ux%u_%d.ppm", dump_dir, decode_index, info.gbix == PVR_NO_GINDEX ? 0 : info.gbix,
+        snprintf(path, sizeof path, "%s/%04u_%u_%s_%s_%ux%u_%d.pam", dump_dir, decode_index, info.gbix == PVR_NO_GINDEX ? 0 : info.gbix,
                  pixfmt_name(pixfmt), datafmt_name(datafmt), w, h, datafmt_mips(datafmt));
         sa1_log("texture: dump %04u = %s (%s %s %ux%u, gbix %u)", decode_index, decode_name, pixfmt_name(pixfmt), datafmt_name(datafmt), w, h, info.gbix);
         if ((o = fopen(path, "wb")) != NULL) {
-            fprintf(o, "P6\n%u %u\n255\n", w, h);
+            /* PAM, RGB + alpha (alpha 255 where the format has none), so the
+             * contact sheets can show transparency */
+            fprintf(o, "P7\nWIDTH %u\nHEIGHT %u\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", w, h);
             for (uint32_t i = 0; i < w * h; i++) {
-                uint16_t v = img[i]; uint8_t rgb[3];
-                if (fmt == DRAW_FMT_5650) { rgb[0] = (v & 31) << 3; rgb[1] = ((v >> 5) & 63) << 2; rgb[2] = ((v >> 11) & 31) << 3; }
-                else if (fmt == DRAW_FMT_5551) { rgb[0] = (v & 31) << 3; rgb[1] = ((v >> 5) & 31) << 3; rgb[2] = ((v >> 10) & 31) << 3; }
-                else { rgb[0] = (v & 15) << 4; rgb[1] = ((v >> 4) & 15) << 4; rgb[2] = ((v >> 8) & 15) << 4; }
-                fwrite(rgb, 1, 3, o);
+                uint16_t v = img[i]; uint8_t rgba[4];
+                if (fmt == DRAW_FMT_5650) { rgba[0] = (v & 31) << 3; rgba[1] = ((v >> 5) & 63) << 2; rgba[2] = ((v >> 11) & 31) << 3; rgba[3] = 255; }
+                else if (fmt == DRAW_FMT_5551) { rgba[0] = (v & 31) << 3; rgba[1] = ((v >> 5) & 31) << 3; rgba[2] = ((v >> 10) & 31) << 3; rgba[3] = (v & 0x8000) ? 255 : 0; }
+                else { rgba[0] = (v & 15) * 17; rgba[1] = ((v >> 4) & 15) * 17; rgba[2] = ((v >> 8) & 15) * 17; rgba[3] = ((v >> 12) & 15) * 17; }
+                fwrite(rgba, 1, 4, o);
             }
             fclose(o);
         }

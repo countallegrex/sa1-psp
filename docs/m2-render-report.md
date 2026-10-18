@@ -45,14 +45,16 @@ is where the sky-dome fault turned out to be (§8 item 1).
 **Review aids, for pointing at broken textures instead of hunting them:**
 
 - `--texdump DIR` writes every texture the HLE decodes as
-  `DIR/<index>_<gbix>_<fmt>_<flags>_<w>x<h>_<mips>.ppm` (fmt = 1555, 565,
+  `DIR/<index>_<gbix>_<fmt>_<flags>_<w>x<h>_<mips>.pam` (PAM, RGB plus
+  alpha; fmt = 1555, 565,
   4444, yuv, pal4, pal8; flags = tw, twmip, vq, vqmip, svq, svqmip, rect,
   stride, twrect, pal4tw, ...; mips 0/1), and logs
   `texture: dump <index> = <name>` so an index maps back to the texture's
   name and archive.
 - `python tools/texsheet.py DIR OUT` tiles a dump directory into labelled
-  contact sheets (8x8 tiles of 96 px, label = index, format, flags, size)
-  as `OUT/sheet_NNN.png` with an `index.txt`.
+  contact sheets (8x8 tiles of 96 px, label = index, format, flags, size,
+  alpha composited over a grey checkerboard) as `OUT/sheet_NNN.png` with
+  an `index.txt`.
 - F9 in the window (or `--mark FRAME` from a script) saves
   `DIR/mark_<frame>.ppm` and logs the indices and formats of every texture
   bound in that frame (`mark:` lines), so a broken thing on screen can be
@@ -81,8 +83,14 @@ entries, none with 16, 32 or 128; 16x16: 16 entries; the 64x64 values are
 the tools' documented ones, not seen on the route). Unit tests cover
 16x16 and 32x32, with and without mipmaps, in all three formats, each
 chunk carrying the slack. The 92 tiles regenerated with the fix are in
-`..\private\texreview\recheck\sheets\sheet_000.png` for the maintainer to
-confirm.
+`..\private\texreview\recheck\sheets\sheet_000.png`; the maintainer confirmed
+90 and queried two plain green gradients (1292 and 1539, both
+`kanbandaigreen`, ARGB4444): decoded with alpha they are one texture, a
+uniform green whose alpha ramps row by row from 0 at the top to 255 at the
+bottom, which is an alpha gradient, not a decode fault (a wrong codebook or
+index base scrambles such a ramp). The dumps carry alpha since, and the
+sheets composite it over a checkerboard, so transparent textures are
+judgeable; the full set with alpha is in `..\private\texreview\sheets_alpha\`.
 
 ## 1. What draws, and how
 
