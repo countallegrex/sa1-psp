@@ -120,7 +120,10 @@ void sa1_watch_check(const char *where) {
     }
 }
 
+void (*sa1_depth_hook)(void);
+
 void sa1_call(sh4_ctx *c, uint32_t addr) {
+    if (sa1_depth_hook) sa1_depth_hook();
     if (sa1_watch_addr) sa1_watch_check("indirect call");
     sa1_fn fn = sa1_fn_lookup(addr);
     if (fn == NULL) {
@@ -214,6 +217,7 @@ static sa1_hit *sa1_hit_slot(uint32_t addr, const char *name) {
 static uint32_t hit_last_addr, hit_repeat, hit_frame;
 
 void sa1_seam_hit(uint32_t addr, const char *name) {
+    if (sa1_depth_hook) sa1_depth_hook();
     if (sa1_watch_addr) sa1_watch_check(name);
     sa1_hit *h = sa1_hit_slot(addr, name);
     if (h) h->hits++;
@@ -256,7 +260,10 @@ void sa1_ram_badaddr(uint32_t a, uint32_t d, int write) {
     for (uint32_t i = 0; i < bad_n; i++) if (bad_recs[i].addr == addr) { bad_recs[i].hits++; return; }
     if (bad_n == BAD_MAX) { bad_other++; return; }
     bad_recs[bad_n].addr = addr; bad_recs[bad_n].hits = 1; bad_recs[bad_n].first_frame = f; bad_recs[bad_n].write = write; bad_n++;
-    sa1_log("guest %s outside RAM: 0x%08x (base 0x%08x + %u) at frame %u; masked into RAM offset 0x%x", write ? "write" : "read", addr, a, d, f, addr & SA1_RAM_MASK);
+    if (sa1_off(addr) >= SA1_NULL_OFF)
+        sa1_log("guest %s outside RAM: 0x%08x (base 0x%08x + %u) at frame %u; a NULL pointer: sent to the null page", write ? "write" : "read", addr, a, d, f);
+    else
+        sa1_log("guest %s outside RAM: 0x%08x (base 0x%08x + %u) at frame %u; masked into RAM offset 0x%x", write ? "write" : "read", addr, a, d, f, addr & SA1_RAM_MASK);
     if (sa1_badaddr_hook) sa1_badaddr_hook(addr);
     if (getenv("SA1_RAM_TRAP")) { sa1_log("SA1_RAM_TRAP set: aborting"); abort(); }
 }

@@ -34,6 +34,8 @@ local syncs, next_sync, offset, aligned, last_mode, unaligned_since = {}, 1, 0, 
 local START_TAP = {8, 0, 0, 0, 0}
 local LOOKAHEAD = 4          -- desktop mode changes the console may skip before a match
 local out, vblank, done = nil, 0, false
+local last_ag = -1
+function sa1_oracle_aligned_g() return last_ag end   -- for wrapper scripts (screenshots at a desktop game frame)
 local NEUTRAL = {0, 0, 0, 0, 0}
 
 local function load()
@@ -108,6 +110,7 @@ local function on_vblank()
     end
   end
   local ag = aligned and g - offset or -1
+  last_ag = ag
   local p = aligned and pads[ag] or NEUTRAL
   local waited = vblank - unaligned_since
   if not aligned and waited >= 120 and waited % 60 < 2 then p = START_TAP end

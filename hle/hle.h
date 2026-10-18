@@ -11,7 +11,7 @@
 /* ---- guest memory ------------------------------------------------------ */
 /* Host pointer to a guest address; valid until the next call that may move
  * sa1_ram (none do, but keep uses short). */
-static inline uint8_t *hle_ptr(uint32_t addr) { return sa1_ram + (addr & SA1_RAM_MASK); }
+static inline uint8_t *hle_ptr(uint32_t addr) { return sa1_ram + sa1_off(addr); }
 static inline uint32_t hle_rd32(uint32_t a) { return RD32(a, 0); }
 static inline uint32_t hle_rd16(uint32_t a) { return RD16(a, 0); }
 static inline uint32_t hle_rd8(uint32_t a) { return RD8(a, 0); }

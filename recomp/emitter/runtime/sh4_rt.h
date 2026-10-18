@@ -49,8 +49,27 @@ typedef struct sa1_fn_entry {
  * pages cost nothing there): a few game accesses to control registers
  * (0xFFxxxxxx) through a register, not a constant, mask into its top.  The
  * PSP backend must wrap those (M4) or allocate SIZE + EXTRA only. */
-#define SA1_RAM_ALLOC (2u * SA1_RAM_SIZE + SA1_RAM_SLACK)
+/* The null page.  Area 0 (guest 0x00000000-0x01FFFFFF, the boot ROM, and
+ * its P1 alias 0x80000000) is where a NULL pointer points.  On the console
+ * a write there is dropped and a read returns ROM bytes; under the flat
+ * mask alone both would hit RAM offset 0, where the BIOS syscall vectors
+ * live (0x8C0000B0-BC, E0): the Emerald Coast dolphin's motion callback
+ * writes a 256-byte block through a NULL pointer, and the second exit-test
+ * run died 4,800 frames later calling through a clobbered vector
+ * (docs/m2-render-report.md section 9).  So area-0 accesses go to their
+ * own 2 MB above the window: a read sees what was written there, never
+ * RAM.  The test (a & 0x3E000000) == 0 catches P0 and P1 area 0 and leaves
+ * the store queues (0xE0...) and RAM (0x0C/0x8C/0xAC) on the mask; P2 area
+ * 0 (0xA0...) is not caught (the game never forms it).  One test and a
+ * conditional move per access; constant addresses fold away. */
+#define SA1_NULL_OFF  (2u * SA1_RAM_SIZE)
+#define SA1_NULL_SIZE 0x00200000u
+#define SA1_RAM_ALLOC (2u * SA1_RAM_SIZE + SA1_NULL_SIZE + SA1_RAM_SLACK)
 extern uint8_t *sa1_ram;
+static inline uint32_t sa1_off(uint32_t a) {
+    uint32_t off = a & SA1_RAM_MASK;
+    return (a & 0x3E000000u) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;
+}
 
 typedef uint8_t  __attribute__((may_alias)) sa1_u8a;
 typedef uint16_t __attribute__((may_alias)) sa1_u16a;
@@ -70,8 +89,8 @@ typedef float    __attribute__((may_alias)) sa1_f32a;
  * section 7), would silently land in RAM under the mask: it is logged once
  * per address with the guest call stack (sa1_badaddr_hook), counted, and
  * listed by sa1_seam_report; SA1_RAM_TRAP=1 aborts on the first one.  The
- * access itself still goes to the masked RAM byte, so a run behaves as
- * before.  Release builds compile the bare mask. */
+ * access itself goes where every build sends it (the masked RAM byte, or
+ * the null page for area 0), so a run behaves as a release one. */
 void sa1_ram_badaddr(uint32_t a, uint32_t d, int write);
 static inline int sa1_addr_ok(uint32_t a) {
     return ((a & 0xDFFFFFFFu) - 0x8C000000u) < SA1_RAM_SIZE + SA1_RAM_EXTRA   /* 0x8C/0xAC: RAM and the extra area */
@@ -80,12 +99,12 @@ static inline int sa1_addr_ok(uint32_t a) {
 }
 static inline uint8_t *sa1_ramp_checked(uint32_t a, int32_t d, int write) {
     if (__builtin_expect(!sa1_addr_ok(a), 0)) sa1_ram_badaddr(a, (uint32_t)d, write);
-    return sa1_ram + (((uint32_t)(a) & SA1_RAM_MASK) + d);
+    return sa1_ram + (sa1_off((uint32_t)(a)) + d);
 }
 #define RAMP(a, d)   sa1_ramp_checked((uint32_t)(a), (int32_t)(d), 0)
 #define RAMPW(a, d)  sa1_ramp_checked((uint32_t)(a), (int32_t)(d), 1)
 #else
-#define RAMP(a, d)   (sa1_ram + (((uint32_t)(a) & SA1_RAM_MASK) + (d)))
+#define RAMP(a, d)   (sa1_ram + (sa1_off((uint32_t)(a)) + (d)))
 #define RAMPW(a, d)  RAMP(a, d)
 #endif
 #define RD8(a, d)    ((uint32_t)*(const sa1_u8a *)RAMP(a, d))
@@ -140,6 +159,10 @@ void sa1_trace_dump(void (*cb)(void *fn, uint32_t first_frame, uint32_t hits, vo
 extern uint32_t (*sa1_trace_frame)(void);
 /* Called by sa1_trap before abort(), if set (the backend prints its report). */
 extern void (*sa1_trap_hook)(sh4_ctx *c, uint32_t pc, const char *what);
+/* Called at every indirect call and HLE entry, if set: the backend's host
+ * stack probe (depth high-water mark; traps before an unbounded guest
+ * recursion overflows the host stack). */
+extern void (*sa1_depth_hook)(void);
 /* Called on the first access to each guest address outside RAM (SA1_RAM_CHECK
  * builds); the desktop backend prints the host backtrace, which names the
  * recompiled functions on the guest call stack. */

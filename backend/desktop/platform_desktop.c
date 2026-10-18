@@ -108,6 +108,8 @@ static sa1_coro main_coro;
 #ifdef _WIN32
 static VOID CALLBACK coro_start(LPVOID p) {
     sa1_coro *co = (sa1_coro *)p;
+    ULONG guarantee = 64 * 1024;      /* room for the crash handler when this stack overflows (main.c) */
+    SetThreadStackGuarantee(&guarantee);
     co->fn(co->arg);
     sa1_log("coroutine: entry function returned; back to main");
     for (;;) SwitchToFiber(main_coro.fiber);

@@ -6,7 +6,7 @@
  *          [--stick FRAME:X:Y[:HOLD]]... [--poke FRAME:ADDR:VALUE[:SIZE]]... [--dump FRAME:FILE]...
  *          [--texdump DIR]  (every decoded texture as PPM; F9 in the window, or --mark FRAME, saves a
  *                            screenshot there and logs the textures bound in that frame)
- *          [--aspect wide|4:3] [--no-pad]
+ *          [--aspect wide|4:3] [--no-pad] [--goto FRAME:X:Z[:RADIUS]]...
  *
  * Without --headless an SDL2 window opens at 480x272 times --scale (2 by
  * default) with an OpenGL 1.x fixed-function context (backend/draw.h), and
@@ -48,6 +48,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -56,7 +57,10 @@
 void fn_8c010000(sh4_ctx *c);
 void plat_set_data_root(const char *root);
 void plat_backtrace(void);
+void plat_backtrace_ctx(void *context);
 void plat_trace_dump(const char *path);
+void draw_gl_pace(uint32_t frame);    /* draw_gl.c: fixed 60 Hz pacing of guest frames */
+uint32_t hle_task_running(void);      /* hle/game/tasks.c */
 void plat_watchdog_start(uint32_t (*frame)(void), unsigned seconds);
 void plat_hw_watch(uint32_t guest_addr, int len);
 static const char *trace_path;
@@ -92,9 +96,49 @@ static void log_sink(const char *line) {
     if (log_file) fflush(log_file);
 }
 
+/* ---- host stack probe (sa1_depth_hook) ------------------------------------
+ * Every indirect call and HLE entry samples how much of the running stack
+ * (the main thread's, or a task coroutine's fiber: hle/game/tasks.c) is in
+ * use.  The high-water marks are reported at exit, and a sample within
+ * STACK_MARGIN of the end traps with the guest call stack before the
+ * overflow: the maintainer's second exit-test run died of exception 0xC00000FD at
+ * frame 23,274 with no trace, in 0x8C040880's recursion over an object
+ * tree. */
+#define STACK_MARGIN (160u * 1024u)
+static struct { uintptr_t hi; uint32_t size, high, task; } stack_recs[48];
+static int stack_nrecs, stack_tripped;
+static uint32_t stack_main_high, stack_task_high, stack_task_high_task;
+#ifdef _WIN32
+static void stack_probe(void) {
+    ULONG_PTR lo, hi;
+    GetCurrentThreadStackLimits(&lo, &hi);
+    char here;
+    uint32_t used = (uint32_t)(hi - (uintptr_t)&here), size = (uint32_t)(hi - lo);
+    uint32_t task = hle_task_running();
+    if (task) { if (used > stack_task_high) { stack_task_high = used; stack_task_high_task = task; } }
+    else if (used > stack_main_high) stack_main_high = used;
+    if (used + STACK_MARGIN > size && !stack_tripped) {
+        stack_tripped = 1;
+        sa1_log("stack: %u KB of the %u KB host stack in use on %s%08x: unbounded guest recursion; trapping before the overflow",
+                used / 1024, size / 1024, task ? "task 0x" : "the main context 0x", task);
+        plat_backtrace();
+        sa1_trap(&ctx, 0, "host stack nearly exhausted (guest recursion)");
+    }
+}
+#else
+static void stack_probe(void) { }
+#endif
+static void stack_report(void) {
+    sa1_log("stack: high-water main %u KB; tasks %u KB (task 0x%08x) of %u KB each", stack_main_high / 1024,
+            stack_task_high / 1024, stack_task_high_task, 1024u);
+}
+
 #ifdef _WIN32
 /* A host crash (an out-of-range guest access, usually) prints where the
- * recompiled code was before the process dies. */
+ * recompiled code was before the process dies.  The handler runs on the
+ * faulting stack, so main() and every fiber keep 64 KB in reserve
+ * (SetThreadStackGuarantee) for the stack-overflow case; the backtrace is
+ * walked from the exception context. */
 static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
     sa1_log("crash: exception 0x%08lx at %p (guest frame %u)", ep->ExceptionRecord->ExceptionCode,
             ep->ExceptionRecord->ExceptionAddress, hle_frame_count());
@@ -103,7 +147,13 @@ static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
                 ep->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
                 (void *)ep->ExceptionRecord->ExceptionInformation[1], (void *)sa1_ram,
                 (unsigned long long)((uint8_t *)ep->ExceptionRecord->ExceptionInformation[1] - sa1_ram));
-    plat_backtrace();
+    if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+        uint32_t task = hle_task_running();
+        sa1_log("crash: host stack overflow on %s%08x", task ? "task 0x" : "the main context 0x", task);
+    }
+    plat_backtrace_ctx(ep->ContextRecord);
+    input_tape_finish(4, "crash");
+    stack_report();
     if (log_file) fflush(log_file);
     return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -113,6 +163,7 @@ static void report_and_exit(int code) {
     code = input_tape_finish(code, NULL);
     sa1_log("exit: %u frames, %.3f s", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6);
     kamui_report();
+    stack_report();
     sa1_seam_report(getenv("SA1_REPORT_TOP") ? atoi(getenv("SA1_REPORT_TOP")) : 30);
     draw_shutdown();
     if (trace_path) plat_trace_dump(trace_path);
@@ -129,6 +180,7 @@ static void on_trap(sh4_ctx *c, uint32_t pc, const char *what) {
     input_tape_finish(3, "trap");
     plat_backtrace();
     sa1_log("exit: trap after %u frames, %.3f s", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6);
+    stack_report();
     sa1_seam_report(30);
     if (trace_path) plat_trace_dump(trace_path);
     if (log_file) fclose(log_file);
@@ -160,9 +212,67 @@ static void task_check(uint32_t frame) {
     for (int i = 0; i < 8; i++) task_check_list(hle_rd32(0x8C79F04Cu + 4u * (uint32_t)i), 0, 0, frame);
 }
 
+/* --goto FRAME:X:Z[:RADIUS] (debug aid): a waypoint autopilot.  From FRAME
+ * on, the stick steers the player toward (X, Z) in world space (position
+ * 0x8C6BAD10/18, tests/replay/watch.txt); within RADIUS (default 40) the
+ * next --goto takes over.  The stick is camera-relative, so the mapping
+ * from stick to world is calibrated from the movement it produces (the
+ * first window pushes straight up) and re-estimated every 15 frames; no
+ * progress for 90 frames means a wall: the heading is swung 70 degrees to
+ * alternate sides and A is tapped (a jump) every 30 frames.  This is how
+ * the Emerald Coast pier (the second exit-test crash) is reached headlessly:
+ * docs/m2-render-report.md section 9. */
+#define GOTO_MAX 32
+#define PLAYER_POS 0x8C6BAD10u
+static struct { uint32_t frame; float x, z, r; } gotos[GOTO_MAX];
+static int ngotos, goto_cur, goto_cal, goto_nudge;
+static float goto_theta, goto_best = 1e30f, goto_px0, goto_pz0, goto_ux, goto_uz;
+static uint32_t goto_progress_frame;
+static int goto_step(uint32_t frame, int *sx, int *sy, uint32_t *buttons) {
+    if (goto_cur >= ngotos || frame < gotos[goto_cur].frame) return 0;
+    float px = hle_rdf(PLAYER_POS), py = hle_rdf(PLAYER_POS + 4), pz = hle_rdf(PLAYER_POS + 8);
+    float dx = gotos[goto_cur].x - px, dz = gotos[goto_cur].z - pz, dist = sqrtf(dx * dx + dz * dz);
+    if (dist <= gotos[goto_cur].r) {
+        sa1_log("goto: waypoint %d (%.0f, %.0f) reached at frame %u; player (%.0f, %.0f, %.0f)", goto_cur, gotos[goto_cur].x, gotos[goto_cur].z, frame, px, py, pz);
+        goto_cur++; goto_best = 1e30f; goto_progress_frame = frame;
+        *sx = *sy = 0;
+        return 1;
+    }
+    if (dist < goto_best - 1.0f) { goto_best = dist; goto_progress_frame = frame; }
+    if (frame % 15 == 0) {                        /* calibrate stick -> world from the movement */
+        float mx = px - goto_px0, mz = pz - goto_pz0, ml = sqrtf(mx * mx + mz * mz);
+        if (ml > 6.0f && (goto_ux != 0.0f || goto_uz != 0.0f)) {
+            float th = atan2f(mz, mx) - atan2f(goto_uz, goto_ux), d = th - goto_theta;
+            while (d > 3.14159f) d -= 6.28318f;
+            while (d < -3.14159f) d += 6.28318f;
+            goto_theta = goto_cal ? goto_theta + 0.5f * d : th;
+            goto_cal = 1;
+        }
+        goto_px0 = px; goto_pz0 = pz;
+    }
+    float wx = dx / dist, wz = dz / dist;         /* wanted world heading */
+    uint32_t stuck = frame - goto_progress_frame;
+    if (stuck > 90) {                             /* a wall: swing the heading, jump */
+        float ang = (goto_nudge & 1) ? 1.22f : -1.22f, ca = cosf(ang), sa = sinf(ang);
+        float tx = wx * ca - wz * sa, tz = wx * sa + wz * ca; wx = tx; wz = tz;
+        if (stuck % 30 == 0) *buttons |= 4;
+        if (stuck % 150 == 0) goto_nudge++;
+    }
+    float ux, uz;                                 /* stick as a vector: x right, "up" = -y */
+    if (!goto_cal) { ux = 0.0f; uz = 1.0f; }
+    else { float c = cosf(goto_theta), s = sinf(goto_theta); ux = wx * c + wz * s; uz = -wx * s + wz * c; }
+    if (frame % 15 == 0) { goto_ux = ux; goto_uz = uz; }
+    *sx = (int)(ux * 127.0f); *sy = (int)(-uz * 127.0f);
+    if (frame % 300 == 0)
+        sa1_log("goto: frame %u player (%.0f, %.0f, %.0f) -> waypoint %d (%.0f, %.0f) dist %.0f, theta %.2f, stick %d,%d%s",
+                frame, px, py, pz, goto_cur, gotos[goto_cur].x, gotos[goto_cur].z, dist, goto_theta, *sx, *sy, stuck > 90 ? " (stuck)" : "");
+    return 1;
+}
+
 static void on_frame(uint32_t frame) {
     sa1_watch_check("frame");
     task_check(frame);
+    if (!headless) draw_gl_pace(frame);
     uint32_t b = 0;
     int scripted = 0;
     for (int i = 0; i < npresses; i++)
@@ -170,6 +280,7 @@ static void on_frame(uint32_t frame) {
     int sx = 0, sy = 0, stick_scripted = 0;
     for (int i = 0; i < nsticks; i++)
         if (frame >= sticks[i].frame && frame < sticks[i].frame + sticks[i].hold) { sx = sticks[i].x; sy = sticks[i].y; stick_scripted = 1; }
+    { int gx, gy; if (goto_step(frame, &gx, &gy, &b)) { sx = gx; sy = gy; stick_scripted = 1; scripted = 1; } }
     hle_pad live = {0};
     int quit = 0;
     if (!headless && draw_poll_input(&live, &quit) == 0) {
@@ -259,6 +370,14 @@ int main(int argc, char **argv) {
             shots[nshots].path = *end == ':' ? end + 1 : "frame.ppm";
             nshots++;
         }
+        else if (!strcmp(argv[i], "--goto") && i + 1 < argc && ngotos < GOTO_MAX) {   /* FRAME:X:Z[:RADIUS] */
+            char *spec = argv[++i], *end;
+            gotos[ngotos].frame = (uint32_t)strtoul(spec, &end, 0);
+            gotos[ngotos].x = *end == ':' ? strtof(end + 1, &end) : 0.0f;
+            gotos[ngotos].z = *end == ':' ? strtof(end + 1, &end) : 0.0f;
+            gotos[ngotos].r = *end == ':' ? strtof(end + 1, &end) : 40.0f;
+            ngotos++;
+        }
         else if (!strcmp(argv[i], "--stick") && i + 1 < argc && nsticks < PRESS_MAX) {   /* FRAME:X:Y[:HOLD], -128..127 */
             char *spec = argv[++i], *end;
             sticks[nsticks].frame = (uint32_t)strtoul(spec, &end, 0);
@@ -287,7 +406,9 @@ int main(int argc, char **argv) {
     sa1_set_log_sink(log_sink);
 #ifdef _WIN32
     SetUnhandledExceptionFilter(on_crash);
+    { ULONG guarantee = 64 * 1024; SetThreadStackGuarantee(&guarantee); }
 #endif
+    sa1_depth_hook = stack_probe;
     sa1_trap_hook = on_trap;
     sa1_badaddr_hook = on_badaddr;
     hle_frame_hook = on_frame;

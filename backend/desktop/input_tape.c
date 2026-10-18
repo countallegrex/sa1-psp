@@ -4,7 +4,9 @@
  *   --strict            guest time is exactly 1/60 s per frame (hle.h,
  *                       hle_strict) and the clock starts at a fixed epoch
  *   --epoch SECONDS     the real-time clock's start (Unix time) in strict mode
- *   --record FILE       write the pad of every guest frame to FILE (implies --strict)
+ *   --record FILE       write the pad of every guest frame to FILE (implies
+ *                       --strict); the file is complete on disk after every
+ *                       frame, so a crash keeps the run up to that frame
  *   --replay FILE       feed FILE's pad frame by frame, overriding the real
  *                       pad (implies --strict; --press buttons still add on)
  *   --check FILE        compare guest memory with FILE's rows; any primary
@@ -92,17 +94,28 @@ static uint32_t tape_frames;           /* replay: frames 1..tape_frames-1 are de
 static FILE *rec;
 static tape_pad rec_last;
 static uint32_t rec_first, rec_count, rec_end;
+static long rec_run_pos = -1;          /* file offset of the open run's line */
 
 static int pad_eq(const tape_pad *a, const tape_pad *b) {
     return a->buttons == b->buttons && a->x == b->x && a->y == b->y && a->lt == b->lt && a->rt == b->rt;
 }
 
-static void rec_flush(void) {
+/* The open run is (re)written in place and flushed to disk every frame, so
+ * a crash or a kill loses nothing but the "end" line (the tape of the
+ * second exit-test run was 4 KB of a 23,000-frame run: stdio's buffer). */
+static void rec_write_run(void) {
     if (!rec || !rec_count) return;
+    if (rec_run_pos < 0) rec_run_pos = ftell(rec);
+    fseek(rec, rec_run_pos, SEEK_SET);
     fprintf(rec, "%u %x %d %d %u %u", rec_first, rec_last.buttons, rec_last.x, rec_last.y, rec_last.lt, rec_last.rt);
     if (rec_count > 1) fprintf(rec, " %u", rec_count);
     fputc('\n', rec);
+    fflush(rec);
+}
+static void rec_flush(void) {
+    rec_write_run();
     rec_count = 0;
+    rec_run_pos = -1;
 }
 
 static int load_tape(const char *path) {
@@ -352,6 +365,7 @@ uint32_t input_tape_pad(uint32_t frame, uint32_t buttons, int scripted) {
         if (rec_count && pad_eq(&p, &rec_last) && rec_first + rec_count == frame) rec_count++;
         else { rec_flush(); rec_last = p; rec_first = frame; rec_count = 1; }
         rec_end = frame;
+        rec_write_run();
     }
     return buttons;
 }

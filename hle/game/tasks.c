@@ -210,3 +210,5 @@ void fn_8c099b2c(sh4_ctx *c) {
 }
 
 uint32_t hle_task_switches(void) { return switches; }
+/* The guest task record whose coroutine runs now (0: the main context). */
+uint32_t hle_task_running(void) { return running && running->coro != sa1_plat_coro_main() ? running->task : 0; }

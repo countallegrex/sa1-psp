@@ -47,6 +47,7 @@ static SDL_GameController *pad;
 #define DC_H 480.0f
 
 static int headless = 1, win_w = 480, win_h = 272;
+static int pace_on;                       /* fixed 60 Hz pacing (draw_gl_pace); off with SA1_NOVSYNC */
 static draw_stats stats;
 static draw_state cur;
 static int cur_valid;
@@ -181,9 +182,13 @@ int draw_init(int scale, int want_headless) {
     if (!win) { sa1_log("draw: window: %s", SDL_GetError()); return -1; }
     glctx = SDL_GL_CreateContext(win);
     if (!glctx) { sa1_log("draw: GL context: %s", SDL_GetError()); return -1; }
-    SDL_GL_SetSwapInterval(getenv("SA1_NOVSYNC") ? 0 : 1);   /* SA1_NOVSYNC=1: run unpaced, for timing */
+    pace_on = getenv("SA1_NOVSYNC") == NULL;
+    SDL_GL_SetSwapInterval(pace_on ? 1 : 0);   /* SA1_NOVSYNC=1: run unpaced, for timing */
     sa1_log("draw: GL %s on %s, window %dx%d", (const char *)glGetString(GL_VERSION),
             (const char *)glGetString(GL_RENDERER), win_w, win_h);
+    SDL_DisplayMode mode;
+    if (SDL_GetWindowDisplayMode(win, &mode) == 0)
+        sa1_log("draw: display %d Hz; %s", mode.refresh_rate, pace_on ? "guest frames paced to 60 Hz (vsync on against tearing)" : "unpaced (SA1_NOVSYNC)");
     for (int i = 0; i < SDL_NumJoysticks(); i++)
         if (SDL_IsGameController(i)) { pad = SDL_GameControllerOpen(i); if (pad) break; }
     sa1_log("draw: controller %s", pad ? SDL_GameControllerName(pad) : "none (keyboard: arrows, Z=A X=B A=X S=Y Enter=Start Q/E=L/R)");
@@ -246,6 +251,27 @@ void draw_end_frame(void) {
 #ifndef SA1_NO_SDL
     if (headless) return;
     SDL_GL_SwapWindow(win);
+#endif
+}
+
+/* Pacing (desktop only, main.c calls it once per guest frame): guest frame
+ * N is due at t0 + N / 60 s, whatever the display's refresh rate; vsync
+ * only stops tearing.  Sleep to within 2 ms of the deadline, then spin.
+ * If the run falls more than a quarter second behind (loading, a dragged
+ * window) the clock is re-based instead of fast-forwarding. */
+static uint64_t pace_t0;
+static uint32_t pace_frame0;
+void draw_gl_pace(uint32_t frame) {
+#ifndef SA1_NO_SDL
+    if (headless || !pace_on) return;
+    uint64_t now = sa1_plat_time_us();
+    if (!pace_t0) { pace_t0 = now; pace_frame0 = frame; return; }
+    uint64_t due = pace_t0 + (uint64_t)(frame - pace_frame0) * 1000000ull / 60ull;
+    if (now > due + 250000ull) { pace_t0 = now; pace_frame0 = frame; return; }
+    if (due > now + 2500ull) SDL_Delay((Uint32)((due - now - 2000ull) / 1000ull));
+    while (sa1_plat_time_us() < due) { }
+#else
+    (void)frame;
 #endif
 }
 

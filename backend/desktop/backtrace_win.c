@@ -155,6 +155,13 @@ void plat_hw_watch(uint32_t guest_addr, int len) {
     if (th) { WaitForSingleObject(th, 5000); CloseHandle(th); }
 }
 
+/* The guest call stack from an exception context (the crash handler: a
+ * stack overflow leaves no room to capture our own). */
+void plat_backtrace_ctx(void *context) {
+    sym_init();
+    walk_ctx(GetCurrentThread(), (CONTEXT *)context, "host backtrace at the exception:");
+}
+
 void plat_backtrace(void) {
     HANDLE proc = GetCurrentProcess();
     sym_init();
@@ -176,6 +183,7 @@ void plat_backtrace(void) {
 }
 #else
 void plat_backtrace(void) { sa1_log("host backtrace: not available on this platform"); }
+void plat_backtrace_ctx(void *context) { (void)context; plat_backtrace(); }
 void plat_trace_dump(const char *path) { (void)path; }
 void plat_watchdog_start(uint32_t (*frame)(void), unsigned seconds) { (void)frame; (void)seconds; }
 void plat_hw_watch(uint32_t guest_addr, int len) { (void)guest_addr; (void)len; sa1_log("hwwatch: not available on this platform"); }
