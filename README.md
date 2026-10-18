@@ -331,6 +331,28 @@ Each one has a single exit test. Do not start the next before the test passes.
       **private** until this passes `tools/check_clean.py --all`, and it is
       made public only after the maintainer explicitly says so at that point.
 
+### After M6: features roadmap (decided 2026-10-18)
+
+Not milestones; none blocks M7. Each is small because the port owns the
+renderer, the SDK layer and a per-function native-replacement mechanism.
+Ordered by cost, cheapest first.
+
+| Feature | What | Mechanism | Needs from Sega | Earliest |
+|---|---|---|---|---|
+| **Save states** | Save/restore anywhere | Serialise guest RAM + runtime state (the replay harness already serialises most of it) to a file on the card | nothing | after M5 |
+| **Practice tools** | Level select, instant retry, act/speedrun timers | The level/act/GameMode variables and pokes the test harness already uses, behind a menu | nothing | after M5 |
+| **Skip cutscenes** | Start skips an event | Native replacement of the event runner's input check | nothing | after M5 |
+| **Button remap + analog dead zone** | Settings menu; the PSP nub needs its own curve | Backend pad layer | nothing | with M4 |
+| **Voice language** | Japanese or English voices (both are on the US disc) | File-path switch in the sound HLE | nothing | with M3 |
+| **Texture packs** | Replace textures by name | `mods/` overlay folder applied before asset conversion in the launcher | nothing | with M7 |
+| **"Internet" option** | The 1999 online menu: event packs (Christmas, Halloween, Twinkle Circuit, special Chao) and rankings | Replace the on-disc browser with an offline installer for user-supplied preserved event packs; rankings local or a community board | the event packs (user-supplied, never shipped) | after M6 |
+| **VMU support** | Saves (M6), the 48x32 LCD widget, and **Chao Adventure** | Saves: a file. LCD: optional HUD corner. Chao Adventure: emulate the VMU's 8-bit core (reference: Flycast's VMU emulation) and pair the in-game Chao transfer with a saved VMU image; the VMU program comes off the user's own disc | nothing beyond the disc | after M6 |
+
+Also noted, not committed to: a 60 fps mode for the desktop build (the game
+ticks logic at 60 and draws every second tick), a camera option (SADX and
+SARecomp as references), the leftover debug menus as a cheat menu, and code
+mods as build-time function replacements (the same mechanism as the seam).
+
 ## 9. Risks, ranked
 
 1. **Emitted code size on PSP.** Could exceed RAM outright. Measured in M0;
