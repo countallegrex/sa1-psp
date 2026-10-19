@@ -48,7 +48,7 @@ typedef struct sa1_fn_entry {
 /* The desktop allocates the whole 32 MB window the mask can reach (untouched
  * pages cost nothing there): a few game accesses to control registers
  * (0xFFxxxxxx) through a register, not a constant, mask into its top.  The
- * PSP backend must wrap those (M4) or allocate SIZE + EXTRA only. */
+ * PSP allocates SIZE + EXTRA only (SA1_COMPACT_RAM below). */
 /* The null page.  Area 0 (guest 0x00000000-0x01FFFFFF, the boot ROM, and
  * its P1 alias 0x80000000) is where a NULL pointer points.  On the console
  * a write there is dropped and a read returns ROM bytes; under the flat
@@ -62,14 +62,32 @@ typedef struct sa1_fn_entry {
  * the store queues (0xE0...) and RAM (0x0C/0x8C/0xAC) on the mask; P2 area
  * 0 (0xA0...) is not caught (the game never forms it).  One test and a
  * conditional move per access; constant addresses fold away. */
-#define SA1_NULL_OFF  (2u * SA1_RAM_SIZE)
 #define SA1_NULL_SIZE 0x00200000u
+/* The PSP (SA1_COMPACT_RAM, on by default there) cannot spend 14 MB on the
+ * unused top of the 32 MB window: it allocates RAM + EXTRA, then the null
+ * page, 20 MB in all, and sends every masked offset past RAM + EXTRA (the
+ * control-register accesses above) to the null page as well.  One compare
+ * more per access than the desktop's layout; constant addresses still fold. */
+#if defined(__psp__) && !defined(SA1_COMPACT_RAM)
+#define SA1_COMPACT_RAM 1
+#endif
+#ifdef SA1_COMPACT_RAM
+#define SA1_NULL_OFF  (SA1_RAM_SIZE + SA1_RAM_EXTRA + SA1_RAM_SLACK)
+#define SA1_RAM_ALLOC (SA1_NULL_OFF + SA1_NULL_SIZE + SA1_RAM_SLACK)
+extern uint8_t *sa1_ram;
+static inline uint32_t sa1_off(uint32_t a) {
+    uint32_t off = a & SA1_RAM_MASK;
+    return ((a & 0x3E000000u) && off < SA1_RAM_SIZE + SA1_RAM_EXTRA) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;
+}
+#else
+#define SA1_NULL_OFF  (2u * SA1_RAM_SIZE)
 #define SA1_RAM_ALLOC (2u * SA1_RAM_SIZE + SA1_NULL_SIZE + SA1_RAM_SLACK)
 extern uint8_t *sa1_ram;
 static inline uint32_t sa1_off(uint32_t a) {
     uint32_t off = a & SA1_RAM_MASK;
     return (a & 0x3E000000u) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;
 }
+#endif
 
 typedef uint8_t  __attribute__((may_alias)) sa1_u8a;
 typedef uint16_t __attribute__((may_alias)) sa1_u16a;
@@ -138,10 +156,11 @@ sa1_fn sa1_fn_lookup(uint32_t addr);                   /* NULL when unknown */
  * times through four such jumps and overflowed the root coroutine's 1 MB
  * host stack in the maintainer's fourth exit-test run: docs/m2-render-report.md
  * section 10).  clang's musttail guarantees the jump at every -O level and
- * under -finstrument-functions; other compilers get a plain call.
+ * under -finstrument-functions, and GCC has it from 15 (psp-gcc 15.2 emits
+ * a plain j at -O0 and -Os); other compilers get a plain call.
  * sa1_tail_target does what sa1_call does before the call (the hooks and
  * the lookup; it traps and returns NULL for an unknown address). */
-#if defined(__clang__)
+#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 15)
 #define SA1_TAIL(call) { __attribute__((musttail)) return call; }   /* a block: after a label the bare attribute reads as a declaration */
 #else
 #define SA1_TAIL(call) do { call; return; } while (0)
