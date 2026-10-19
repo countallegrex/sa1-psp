@@ -171,8 +171,20 @@ static void pace(uint32_t frame) {
     while ((int)(due - sceDisplayGetVcount()) > 0) sceDisplayWaitVblankStart();
 }
 
+/* Milestones for the hardware log: the game mode and the level as the
+ * check files name them (tests/replay/*.check: 0x8C760970 mode, 0x8C7493BA
+ * level, 0x8C7493BC act), with the time since main(). */
+static void milestones(uint32_t frame) {
+    static uint32_t mode = ~0u, level = ~0u, act = ~0u;
+    uint32_t m = hle_rd16(0x8C760970u), l = hle_rd16(0x8C7493BAu), a = hle_rd16(0x8C7493BCu);
+    if (m != mode || l != level || a != act)
+        sa1_log("milestone: frame %u, %.2f s: game mode %u, level %u, act %u", frame, (sa1_plat_time_us() - t0) / 1e6, m, l, a);
+    mode = m; level = l; act = a;
+}
+
 static void on_frame(uint32_t frame) {
     if (!headless && !no_pace) pace(frame);
+    milestones(frame);
     uint32_t b = 0;
     int scripted = 0;
     for (int i = 0; i < npresses; i++)
@@ -194,7 +206,7 @@ static void on_frame(uint32_t frame) {
     for (int i = 0; i < nshots; i++) if (shots[i].frame == frame) kamui_set_screenshot(shots[i].path);
     for (int i = 0; i < nmem; i++) if (mem_frames[i] == frame) { char w[32]; snprintf(w, sizeof w, "frame %u", frame); mem_report(w); }
     input_tape_frame_end(frame);
-    if (stats_every && frame % (uint32_t)stats_every == 0) { kamui_report(); draw_gu_report(); }
+    if (stats_every && frame % (uint32_t)stats_every == 0) { char w[32]; snprintf(w, sizeof w, "frame %u", frame); kamui_report(); draw_gu_report(); mem_report(w); }
     if (frame % 120 == 0) plat_log_flush();
     if (frame_limit && frame >= frame_limit) { sa1_log("frame limit %u reached", frame_limit); report_and_exit(0); }
     if (time_limit_us && sa1_plat_time_us() - t0 >= time_limit_us) { sa1_log("time limit reached"); report_and_exit(0); }
