@@ -38,6 +38,27 @@
 #ifndef GL_UNSIGNED_SHORT_4_4_4_4_REV
 #define GL_UNSIGNED_SHORT_4_4_4_4_REV 0x8365
 #endif
+/* GL 1.3 texture combiners (the PowerVR shading instructions need an alpha
+ * rule the four classic env modes cannot express) */
+#ifndef GL_COMBINE
+#define GL_COMBINE 0x8570
+#define GL_COMBINE_RGB 0x8571
+#define GL_COMBINE_ALPHA 0x8572
+#define GL_SOURCE0_RGB 0x8580
+#define GL_SOURCE1_RGB 0x8581
+#define GL_SOURCE2_RGB 0x8582
+#define GL_SOURCE0_ALPHA 0x8588
+#define GL_SOURCE1_ALPHA 0x8589
+#define GL_OPERAND0_RGB 0x8590
+#define GL_OPERAND1_RGB 0x8591
+#define GL_OPERAND2_RGB 0x8592
+#define GL_OPERAND0_ALPHA 0x8598
+#define GL_OPERAND1_ALPHA 0x8599
+#define GL_INTERPOLATE 0x8575
+#define GL_CONSTANT 0x8576
+#define GL_PRIMARY_COLOR 0x8577
+#define GL_PREVIOUS 0x8578
+#endif
 static SDL_Window *win;
 static SDL_GLContext glctx;
 static SDL_GameController *pad;
@@ -258,6 +279,7 @@ int draw_init(int scale, int want_headless) {
     glViewport(0, 0, win_w, win_h);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
+    { static const float one[4] = {1.0f, 1.0f, 1.0f, 1.0f}; glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, one); }   /* the "texture alpha = 1" source */
     glDisable(GL_LIGHTING);
     glShadeModel(GL_SMOOTH);
     glFogi(GL_FOG_MODE, GL_LINEAR);
@@ -415,12 +437,50 @@ void draw_set_state(const draw_state *s) {
         GLint f = s->filter == DRAW_FILTER_POINT ? GL_NEAREST : GL_LINEAR;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, s->filter == DRAW_FILTER_POINT ? GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
+        /* The PowerVR shading instruction (draw.h): rgb from texture and
+         * vertex colour, alpha by its own rule.  A combiner, because the two
+         * DECAL forms take one alpha and ignore_tex_alpha replaces the
+         * texture alpha with 1 (the env colour) in every mode. */
+        int tex_a = !s->ignore_tex_alpha;
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
         switch (s->shade) {
-        case DRAW_SHADE_DECAL: glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE); break;
-        case DRAW_SHADE_DECAL_ALPHA: glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL); break;
-        default: glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE); break;
+        case DRAW_SHADE_DECAL:
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_REPLACE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_TEXTURE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, tex_a ? GL_TEXTURE : GL_CONSTANT);
+            break;
+        case DRAW_SHADE_DECAL_ALPHA:
+            if (tex_a) {           /* T * A + V * (1 - A) */
+                glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_INTERPOLATE);
+                glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_TEXTURE);
+                glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_PRIMARY_COLOR);
+                glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_RGB, GL_TEXTURE);
+                glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_ALPHA);
+            } else {
+                glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_REPLACE);
+                glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_TEXTURE);
+            }
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_PRIMARY_COLOR);
+            break;
+        default:                   /* MODULATE and MODULATE_ALPHA (draw.h: the same alpha rule) */
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_TEXTURE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_PRIMARY_COLOR);
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, tex_a ? GL_MODULATE : GL_REPLACE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, tex_a ? GL_TEXTURE : GL_PRIMARY_COLOR);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA, GL_PRIMARY_COLOR);
+            break;
         }
     } else glDisable(GL_TEXTURE_2D);
+    /* Translucent strips sit on the surfaces they decorate (the headlight
+     * spots on the pavement, ripples on the water) at offsets far below what
+     * the 16-bit buffer resolves at that distance (section 11 of the M2
+     * report); pull them nearer by two depth units and one slope so the
+     * GEQUAL compare of the console's 32-bit 1/w comes out the same way. */
+    if (s->translucent) { glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(-1.0f, -2.0f); }
+    else glDisable(GL_POLYGON_OFFSET_FILL);
     if (s->fog == DRAW_FOG_TABLE || s->fog == DRAW_FOG_TABLE2) glEnable(GL_FOG); else glDisable(GL_FOG);
     glShadeModel(s->gouraud ? GL_SMOOTH : GL_FLAT);
 #endif
@@ -474,7 +534,10 @@ static void emit_offset(const draw_vertex *v, int n, GLenum mode) {
     glBegin(mode);
     for (int i = 0; i < n; i++) {
         uint32_t o = v[i].ocolor;
-        unsigned a = cur.use_alpha ? (v[i].color >> 24) & 255 : 255;   /* scale by the vertex alpha so faded polygons fade their highlight too */
+        /* the PowerVR adds the offset before blending, so under source-alpha
+         * blending a faded polygon fades its highlight too; an additive
+         * strip (ONE/ONE, SRC_ALPHA/ONE) adds the offset in full */
+        unsigned a = (cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA) ? (v[i].color >> 24) & 255 : 255;
         glColor4ub((GLubyte)(((o >> 16) & 255) * a / 255), (GLubyte)(((o >> 8) & 255) * a / 255), (GLubyte)((o & 255) * a / 255), 255);
         float w = v[i].w > 1e-6f ? v[i].w : 1e-6f;
         float z = 1.0f / w;

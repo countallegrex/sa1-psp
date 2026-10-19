@@ -52,6 +52,12 @@ int kamui_select_texture(uint32_t n);
 void texture_init(void);
 /* Resolves a TCW to a backend texture handle (0 when none). */
 uint32_t texture_from_tcw(uint32_t tcw);
+/* The alpha channel of a live texture: TEX_ALPHA_NONE (565/YUV), _OPAQUE
+ * (a format with alpha, every texel 255) or _USED; *amin the smallest texel
+ * alpha.  -1 for an unknown handle.  For the translucency audit. */
+enum { TEX_ALPHA_NONE = 0, TEX_ALPHA_OPAQUE = 1, TEX_ALPHA_USED = 2 };
+int texture_alpha_info(uint32_t handle, int *amin);
+const char *texture_name(uint32_t handle);     /* the archive entry name of a live texture ("?" if none) */
 void texture_set_dump_dir(const char *dir, unsigned min_w);   /* --texdump: every decode as PPM */
 int texture_describe(uint32_t handle, char *buf, unsigned n);
 /* The mark key (F9): screenshot of the next rendered frame into dir, and

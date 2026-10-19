@@ -94,14 +94,26 @@ static const char *screenshot_path;
 static char mark_path[512];               /* the mark key: screenshot + bound-texture list */
 static int mark_active;
 static uint32_t mark_tex[512], mark_ntex;
-static uint32_t dump_frame;        /* SA1_KAMUI_DUMP=<frame>: log every header, pointer handoff and writer call of that frame */
+static uint32_t dump_frames[16], ndump_frames;   /* SA1_KAMUI_DUMP=<frame>[,<frame>...]: log every header, pointer handoff and writer call of those frames */
 static int dump_read;              /* the variable is read on first use: a --load run never passes through kamui_init */
 static void dump_setup(void) {
     if (dump_read) return;
     dump_read = 1;
-    if (getenv("SA1_KAMUI_DUMP")) dump_frame = (uint32_t)strtoul(getenv("SA1_KAMUI_DUMP"), NULL, 0);
+    const char *e = getenv("SA1_KAMUI_DUMP");
+    while (e && *e && ndump_frames < 16) {
+        char *end;
+        uint32_t f = (uint32_t)strtoul(e, &end, 0);
+        if (end == e) break;
+        if (f) dump_frames[ndump_frames++] = f;
+        e = *end == ',' ? end + 1 : end;
+    }
 }
-static int ptr_trace(void) { dump_setup(); return dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2; }
+static int ptr_trace(void) {
+    dump_setup();
+    uint32_t f = hle_frame_count();
+    for (uint32_t i = 0; i < ndump_frames; i++) if (f >= dump_frames[i] && f < dump_frames[i] + 2) return 1;
+    return 0;
+}
 int kamui_ptr_trace(void) { return ptr_trace(); }
 static int frame_rendered;
 static uint32_t stat_frames, stat_polys[3], stat_strips[3], stat_modvols, stat_overflow, stat_sprites, stat_fogmode[4];
@@ -577,6 +589,7 @@ static void state_from_header(draw_state *s, uint32_t pcw, uint32_t isp, uint32_
     s->fog = (uint8_t)((tsp >> 22) & 3);
     stat_fogmode[s->fog]++;
     s->gouraud = (pcw >> 1) & 1;
+    s->translucent = (list == 2);
     if (list == 0) s->use_alpha = 0;
 }
 
@@ -711,10 +724,35 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
                 }
                 sa1_log("hdr list %u at 0x%08x: pcw %08x isp %08x tsp %08x tcw %08x verts %u x %.0f..%.0f y %.0f..%.0f 1/w %.5f..%.5f col %08x",
                         (pcw >> 24) & 7, p, pcw, isp, tsp, tcw, nv, x0, x1, y0, y1, w0, w1, nv ? hle_rd32(p + 32 + 24) : 0);
-                if (getenv("SA1_KAMUI_DUMP_VERTS") && nv && nv <= 64 && (w1 >= 1.0f || x1 > 2000.0f || x0 < -2000.0f || y0 < -2000.0f || y1 > 2000.0f)) {
-                    uint32_t r = p + 32;      /* the odd strips: every vertex */
+                {   /* the translucency audit: every TA flag decoded, and the texture's alpha */
+                    static const char *lname[8] = {"opaque", "opmod", "translucent", "trmod", "punch", "?5", "?6", "?7"};
+                    static const char *dname[8] = {"never", "less", "equal", "lequal", "greater", "notequal", "gequal", "always"};
+                    static const char *bname[8] = {"zero", "one", "othercol", "invothercol", "srca", "invsrca", "dsta", "invdsta"};
+                    static const char *fname[4] = {"table", "vertex", "none", "table2"};
+                    static const char *cname[4] = {"packed", "float", "intensity", "intensity2"};
+                    static const char *sname[4] = {"decal", "modulate", "decalalpha", "modulatealpha"};
+                    static const char *tname[8] = {"1555", "565", "4444", "yuv", "bump", "pal4", "pal8", "?"};
+                    uint32_t list = (pcw >> 24) & 7;
+                    char tex[96] = "none";
+                    if (pcw & 8) {
+                        uint32_t h = texture_from_tcw(tcw);
+                        int amin = 255, ai = texture_alpha_info(h, &amin);
+                        snprintf(tex, sizeof tex, "%s h%u %s alpha=%s amin=%d", tname[(tcw >> 27) & 7], h, texture_name(h),
+                                 ai == TEX_ALPHA_USED ? "used" : ai == TEX_ALPHA_OPAQUE ? "opaque" : ai == TEX_ALPHA_NONE ? "none" : "?", amin);
+                    }
+                    uint32_t face = type == 5 ? hle_rd32(p + 16) : ((pcw >> 4) & 3) >= 2 ? pack_floats(p + 16) : 0;
+                    sa1_log("  audit: %s%s depth=%s zwrite=%s cull=%u blend=%s/%s usealpha=%u igntexalpha=%u fog=%s clamp=%u%u flip=%u%u col=%s face=%08x shade=%s%s%s tex=%s",
+                            lname[list], type == 5 ? " sprite" : "", dname[(isp >> 29) & 7], (isp & (1u << 26)) ? "off" : "on", (isp >> 27) & 3,
+                            bname[(tsp >> 29) & 7], bname[(tsp >> 26) & 7], (tsp >> 20) & 1, (tsp >> 19) & 1, fname[(tsp >> 22) & 3],
+                            (tsp >> 16) & 1, (tsp >> 15) & 1, (tsp >> 18) & 1, (tsp >> 17) & 1, cname[(pcw >> 4) & 3], face, sname[(tsp >> 6) & 3],
+                            (pcw & 4) ? " offset" : "", (pcw & 2) ? " gouraud" : "", tex);
+                }
+                const char *dv = getenv("SA1_KAMUI_DUMP_VERTS");   /* 1: the odd strips' vertices; 2: every strip of up to 8 vertices too */
+                if (dv && nv && nv <= 64 && ((w1 >= 1.0f || x1 > 2000.0f || x0 < -2000.0f || y0 < -2000.0f || y1 > 2000.0f) || (dv[0] == '2' && nv <= 8))) {
+                    uint32_t r = p + 32;
+                    sa1_log("    header words %08x %08x %08x %08x", hle_rd32(p + 16), hle_rd32(p + 20), hle_rd32(p + 24), hle_rd32(p + 28));
                     for (uint32_t k = 0; k < nv; k++, r += vs)
-                        sa1_log("    v%u (%.1f, %.1f) 1/w %.5f uv %08x %08x col %08x", k, hle_rdf(r + 4), hle_rdf(r + 8), hle_rdf(r + 12), hle_rd32(r + 16), hle_rd32(r + 20), hle_rd32(r + 24));
+                        sa1_log("    v%u (%.1f, %.1f) 1/w %.5f +16 %08x +20 %08x +24 %08x +28 %08x", k, hle_rdf(r + 4), hle_rdf(r + 8), hle_rdf(r + 12), hle_rd32(r + 16), hle_rd32(r + 20), hle_rd32(r + 24), hle_rd32(r + 28));
                 }
             }
             pc.list = (int)((pcw >> 24) & 7);

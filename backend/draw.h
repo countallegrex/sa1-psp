@@ -61,7 +61,23 @@ typedef struct draw_state {
     uint8_t fog;             /* DRAW_FOG_* */
     uint8_t gouraud;
     uint8_t layer;           /* DRAW_LAYER_*: where the 640x480 coordinates land (aspect) */
+    uint8_t translucent;     /* from the translucent list: drawn after the opaque and punch-through
+                              * passes, sorted, and pulled nearer by a small depth offset so a decal
+                              * on a surface (the headlight spots) wins the 16-bit depth compare */
 } draw_state;
+
+/* PowerVR shading instructions (TSP bits 7-6).  The texture colour T, the
+ * vertex colour V and the offset colour O give, with A the texture alpha
+ * (1 when ignore_tex_alpha) and a the vertex alpha (1 unless use_alpha):
+ *   DECAL          rgb = T,                  alpha = A
+ *   MODULATE       rgb = T * V,              alpha = A * a
+ *   DECAL_ALPHA    rgb = T * A + V * (1-A),  alpha = a
+ *   MODULATE_ALPHA rgb = T * V,              alpha = A * a
+ * plus O on the rgb in every mode.  The hardware manual gives MODULATE
+ * alpha = A alone; the game contradicts it (M2 report section 11: the sun's
+ * lens-flare sprites are MODULATE with face alpha 0 while the sun is out of
+ * view, the police beacons pulse their face alpha), so the vertex alpha
+ * counts in both modulate forms.  The two DECAL forms do not multiply. */
 
 /* Aspect.  The game projects for a 4:3 640x480 screen; the frame is 16:9.
  *   DRAW_LAYER_3D: hor+ in wide mode (the vertical field of view is kept and

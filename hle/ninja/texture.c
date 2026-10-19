@@ -40,7 +40,7 @@
 #define MAX_ENTRIES 0x800
 
 static uint32_t memlist_base, memlist_count;
-typedef struct { uint32_t handle; uint32_t bytes; int used; uint32_t gbix; uint32_t index; uint16_t w, h; uint8_t pixfmt, datafmt; } mem_slot;
+typedef struct { uint32_t handle; uint32_t bytes; int used; uint32_t gbix; uint32_t index; uint16_t w, h; uint8_t pixfmt, datafmt, alpha, amin; char name[20]; } mem_slot;
 static mem_slot slots[MAX_ENTRIES];
 static uint32_t total_bytes;
 static int ntex;
@@ -65,6 +65,7 @@ static int log2u(uint32_t v) { int n = 0; while ((1u << n) < v && n < 12) n++; r
 static const char *decode_name = "";      /* the texture being decoded, for the debug log and dumps */
 static uint32_t decode_index;              /* running number of decodes (the review index) */
 static int decode_datafmt;
+static int decode_alpha, decode_amin;      /* the last decode's alpha: TEX_ALPHA_* and the smallest texel alpha */
 /* Review aid (--texdump DIR / SA1_TEX_DUMP_DIR): every decoded texture as
  * <index>_<gbix>_<fmt>_<flags>_<w>x<h>_<mips>.pam (RGB + alpha);
  * tools/texsheet.py tiles a directory of them into labelled contact sheets. */
@@ -127,6 +128,15 @@ static uint32_t decode_info(const pvr_info *pinfo, int *out_w, int *out_h, int *
     }
     uint32_t handle = draw_texture_create((int)w, (int)h, fmt, img, 0, NULL);
     decode_index++; decode_datafmt = datafmt;
+    /* classify the alpha channel for the translucency audit (SA1_KAMUI_DUMP) */
+    decode_alpha = TEX_ALPHA_NONE; decode_amin = 255;
+    if (fmt == DRAW_FMT_5551 || fmt == DRAW_FMT_4444) {
+        for (uint32_t i = 0; i < w * h; i++) {
+            int a = fmt == DRAW_FMT_5551 ? ((img[i] & 0x8000) ? 255 : 0) : (img[i] >> 12) * 17;
+            if (a < decode_amin) decode_amin = a;
+        }
+        decode_alpha = decode_amin < 255 ? TEX_ALPHA_USED : TEX_ALPHA_OPAQUE;
+    }
     if (!dump_dir && getenv("SA1_TEX_DUMP_DIR")) {
         dump_dir = getenv("SA1_TEX_DUMP_DIR");
         if (getenv("SA1_TEX_DUMP_MIN")) dump_min_w = (unsigned)atoi(getenv("SA1_TEX_DUMP_MIN"));
@@ -135,7 +145,7 @@ static uint32_t decode_info(const pvr_info *pinfo, int *out_w, int *out_h, int *
         char path[512]; FILE *o;
         snprintf(path, sizeof path, "%s/%04u_%u_%s_%s_%ux%u_%d.pam", dump_dir, decode_index, info.gbix == PVR_NO_GINDEX ? 0 : info.gbix,
                  pixfmt_name(pixfmt), datafmt_name(datafmt), w, h, datafmt_mips(datafmt));
-        sa1_log("texture: dump %04u = %s (%s %s %ux%u, gbix %u)", decode_index, decode_name, pixfmt_name(pixfmt), datafmt_name(datafmt), w, h, info.gbix);
+        sa1_log("texture: dump %04u = %s (%s %s %ux%u, gbix %u, handle %u, alpha min %d)", decode_index, decode_name, pixfmt_name(pixfmt), datafmt_name(datafmt), w, h, info.gbix, handle, decode_amin);
         if ((o = fopen(path, "wb")) != NULL) {
             /* PAM, RGB + alpha (alpha 255 where the format has none), so the
              * contact sheets can show transparency */
@@ -196,6 +206,8 @@ static int load_entry_ex(const uint8_t *p, uint32_t n, uint32_t gbix_hint, const
     if (i < 0) { draw_texture_destroy(handle); sa1_log("texture: memory list full (%u entries)", memlist_count); return -1; }
     slots[i].used = 1; slots[i].handle = handle; slots[i].bytes = bytes; slots[i].gbix = gbix;
     slots[i].index = decode_index; slots[i].w = (uint16_t)w; slots[i].h = (uint16_t)h; slots[i].pixfmt = (uint8_t)pixfmt; slots[i].datafmt = (uint8_t)decode_datafmt;
+    slots[i].alpha = (uint8_t)decode_alpha; slots[i].amin = (uint8_t)decode_amin;
+    snprintf(slots[i].name, sizeof slots[i].name, "%s", what ? what : "");
     total_bytes += bytes; ntex++;
     uint32_t e = entry_addr((uint32_t)i);
     hle_wr32(e + 0, gbix); hle_wr32(e + 4, 0);
@@ -243,6 +255,19 @@ int texture_describe(uint32_t handle, char *buf, unsigned n) {
     }
     snprintf(buf, n, "handle %u?", handle);
     return 0;
+}
+
+const char *texture_name(uint32_t handle) {
+    for (uint32_t i = 0; i < memlist_count; i++) if (slots[i].used && slots[i].handle == handle) return slots[i].name;
+    return "?";
+}
+int texture_alpha_info(uint32_t handle, int *amin) {
+    for (uint32_t i = 0; i < memlist_count; i++) if (slots[i].used && slots[i].handle == handle) {
+        if (amin) *amin = slots[i].amin;
+        return slots[i].alpha;
+    }
+    if (amin) *amin = 255;
+    return -1;
 }
 
 uint32_t texture_from_tcw(uint32_t tcw) {
