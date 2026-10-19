@@ -397,6 +397,7 @@ int draw_init(int scale, int want_headless) {
     if (want_headless) return 0;
     sceKernelDcacheWritebackInvalidateRange(list_mem, sizeof list_mem);   /* nothing cached may land on it later */
     list = (uint32_t *)((uintptr_t)list_mem | 0x40000000u);
+    sa1_log("draw: sceGuInit (list at %p)", (void *)list);
     sceGuInit();
     sceGuStart(GU_DIRECT, list);
     sceGuDrawBuffer(GU_PSM_5650, (void *)0, BUF_W);
@@ -422,8 +423,10 @@ int draw_init(int scale, int want_headless) {
     sceGuSetMatrix(GU_MODEL, &ident);
     sceGuClearColor(0); sceGuClearDepth(0);
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    sa1_log("draw: first list built");
     sceGuFinish();
     sceGuSync(0, 0);
+    sa1_log("draw: first list done");
     sceDisplayWaitVblankStart();
     sceGuDisplay(GU_TRUE);
     headless = 0;

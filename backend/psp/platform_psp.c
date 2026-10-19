@@ -107,6 +107,12 @@ int sa1_plat_dir_list(const char *dir, void (*cb)(const char *name, uint32_t siz
  * per line would cost a Memory Stick write each. */
 static SceUID log_fd = -1;
 static int log_stdout;
+static char log_path_s[300];
+/* Write-through mode (plat_log_sync): every line is appended and the file
+ * closed at once, so a crash that takes the console down still leaves the
+ * lines before it on the card (a crash on the first hardware boot left an
+ * empty log: the buffer never reached the stick). */
+static int log_sync = 1;
 static char log_buf[32 * 1024];
 static unsigned log_len;
 static uint64_t log_t0;
@@ -116,12 +122,27 @@ void plat_log_flush(void) {
     log_len = 0;
 }
 
+void plat_log_sync(int on) {
+    if (on == log_sync) return;
+    if (on) { plat_log_flush(); if (log_fd >= 0) { sceIoClose(log_fd); log_fd = -1; } }
+    else if (log_path_s[0]) log_fd = sceIoOpen(log_path_s, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0777);
+    log_sync = on;
+}
+
 static void log_sink(const char *line) {
     uint64_t t = sa1_plat_time_us() - log_t0;
     char head[48];
     int h = snprintf(head, sizeof head, "[%6u.%03u f%-6u] ", (unsigned)(t / 1000000u), (unsigned)(t / 1000u % 1000u), hle_frame_count());
     unsigned l = (unsigned)strlen(line);
     if (log_stdout) { sceIoWrite(1, head, (SceSize)h); sceIoWrite(1, line, l); sceIoWrite(1, "\n", 1); }
+    if (log_sync) {
+        if (!log_path_s[0]) return;
+        SceUID fd = sceIoOpen(log_path_s, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0777);
+        if (fd < 0) return;
+        sceIoWrite(fd, head, (SceSize)h); sceIoWrite(fd, line, l); sceIoWrite(fd, "\n", 1);
+        sceIoClose(fd);
+        return;
+    }
     if (log_fd < 0) return;
     if (log_len + (unsigned)h + l + 1 > sizeof log_buf) plat_log_flush();
     if ((unsigned)h + l + 1 > sizeof log_buf) return;
@@ -133,7 +154,12 @@ static void log_sink(const char *line) {
 int plat_log_open(const char *path, int to_stdout) {
     log_t0 = sa1_plat_time_us();
     log_stdout = to_stdout;
-    if (path) log_fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+    if (path) {
+        snprintf(log_path_s, sizeof log_path_s, "%s", path);
+        log_fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+        if (log_fd < 0) return -1;
+        if (log_sync) { sceIoClose(log_fd); log_fd = -1; }   /* truncated; lines append from here */
+    }
     sa1_set_log_sink(log_sink);
-    return log_fd >= 0 || !path ? 0 : -1;
+    return 0;
 }

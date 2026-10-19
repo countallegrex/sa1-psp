@@ -15,8 +15,9 @@
  *   --mem FRAME     log the memory report at guest frame FRAME (repeatable;
  *                   it is also logged at exit)
  *   --no-pace       run guest frames as fast as they come (no vblank wait)
- *   --no-stdout     log to the file only (default: also stdout, which
- *                   psplink and PPSSPP's log show)
+ *   --stdout        copy the log to stdout (psplink, PPSSPP's log)
+ *   --sync-log      write every log line through to the card for the whole
+ *                   run (default: through frame 300, then buffered)
  *   --cull-flip     the other winding convention for PowerVR culling (draw_gu.c)
  *   --data DIR      the data root (default data)
  *
@@ -65,7 +66,7 @@ uint32_t hle_task_running(void);
 
 static char base_dir[256] = "ms0:/PSP/GAME/SA1PSP";
 static const char *data_dir = "data", *log_path = "sa1psp.log";
-static int headless, no_pad, no_pace, no_stdout, stats_every;
+static int headless, no_pad, no_pace, to_stdout, sync_log, stats_every;
 static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
@@ -207,6 +208,7 @@ static void on_frame(uint32_t frame) {
     for (int i = 0; i < nmem; i++) if (mem_frames[i] == frame) { char w[32]; snprintf(w, sizeof w, "frame %u", frame); mem_report(w); }
     input_tape_frame_end(frame);
     if (stats_every && frame % (uint32_t)stats_every == 0) { char w[32]; snprintf(w, sizeof w, "frame %u", frame); kamui_report(); draw_gu_report(); mem_report(w); }
+    if (frame == 300 && !sync_log) { sa1_log("log: buffered from here (--sync-log keeps writing through)"); plat_log_sync(0); }
     if (frame % 120 == 0) plat_log_flush();
     if (frame_limit && frame >= frame_limit) { sa1_log("frame limit %u reached", frame_limit); report_and_exit(0); }
     if (time_limit_us && sa1_plat_time_us() - t0 >= time_limit_us) { sa1_log("time limit reached"); report_and_exit(0); }
@@ -298,7 +300,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--headless")) headless = 1;
         else if (!strcmp(av[i], "--no-pad")) no_pad = 1;
         else if (!strcmp(av[i], "--no-pace")) no_pace = 1;
-        else if (!strcmp(av[i], "--no-stdout")) no_stdout = 1;
+        else if (!strcmp(av[i], "--stdout")) to_stdout = 1;
+        else if (!strcmp(av[i], "--sync-log")) sync_log = 1;
         else if (!strcmp(av[i], "--cull-flip")) draw_gu_set_cull_flip(1);
         else if (!strcmp(av[i], "--stats") && i + 1 < args_c) stats_every = atoi(av[++i]);
         else if (!strcmp(av[i], "--mem") && i + 1 < args_c && nmem < 16) mem_frames[nmem++] = (uint32_t)strtoul(av[++i], NULL, 0);
@@ -325,13 +328,15 @@ int main(int argc, char **argv) {
         else { /* logged once the log is open */ }
     }
     freopen(abs_path(path, sizeof path, "stderr.txt"), "w", stderr);   /* input_tape.c reports start-up errors there */
-    plat_log_open(abs_path(path, sizeof path, log_path), !no_stdout);
+    plat_log_open(abs_path(path, sizeof path, log_path), to_stdout);
     t0 = sa1_plat_time_us();
     sa1_log("sa1-psp (PSP): base %s, data %s, %d args from args.txt%s", base_dir, data_dir, args_c, headless ? ", headless" : "");
     for (int i = 0; i < args_c; i++) sa1_log("  arg %s", args_v[i]);
+    sa1_log("step: memory report");
     mem_report("start");
 
     /* The PSP boots at 222 MHz; the game wants all of it (README section 5). */
+    sa1_log("step: clock 333 MHz");
     int clk = scePowerSetClockFrequency(333, 333, 166);
     sa1_log("clock: cpu %d MHz, bus %d MHz (set: %d)", scePowerGetCpuClockFrequencyInt(), scePowerGetBusClockFrequencyInt(), clk);
 
@@ -341,6 +346,7 @@ int main(int argc, char **argv) {
     hle_frame_hook = on_frame;
     sa1_trace_frame = hle_frame_count;
 
+    sa1_log("step: guest RAM (%u KB)", SA1_RAM_ALLOC / 1024u);
     sa1_ram = memalign(64, SA1_RAM_ALLOC);
     if (!sa1_ram) { sa1_log("cannot allocate %u KB of guest RAM", SA1_RAM_ALLOC / 1024u); plat_log_flush(); sceKernelExitGame(); return 1; }
     memset(sa1_ram, 0, SA1_RAM_ALLOC);
@@ -348,17 +354,25 @@ int main(int argc, char **argv) {
     char root[300], bin[320];
     abs_path(root, sizeof root, data_dir);
     snprintf(bin, sizeof bin, "%s/1ST_READ.BIN", root);
+    sa1_log("step: load %s", bin);
     if (load_image(bin) != 0) { plat_log_flush(); sceKernelExitGame(); return 1; }
+    sa1_log("step: tapes");
     if (input_tape_start(bin) != 0) { sa1_log("tape: start-up failed (stderr.txt has why)"); plat_log_flush(); sceKernelExitGame(); return 2; }
     if (!frame_limit) frame_limit = input_tape_frames();
     plat_set_data_root(root);
+    sa1_log("step: hle_init");
     hle_init();
+    sa1_log("step: function map");
     plat_crash_init();
+    sa1_log("step: draw_init");
     draw_init(1, headless);
+    sa1_log("step: draw_set_aspect");
     draw_set_aspect(hle_aspect_wide);
+    sa1_log("step: watchdog");
     plat_watchdog_start(hle_frame_count, 10);
     mem_report("boot");
     plat_log_flush();
+    sa1_log("step: root coroutine");
     if (sa1_plat_coro_run_root(boot, NULL) != 0) sa1_log("boot: cannot start the root coroutine");
     report_and_exit(1);
     return 1;
