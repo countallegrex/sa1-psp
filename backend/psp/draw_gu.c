@@ -91,17 +91,15 @@ void draw_gu_set_debug(int flags) { gu_debug = flags; }
 /* ---- projection --------------------------------------------------------------- */
 enum { PROJ_3D = 0, PROJ_2D, PROJ_FULL, PROJ_N };
 static ScePspFMatrix4 proj[PROJ_N];
-/* The near end of the depth range, per frame.  Depth is 1 - 2 zn/z: linear
- * in w = 1/z, 16 bits from z = zn out.  With zn = 1 (the 2D layer's z) half
- * the buffer went to z 1..2, where gameplay draws nothing, and at Sonic's
- * distance a step was 0.15-0.6 units: the console's depth rounding then
- * decided whether his eye surface beat his head (the maintainer: a mono-eye when
- * far).  zn follows the nearest 3D vertex of the previous frame (1..16:
- * a camera cut nearer than that collapses the near geometry's depth for one
- * frame at most);
- * a vertex nearer than zn (the 2D layer, or the first frame of a close
- * camera) is drawn at zn, the front of the buffer. */
+/* The near end of the depth range: depth is 1 - 2 zn/z, linear in w = 1/z,
+ * 16 bits from z = zn out; a vertex nearer than zn (the 2D layer's) is drawn
+ * at zn, the front of the buffer.  It stays 1: following the previous
+ * frame's nearest vertex (694b9e8) changed the mapping from frame to frame
+ * and collapsed HUD and close geometry between 1 and zn to the front, which
+ * flickered on the console (the maintainer's run). */
 static float depth_zn = 1.0f;
+static void build_projs(void);
+void draw_gu_set_zn(float zn) { depth_zn = zn >= 1.0f ? zn : 1.0f; build_projs(); }
 static int cur_proj = -1;
 /* x in 640-space from left to right -> NDC [lo, hi]; y 0..480 -> 1..-1; the
  * vertex is (x*z, y*z, -z), clip w = z, clip z = z - 2 (draw_gl.c's
@@ -486,7 +484,7 @@ int draw_init(int scale, int want_headless) {
     sceGuEnable(GU_DEPTH_TEST);
     sceGuShadeModel(GU_SMOOTH);
     sceGuTexLevelMode((gu_debug & 1) ? GU_TEXTURE_CONST : GU_TEXTURE_AUTO, 0.0f);
-    sa1_log("draw: --gu-debug %d", gu_debug);
+    sa1_log("draw: --gu-debug %d, depth near end z %.1f", gu_debug, depth_zn);
     static const ScePspIMatrix4 dither = { {-4, 0, -3, 1}, {2, -2, 3, -1}, {-3, 1, -4, 0}, {3, -1, 2, -2} };
     sceGuSetDither(&dither);
     sceGuEnable(GU_DITHER);
@@ -530,11 +528,6 @@ void draw_begin_frame(uint32_t clear_argb) {
     cur_valid = 0; cur_proj = -1; bound_tex = 0; nbatch = 0; nobatch = 0;
     if (headless) return;
     tex_su = tex_sv = -1.0f;        /* re-sent with the first texture */
-    {   /* this frame's depth range from the last frame's nearest 3D vertex */
-        float zn = gs.zmin_last * 0.9f;
-        zn = zn < 1.0f ? 1.0f : zn > 16.0f ? 16.0f : zn;
-        if (zn != depth_zn) { depth_zn = zn; build_projs(); }
-    }
     /* the buffer we are about to draw is on screen until the swap's vblank */
     if (swap_pending && sceDisplayGetVcount() == swap_vcount) sceDisplayWaitVblankStart();
     swap_pending = 0;
@@ -686,16 +679,18 @@ static void apply_blend_depth(const draw_state *s) {
         sceGuBlendFunc(GU_ADD, sf, df, sfix, dfix);
     }
     sceGuDepthFunc((gu_debug & 8) && s->layer == DRAW_LAYER_2D ? GU_ALWAYS : depth_func(s->depth_func));
-    /* Translucent strips do not write depth: they are drawn sorted far to
-     * near, so their order among themselves is the painter's, and they still
-     * test against the opaque and punch-through depth.  With writes, the
-     * 16-bit buffer decided ties between translucent layers at the same 1/w
-     * by the GE's rounding: on the console the character select's text lost
-     * to its own backing quads (all at 1/w 0.00002, a unit or two above the
-     * far end of the buffer) where PPSSPP's exact compare let it through.
-     * The PowerVR sorts translucent fragments per pixel, so a write never
-     * hides one translucent layer behind another there either. */
-    sceGuDepthMask(s->depth_write && !s->translucent ? GU_FALSE : GU_TRUE);     /* GU_TRUE masks (disables) the write */
+    /* Translucent 2D strips (menus, HUD, text) do not write depth: they are
+     * drawn sorted far to near, so their order among themselves is the
+     * painter's, and they still test against the 3D depth.  With writes, the
+     * 16-bit buffer decided ties between 2D layers at the same 1/w by the
+     * GE's rounding: on the console the character select's text lost to its
+     * own backing quads (all at 1/w 0.00002, a unit or two above the far end
+     * of the buffer) where PPSSPP's exact compare let it through.  3D
+     * translucent strips keep their writes: the characters are largely in
+     * the translucent list and need them for their own front and back (with
+     * them off, Sonic's back showed through his front, the maintainer's run of
+     * 694b9e8). */
+    sceGuDepthMask(s->depth_write && !(s->translucent && s->layer == DRAW_LAYER_2D) ? GU_FALSE : GU_TRUE);     /* GU_TRUE masks (disables) the write */
     if (s->alpha_test) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GEQUAL, 0x80, 0xFF); }
     else sceGuDisable(GU_ALPHA_TEST);
     if (s->texture && s->texture < TEX_MAX && texs[s->texture].mem) sceGuEnable(GU_TEXTURE_2D);
