@@ -133,6 +133,14 @@ void sa1_call(sh4_ctx *c, uint32_t addr) {
     fn(c);
 }
 
+sa1_fn sa1_tail_target(sh4_ctx *c, uint32_t addr) {
+    if (sa1_depth_hook) sa1_depth_hook();
+    if (sa1_watch_addr) sa1_watch_check("indirect jump");
+    sa1_fn fn = sa1_fn_lookup(addr);
+    if (fn == NULL) sa1_trap(c, addr, "indirect jump to an address with no function");
+    return fn;
+}
+
 void (*sa1_trap_hook)(sh4_ctx *c, uint32_t pc, const char *what);
 
 void sa1_trap(sh4_ctx *c, uint32_t pc, const char *what) {

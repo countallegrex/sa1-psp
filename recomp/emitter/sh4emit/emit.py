@@ -418,6 +418,17 @@ class FunctionEmitter:
                 return 'sa1_trap(c, 0x%08xu, "jump into replaced SDK code 0x%08x");' % (b.branch.pc, ci.target)
             return "sa1_call(c, %s);" % (target_expr if target_expr else "0x%08xu" % ci.target)
 
+        def tail_code(ci, target_expr=None):
+            """Statements that perform a tail call (sh4_rt.h SA1_TAIL: a guaranteed
+            tail call, so jump loops between emitted functions use no host stack).
+            Ends the block: no statement may follow."""
+            if ci.kind in ("direct", "seam"):
+                return ["SA1_TAIL(%s(c));" % ci.name]
+            if ci.kind == "sdk_dead":
+                return [callee_code(ci), "return;"]
+            tgt = target_expr if target_expr else "0x%08xu" % ci.target
+            return ["{ sa1_fn f_ = sa1_tail_target(c, %s); if (f_) SA1_TAIL(f_(c)); }" % tgt, "return;"]
+
         if kind == "fall":
             out += go(b.succs[0])
         elif kind == "jump":
@@ -438,8 +449,7 @@ class FunctionEmitter:
                 self.count("cond_tails")
                 out.append("if (%s) {" % cond)
                 out += ["    " + x for x in self.store(fa.dirty_out[s] & ~bit(regs.PR))]
-                out.append("    " + self.tail_call_stmt(b.target, b.branch.pc))
-                out.append("    return;")
+                out += ["    " + x for x in self.tail_call_stmts(b.target, b.branch.pc)]
                 out.append("}")
             if cond.endswith("cnd_"):
                 out.append("}")
@@ -484,8 +494,7 @@ class FunctionEmitter:
             out += self.store(fa.dirty_out[s] & ~bit(regs.PR))
             self.count({"direct": "tails", "seam": "tails_seam", "indirect": "tails",
                         "sdk_dead": "tails_sdk_dead"}[ci.kind])
-            out.append(callee_code(ci))
-            out.append("return;")
+            out += tail_code(ci)
         elif kind == "ijump":
             reg = "r%d" % b.call_reg
             expr = reg if b.branch.op == "JMP" else "0x%08xu + %s" % ((b.branch.pc + 4) & 0xFFFFFFFF, reg)
@@ -493,7 +502,7 @@ class FunctionEmitter:
             out += slot_code()
             out += self.store(fa.dirty_out[s] & ~bit(regs.PR))
             self.count("ijumps")
-            out.append("sa1_call(c, tgt_);")
+            out.append("{ sa1_fn f_ = sa1_tail_target(c, tgt_); if (f_) SA1_TAIL(f_(c)); }")
             out.append("return; }")
         elif kind == "switch":
             reg = "r%d" % b.branch.n
@@ -524,8 +533,8 @@ class FunctionEmitter:
                 if t in self.cfg.blocks:
                     out.append("    case 0x%08xu: goto %s;" % (val, self.label(t)))
                 else:
-                    out.append("    case 0x%08xu: %s %s return;" % (
-                        val, " ".join(self.store(fa.dirty_out[s] & ~bit(regs.PR))), self.tail_call_stmt(t, b.branch.pc)))
+                    out.append("    case 0x%08xu: %s %s" % (
+                        val, " ".join(self.store(fa.dirty_out[s] & ~bit(regs.PR))), " ".join(self.tail_call_stmts(t, b.branch.pc))))
             out.append('    default: sa1_trap(c, 0x%08xu, "switch value outside the recovered table"); return;' % b.branch.pc)
             out.append("}")
             if key == "sw_":
@@ -538,14 +547,15 @@ class FunctionEmitter:
             raise ValueError(kind)
         return out
 
-    def tail_call_stmt(self, target, pc):
+    def tail_call_stmts(self, target, pc):
+        """A tail call out of a conditional branch (sh4_rt.h SA1_TAIL)."""
         prog = self.prog
         if prog.env.in_code(target):
-            return "%s(c);" % prog.fn_name(target)
+            return ["SA1_TAIL(%s(c));" % prog.fn_name(target)]
         if target in prog.extern:
-            return "%s(c);" % prog.extern[target]
+            return ["SA1_TAIL(%s(c));" % prog.extern[target]]
         if target in prog.seam:
-            return "%s(c);" % prog.seam_name(target)
+            return ["SA1_TAIL(%s(c));" % prog.seam_name(target)]
         if prog.in_sdk(target):
-            return 'sa1_trap(c, 0x%08xu, "jump into replaced SDK code 0x%08x");' % (pc, target)
-        return "sa1_call(c, 0x%08xu);" % target
+            return ['sa1_trap(c, 0x%08xu, "jump into replaced SDK code 0x%08x");' % (pc, target), "return;"]
+        return ["{ sa1_fn f_ = sa1_tail_target(c, 0x%08xu); if (f_) SA1_TAIL(f_(c)); }" % target, "return;"]

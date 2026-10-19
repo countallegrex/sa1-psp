@@ -237,8 +237,10 @@ stick), `--hwwatch FRAME:ADDR[:LEN]` (x86 debug-register write watch; each
 write logs the guest call stack), `SA1_TASK_CHECK=1` (per-frame check of the
 task lists' parent/prev links; logs the first broken one with the task's
 main), `SA1_HANG_DUMP=FILE` (guest RAM when the watchdog fires),
-`SA1_KAMUI_DUMP=<frame>` (every header, pointer hand-off and writer call of
-that frame), `SA1_MODEL_DEBUG=1`, `SA1_NOVSYNC=1`, `SA1_REPORT_TOP=N`,
+`SA1_KAMUI_DUMP=<frame>` (every header, pointer hand-off, writer and sprite
+call of that frame, with each strip's screen extent; `SA1_KAMUI_DUMP_VERTS=1`
+adds the vertices of the odd strips; `SA1_TA_BT=<address>` the writer call
+behind one strip; §10), `SA1_MODEL_DEBUG=1`, `SA1_NOVSYNC=1`, `SA1_REPORT_TOP=N`,
 `SA1_TEX_LOG=1` / `SA1_TEX_DUMP_DIR=<dir>` (every texture decode, as PPM;
 `--texdump DIR` is the same with the review names of §0, plus F9 /
 `--mark FRAME`), `SA1_PVM_SAVE_DIR=<dir>` (every texture archive as found
@@ -572,6 +574,202 @@ Emerald Coast act 1's object placements (`SET0100S.BIN`, little-endian
 gave the pier's coordinates for the route: planks from (4053, 366) to
 (5053, 1096).
 
+## 10. The third and fourth exit-test runs and what they changed (2026-10-18, evening)
+
+The maintainer's third run (controller; title → Sonic → Station Square at night →
+Chaos 0 arrival and fight, won → Station Square by day → Emerald Coast,
+stopped a few thousand frames in) came with four screenshots and three
+complaints: the subtitles flicker, the polygon problems around Chaos
+remain (a cyan slab over Sonic in the "Ah, yeah!" shot, a cyan prism from
+Chaos's head at the fight's title), and the fog looks black. His fourth
+run, the same route again, crashed in Emerald Coast at guest frame 18,403
+with nothing in the log; the fifth item below is that crash. Its tape
+(the recorder writes in place, so the third run's tape was overwritten by
+the fourth's) is now `tests/replay/sonic_to_ec1_start.tape`, 18,402 frames,
+with a check file (title → Station Square at 1184 → Chaos 0 at 4026 →
+Station Square act 4 at 12826 → Emerald Coast at 15559; rings, lives and
+position every 600 frames); `sonic_ec1` stays reserved for the full route.
+Every fix below was verified by replaying that tape against its check
+file, which passes with every change in (0/16 primary, 0/155 secondary).
+
+Method as in §8 and §9: the tape replayed on the desktop build with
+screenshots, and in Flycast 2.7 through the oracle (`tape_oracle.lua`
+under a wrapper that requests a screen capture at a desktop game frame),
+then side-by-side montages, ours left, console right, in
+`..\private\exit-test-3\compare\` (not committed: console captures):
+
+| Montage | Frames (ours guest = game; console game) | Verdict |
+|---|---|---|
+| `shot8_f5400.png` | 5400 = 2697; 2697 | Composition, tint, subtitle and letterbox identical. Different: the console has rain (thin vertical streaks); ours had none, and instead one wedge from the top of the frame down to Chaos's head, the maintainer's "cone" (item 4). |
+| `night_f5350.png` | 5350 = 2672; 2672 | Night tint identical within a few percent (sky 54/58/60 against 55/59/60, mid-frame 52/85/94 against 53/82/89 RGB). Different before the fixes: the near pavement was black in ours (item 4); the console's subtitle is already up (its cutscene runs about 30 game frames behind ours, see below). |
+| `night_f6080.png` | 6080 = 3037; 3037 | Identical in tint and framing (left quarter 63/57/59 against 63/57/58, ground 37/41/39 against 48/52/52); the console shows rain and its subtitle, ours not yet. |
+| `shot10_f6680.png` | 6680 = 3337; 3370 | Same shot of the cutscene (the console is taken 33 game frames later, where its camera is at the same point). Different before: the cyan slab over Sonic; the console has Chaos standing in the middle of the plaza. Fixed (item 5). |
+| `fightstart_f7540.png`, `shot11_f7600.png` | 7540 = 3767; 3760 and 7600 = 3797; 3797 | Different before: the cyan prism from Chaos's head to the right edge. Fixed (item 5). The console's fight starts about 7 game frames later. |
+| `ring_sparkle.png` | ours 15758 (the maintainer's tape, Emerald Coast); console 2763 of the scripted route | Different routes (below); the sparkle is the same small green burst on both after item 4, the console's a little brighter and yellower. |
+
+Two frames asked for could not be paired. A **daytime Station Square**
+frame needs the console to win the Chaos 0 fight on the maintainer's inputs, and
+it does not: the console's fight diverges and reaches GAME OVER by game
+frame 6700 (the desktop's fight ends at 6410). A **ring pickup with the
+console in sync** has the same problem in Emerald Coast; the pickups of
+the maintainer's tape in Station Square happen inside the cutscene (the event
+gives the rings), so the console side of the sparkle montage is the
+scripted route (the oracle with the Emerald Coast poke, as §9 item 9).
+Two timing differences came out of the alignment and are open items: the
+console plays the Chaos 0 arrival cutscene about 30 game frames slower
+than we do (its lines start later: "Oh no! Our weapons are useless!" is
+on the console's frame 3037, ours shows no line yet; our lines are driven
+by the message renderer's own timers, the console's may wait on voice
+playback, which the HLE finishes at once), and the Emerald Coast intro
+runs the other way: at the scripted route's game frame 2763 the console
+already shows the chase camera and the HUD at 2.66 s while ours is still
+in the top-down pan.
+
+**1. The subtitle flicker: an unstable sort.** The event scripts draw a
+subtitle as two translucent 2D quads at the same depth (`njDrawPolygon2D`
+at 1/w 0.8333): the black band (colour 0x80000000, 0..640 x 380..440)
+and the text quad (0xEEDDDDEE, textured with the line). `kamui.c` sorts
+the translucent strips with `qsort` by mean 1/w alone, and with equal keys
+the order was whatever the other strips of the frame made it: on every
+other rendered frame the band landed on top of the text and halved it
+(text pixel 196 against 98 in consecutive screenshots, `flick/`). The
+sort now breaks ties by submission order, which is what the PowerVR does
+for equal depths. Sixteen consecutive screenshots at 60 Hz around frame
+5392 read 196 throughout after the fix. The pacing was not involved: the
+window presents only on rendered frames (kmFlip swaps only when the
+frame rendered, §9 item 3), and the font texture's alpha was right.
+
+**2. The NULL write at frame 16,263: two seam stubs.** `fn_8c0403c0` lerps
+every vertex of a shape-motion node into the buffer at `[0x8C89002C]` and
+points the model at it; the pointer is set by the SDK entry `0x8C60D1F2`
+(one store; the game passes its static buffer `0x8C782984` at boot) and
+`0x8C60D1F8` stores the per-node draw callback at `[0x8C890074]` (the
+object walkers `0x8C040784`/`0x8C040880` call it for every node; the game
+registers `0x8C0D215C` at frame 692, which turns particular nodes of the
+player model). Both entries were seam stubs returning 0, so the dolphin's
+lerp wrote to NULL and the callback never ran. Both are real now
+(`model.c`); the null page stays as a guard. The whole tape runs with no
+write outside RAM but the two QACR stores of §8 item 4.
+
+**3. Fog: correct.** The night frames' tint and the distance fog agree
+with the console within a few percent of luminance in every region
+measured (table above); what the maintainer saw as black fog was the near
+pavement, item 4.
+
+**4. Sprites: the two forms of `njDrawSprite3D` were swapped.** The SDK's
+dispatcher (`0x8C63EFE4`) sends a sprite with `NJD_SPRITE_SCALE` (attr
+0x10) to `0x8C63F038`, a billboard whose world-unit corners scale with the
+point's distance, and a sprite *without* it to `0x8C63F2D4`, which treats
+the four corners as object-space points in the current matrix's x/y
+plane, transforms and projects each on its own, so the matrix's scale and
+rotation apply. The M2 body drew every 3D sprite as the billboard. Three
+things followed, all on the route: the rain streaks (attr 0x32, 76 per
+frame of the arrival cutscene) are billboards and were right, but the 123
+rain splashes on the ground (attr 0x22, 14x14 units, a dark blue
+translucent 64x64 ARGB4444 texture) stood upright facing the camera as
+300 to 1,800-pixel squares and darkened the whole foreground, which is
+the black pavement of `night_f5350.png` and the "black fog"; a splash
+near the camera, 14 units wide at 1.2 units, is the cone of shot 8; and
+the ring sparkle's particles (attr 0x29, a 32x32 quad the game scales
+down with `njScale`) came out 32 units wide, the soft green blobs that
+covered Sonic. `draw2d.c` now implements both forms (the object-space one
+skips a quad with a corner behind the near plane; the SDK clips it
+through `0x8C63F610`, not done). The foreground pavement, the rain and the
+sparkle now match the console frames (`ours5/`). The sparkle's blend is
+source alpha plus destination one (TSP 0x8491A45B), additive, and the
+texture's alpha survives the 4444 decode and the GL upload; what remains
+is brightness, likely the constant material the game sets per particle.
+
+**5. The cyan slab and prism: a memory copy that did nothing.** The strips
+were found with the KAMUI dump's new per-strip extents: the first four
+translucent strips of Chaos's body (256, 214, 63 and 43 vertices,
+alpha 0x99 and 0x7F) each held, after every pair of real vertices, the
+same two vertices at (2635, -1617) and (2635, 551) with 1/w 0.012, UVs
+(0,0) and (0,1) and an opaque colour, the extruded "prism". The x86 write
+watch on the strip's header named the writer: the game's own near-plane
+clipper `0x8C037EE0` (the banked one) under Chaos's model draw, and its
+input vertices in the game's transformed-vertex cache were NaN
+(0xFFFFFFFF x 3) for 71 of the node's vertices. The NaN came from the
+model itself: Chaos's body model (`0x8C924D8C` in the B_CHAOS0 overlay)
+has its vertex pointer redirected to a heap buffer (`0x8C82E340`), and
+117 of its 159 vertices were still the allocator's all-ones fill. The
+boss's init (`ovl_b_chaos0 0x8C9034C0`) allocates that buffer and copies
+the model's vertices into it with the SDK entry `0x8C6044E0`, the
+longword copy of the family whose byte copy (`0x8C604500`) the HLE already
+had, and `0x8C6044E0` was a seam stub returning 0. The per-frame water
+wobble then writes only the 42 vertices of its table through
+`njCalcVector`, the rest stay NaN, the clipper fires on them and emits
+one garbage intersection point per edge. The entry is real now (`cfg.c`),
+and Chaos is whole in the cutscene and the fight (`shot10_f6680.png`,
+`shot11_f7600.png`). The same stub was called at frame 1201 already; what
+else it copied on the route (the opening) showed no visible fault.
+
+**6. The crash at frame 18,403: a tail-call loop on the host stack.**
+The maintainer's fourth run died with no report. The Windows minidump
+(`tools/minidump.py` reads it) gave exception 0xC0000005, a *write* to
+`0x20001000FF68`, 0x98 bytes below the root coroutine's stack, that is in
+the no-access gap under it: a host stack overflow of the 1 MB root
+context, with the probe never tripping. The maintainer's binary was rebuilt from
+the same commit with the same options (`SA1_TRACE_FUNCS=ON` was in his
+cache) and matched to the byte count, so the dump's stack symbolised:
+1,786 repetitions of four frames, `fn_8c097abc` → `fn_8c097e6a` →
+`fn_8c095b60` → `fn_8c097e5a`, under the game's main loop. `0x8C095B60`
+dispatches on a format character ('c', 's', 'l', 'f', ...): it is the
+game's printf-style formatter, whose loop is written as jumps between
+blocks the emitter had split into functions, and the emitter lowered a
+jump out of a function as "call, then return". With function
+instrumentation on, clang cannot turn that into a jump, so every
+iteration of the loop nested a host frame of about 600 bytes, and a
+format that loops some 1,800 times (it terminates: the same replay now
+runs through) exhausted the stack. The emitter now lowers every tail
+(bra/jmp to another function, a conditional branch out, a switch case
+out, and the unresolved `jmp @Rn` through a new `sa1_tail_target`) as
+`SA1_TAIL(fn(c))`, a `musttail` return under clang, which guarantees the
+jump at any -O level and under instrumentation (`sh4_rt.h`; 3,442 tails
+and 64 conditional tails in the main image, the overlays likewise;
+`tests/emitter` passes). The whole tape replays through frame 18,700 with
+the check passing, and the root context's high-water mark is 6 KB where
+it was 12 KB.
+Why nothing was logged: the log was flushed per line already. The handler
+could not run: with the stack pointer in a no-access gap, Windows cannot
+even push the exception dispatch frame, so the process dies in the
+kernel. Each coroutine stack now ends in a 64 KB band of guard pages above
+the gap: the first touch raises an exception the dispatcher can deliver
+(the band is committed for it), the vectored handler recognises the band
+and reports a host stack overflow with the guest call stack, and the
+report itself runs on a private 256 KB stack (`sa1_call_on_stack` in
+`coro_switch.c`), so it survives whatever the faulting stack has left. The
+save-state self-check still passes with the band in place.
+
+**Aids added:** `SA1_KAMUI_DUMP` works under `--load` (the variable is
+read on first use, not in `njInitSystem`); the dump's header lines carry
+each strip's screen extent, 1/w range and first colour, and
+`SA1_KAMUI_DUMP_VERTS=1` lists the vertices of strips that reach the near
+plane or far off-screen; the dump also logs every `njDrawSprite2D/3D`
+call (point, scale, anim size, UVs, texture) and, for the native model
+drawer, every meshset with its worst vertex; `SA1_TA_BT=<guest address>`
+prints the entry registers, the three vertex records and the guest call
+stack of the game writer call that produced the strip at that translucent
+buffer address; `texture_describe` prints the backend handle;
+`--screenshot` takes 64 entries; `tools/minidump.py` reads a Windows
+minidump (modules, exception, registers, the faulting thread's stack with
+the exe offsets to symbolise against a matching build).
+
+**Seam stubs still called on the tape** (first frame): the sound driver's
+`0x8C643xxx` family (they test the driver's init flag and return an error
+code; silent by design), `0x8C604370` at 4384 and `0x8C64489C` at 344 (to
+be identified), and the boot-time set of §1.
+
+**The fifth run** (keyboard or controller), from `sa1-psp`:
+```
+build-desktop\backend\desktop\sa1psp.exe ..\private\dump\sa1_us_1005\data\1ST_READ.BIN ..\private\dump\sa1_us_1005\data --record tests\replay\sonic_ec1.tape --log ..\private\exit-test-5\m2-run5.log
+```
+(F9 marks a screenshot with the bound textures when `--texdump DIR` is
+given; F5/F8 save and load `quick.state`.) The route is the same; what
+to look at: the Chaos 0 arrival and fight (rain, pavement, subtitles,
+Chaos's body), the ring sparkle, and Emerald Coast past the point of the
+fourth run's crash.
+
 ## 6. Open items
 
 - **The exit test.** Needs a controller run through the real route, recorded:
@@ -579,12 +777,19 @@ gave the pier's coordinates for the route: planks from (4053, 366) to
   (title → Sonic → Station Square → Chaos 0 win → Emerald Coast act 1
   complete; `tests/replay/README.md`). The Chaos 0 fight must be won (the
   overlays doc says the scripted pad cannot). M2 is ticked only after that
-  run passes. Two runs so far (§7, §9); the third is pending.
-- The dolphin's NULL-pointer write (§9 item 1) is the game's own bug; the
-  null page makes it harmless, as the ROM does. The emitter could skip the
-  null-page test for constant-base accesses it can prove are RAM (it
-  already folds constants), and the PSP backend may size the page smaller
-  than 2 MB (offsets seen: up to 0xF8).
+  run passes. Four runs so far (§7, §9, §10); the fifth is pending, with
+  the command in §10.
+- Console timing (§10): the Chaos 0 arrival cutscene runs about 30 game
+  frames slower on the console (voice playback the HLE finishes at once is
+  the suspect), and the Emerald Coast intro pan ends later here than on
+  the console. Neither breaks the route; both skew frame-aligned captures.
+- Sprites (§10 item 4): an object-space `njDrawSprite3D` quad with a corner
+  behind the near plane is skipped; the SDK clips it (`0x8C63F610`). The
+  ring sparkle is a little dimmer than the console's.
+- Seam stubs still called on the tape: `0x8C604370`, `0x8C64489C` (§10).
+- A host stack overflow now reports itself (§10 item 6); the probe still
+  samples only indirect calls and HLE entries, so a direct-call recursion
+  reaches the guard band, not the probe.
 - Rounding mode: the console runs the game in round-to-zero (§9 item 9);
   the host rounds to nearest. Positions agree to well under a unit, so it
   stays as it is; setting the host FPU mode at startup is the lever if a

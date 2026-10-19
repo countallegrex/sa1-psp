@@ -154,6 +154,12 @@ static int stacks_map(void) {
 #ifdef _WIN32
         DWORD old;
         VirtualProtect(guard, SA1_CORO_GUARD, PAGE_NOACCESS, &old);
+        /* The lowest pages of the stack itself are guard pages: a stack that
+         * runs into them raises an exception Windows can still dispatch (the
+         * dispatcher needs stack below the faulting frame; in the no-access
+         * gap it has none, and the process dies with no report: the maintainer's
+         * fourth exit-test run).  main.c reports it as a host stack overflow. */
+        VirtualProtect((void *)slots[i].lo, SA1_CORO_GUARD_BAND, PAGE_READWRITE | PAGE_GUARD, &old);
 #else
         mprotect(guard, SA1_CORO_GUARD, PROT_NONE);
 #endif

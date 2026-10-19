@@ -25,6 +25,7 @@ typedef struct sa1_coro_regs {
 
 void sa1_coro_swap(sa1_coro_regs *from, sa1_coro_regs *to);
 void sa1_coro_trampoline(void);
+void sa1_call_on_stack(void (*fn)(void *), void *arg, void *stack_top);
 void sa1_coro_entry_c(void *co);   /* platform_desktop.c: runs the coroutine's function */
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -97,7 +98,23 @@ __asm__(
     "    movq %r12, %rcx\n"
     "    subq $40, %rsp\n"
     "    call sa1_coro_entry_c\n"
-    "    ud2\n");
+    "    ud2\n"
+    /* sa1_call_on_stack(fn, arg, stack_top): run fn(arg) on another stack
+     * (the crash handler, when the faulting stack has no room left).
+     * rcx = fn, rdx = arg, r8 = stack top.  32 bytes of shadow space. */
+    ".globl sa1_call_on_stack\n"
+    "sa1_call_on_stack:\n"
+    "    pushq %rbp\n"
+    "    movq %rsp, %rbp\n"
+    "    movq %r8, %rsp\n"
+    "    andq $-16, %rsp\n"
+    "    subq $32, %rsp\n"
+    "    movq %rcx, %rax\n"
+    "    movq %rdx, %rcx\n"
+    "    call *%rax\n"
+    "    movq %rbp, %rsp\n"
+    "    popq %rbp\n"
+    "    retq\n");
 #define SA1_CORO_SAVE_BYTES (8 * 8 + 160)   /* what the swap pushes below the return address */
 #else
 /* System V x86-64: callee-saved rbx rbp r12-r15.  rdi = from, rsi = to. */
@@ -129,7 +146,21 @@ __asm__(
     "    call sa1_coro_entry_c\n"
     "    ud2\n"
     ".section .note.GNU-stack,\"\",@progbits\n"
-    ".text\n");       /* back to .text: the C below must not land in the note section */
+    ".text\n
+    /* sa1_call_on_stack(fn, arg, stack_top): rdi = fn, rsi = arg, rdx = stack top */
+    ".globl sa1_call_on_stack\n"
+    ".type sa1_call_on_stack, @function\n"
+    "sa1_call_on_stack:\n"
+    "    pushq %rbp\n"
+    "    movq %rsp, %rbp\n"
+    "    movq %rdx, %rsp\n"
+    "    andq $-16, %rsp\n"
+    "    movq %rdi, %rax\n"
+    "    movq %rsi, %rdi\n"
+    "    call *%rax\n"
+    "    movq %rbp, %rsp\n"
+    "    popq %rbp\n"
+    "    retq\n"");       /* back to .text: the C below must not land in the note section */
 #define SA1_CORO_SAVE_BYTES (6 * 8)
 #endif
 

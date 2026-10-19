@@ -17,6 +17,7 @@
 #define SA1_CORO_SLOTS        40                       /* hle/game/tasks.c has 32 tasks + the root */
 #define SA1_CORO_STACK        (1u << 20)               /* 1 MB per coroutine */
 #define SA1_CORO_GUARD        (64u << 10)              /* no-access gap below each stack */
+#define SA1_CORO_GUARD_BAND   (64u << 10)              /* guard pages at the bottom of each stack (Windows): an overflow reports itself */
 #define SA1_CORO_STRIDE       (SA1_CORO_STACK + SA1_CORO_GUARD)
 
 /* Maps n bytes, read/write, at exactly `at`; NULL when the address is not

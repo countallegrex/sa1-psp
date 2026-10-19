@@ -86,7 +86,7 @@ static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
 static int headless, scale = 2, stats_every, no_pad;   /* --no-pad: ignore the controller and keyboard (scripted runs) */
-#define SHOT_MAX 16
+#define SHOT_MAX 64
 static struct { uint32_t frame; const char *path; } shots[SHOT_MAX], dumps[SHOT_MAX];
 static int nshots, ndumps;
 static struct { uint32_t frame, addr; int len; } hwwatch;   /* --hwwatch FRAME:ADDR[:LEN]: hardware write watch */
@@ -151,16 +151,31 @@ static void stack_report(void) {
 
 #ifdef _WIN32
 /* A host crash (an out-of-range guest access, usually) prints where the
- * recompiled code was before the process dies.  The handler runs on the
- * faulting stack, so main() and every fiber keep 64 KB in reserve
- * (SetThreadStackGuarantee) for the stack-overflow case; the backtrace is
- * walked from the exception context. */
+ * recompiled code was before the process dies.  The report runs on its
+ * own 256 KB stack (sa1_call_on_stack), so it survives a stack overflow of
+ * the faulting context; the backtrace is walked from the exception
+ * context. */
 static int crash_reported;
-static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
-    if (crash_reported) return EXCEPTION_EXECUTE_HANDLER;
-    crash_reported = 1;
+void sa1_call_on_stack(void (*fn)(void *), void *arg, void *stack_top);   /* coro_switch.c */
+static uint8_t crash_stack[256 * 1024] __attribute__((aligned(16)));
+/* The report itself.  It runs on crash_stack (on_crash below), because the
+ * faulting stack may have none left: the maintainer's fourth run overflowed the root
+ * coroutine's 1 MB into its guard gap, and the handler, running there,
+ * faulted again before its first line (docs/m2-render-report.md section 10). */
+static void on_crash_body(void *arg) {
+    EXCEPTION_POINTERS *ep = arg;
     sa1_log("crash: exception 0x%08lx at %p (guest frame %u)", ep->ExceptionRecord->ExceptionCode,
             ep->ExceptionRecord->ExceptionAddress, hle_frame_count());
+    if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION || ep->ExceptionRecord->ExceptionCode == EXCEPTION_GUARD_PAGE
+        || ep->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+        uintptr_t a = (uintptr_t)ep->ExceptionRecord->ExceptionInformation[1];
+        for (int i = 0; i < SA1_CORO_SLOTS; i++) {
+            uintptr_t lo, hi; sa1_plat_coro_stack(i, &lo, &hi);
+            if (a >= lo - SA1_CORO_GUARD && a < lo + SA1_CORO_GUARD_BAND)
+                sa1_log("crash: the address is in the guard band of coroutine slot %d's stack [%p, %p): a host stack overflow (%u KB used)%s",
+                        i, (void *)lo, (void *)hi, (unsigned)((hi - a) >> 10), i == 0 ? " on the root context" : "");
+        }
+    }
     if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
         sa1_log("crash: %s of host address %p (sa1_ram is %p, so guest offset 0x%llx)",
                 ep->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
@@ -174,6 +189,11 @@ static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
     input_tape_finish(4, "crash");
     stack_report();
     if (log_file) fflush(log_file);
+}
+static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
+    if (crash_reported) return EXCEPTION_EXECUTE_HANDLER;
+    crash_reported = 1;
+    sa1_call_on_stack(on_crash_body, ep, crash_stack + sizeof crash_stack);
     return EXCEPTION_EXECUTE_HANDLER;
 }
 /* The game runs on coroutine stacks of our own (platform_desktop.c), whose
@@ -184,6 +204,12 @@ static LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
  * pages and breakpoints pass through untouched. */
 static LONG CALLBACK on_crash_vectored(EXCEPTION_POINTERS *ep) {
     switch (ep->ExceptionRecord->ExceptionCode) {
+    case EXCEPTION_GUARD_PAGE: {     /* the band at the bottom of a coroutine stack (platform_desktop.c) */
+        uintptr_t a = (uintptr_t)ep->ExceptionRecord->ExceptionInformation[1];
+        int ours = 0;
+        for (int i = 0; i < SA1_CORO_SLOTS && !ours; i++) { uintptr_t lo, hi; sa1_plat_coro_stack(i, &lo, &hi); ours = a >= lo && a < lo + SA1_CORO_GUARD_BAND; }
+        if (!ours) return EXCEPTION_CONTINUE_SEARCH;
+    }   /* fall through */
     case EXCEPTION_ACCESS_VIOLATION: case EXCEPTION_ILLEGAL_INSTRUCTION: case EXCEPTION_STACK_OVERFLOW:
     case EXCEPTION_INT_DIVIDE_BY_ZERO: case EXCEPTION_PRIV_INSTRUCTION: case EXCEPTION_IN_PAGE_ERROR:
     case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:

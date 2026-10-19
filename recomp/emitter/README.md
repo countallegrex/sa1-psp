@@ -276,3 +276,16 @@ by 129 encodings checked against the manual's listing), runs them through
 compiler together with `runtime/sh4_rt.c`, executes it, and compares
 registers and memory with expected values. It needs no game data and runs
 in CI on Linux (gcc) and Windows (clang).
+
+## Tail calls
+
+A jump out of a function (`bra`/`jmp` to another function, a conditional
+branch out, a switch case out, an unresolved `jmp @Rn`) is emitted as
+`SA1_TAIL(fn(c))`: under clang a `musttail` return, so the jump stays a jump
+at every optimisation level and under `-finstrument-functions`. The game
+writes loops as jumps between blocks the emitter splits into functions; as
+plain calls they nested a host frame per iteration, and the formatter
+`0x8C095B60` overflowed a 1 MB stack in 1,786 iterations
+(`docs/m2-render-report.md` section 10). An unresolved target goes through
+`sa1_tail_target` (the hooks and the lookup of `sa1_call`, then the tail
+call). Other compilers get a plain call and return.

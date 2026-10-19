@@ -131,6 +131,22 @@ extern void (*sa1_mmio_wr_hook)(uint32_t addr, int size, uint32_t value, int *ha
 void sa1_call(sh4_ctx *c, uint32_t addr);               /* function table / seam */
 void sa1_trap(sh4_ctx *c, uint32_t pc, const char *what); /* unimplemented: logs, aborts */
 sa1_fn sa1_fn_lookup(uint32_t addr);                   /* NULL when unknown */
+/* A jump out of a function (bra / jmp to another function, or a jmp @Rn)
+ * is a tail call, and it must stay one: the game writes loops as jumps
+ * between code the emitter split into functions, and each nested host call
+ * would cost a frame (the printf-style formatter 0x8C095B60 looped 1,786
+ * times through four such jumps and overflowed the root coroutine's 1 MB
+ * host stack in the maintainer's fourth exit-test run: docs/m2-render-report.md
+ * section 10).  clang's musttail guarantees the jump at every -O level and
+ * under -finstrument-functions; other compilers get a plain call.
+ * sa1_tail_target does what sa1_call does before the call (the hooks and
+ * the lookup; it traps and returns NULL for an unknown address). */
+#if defined(__clang__)
+#define SA1_TAIL(call) { __attribute__((musttail)) return call; }   /* a block: after a label the bare attribute reads as a declaration */
+#else
+#define SA1_TAIL(call) do { call; return; } while (0)
+#endif
+sa1_fn sa1_tail_target(sh4_ctx *c, uint32_t addr);
 void sa1_set_log_sink(void (*sink)(const char *line)); /* default: stderr */
 void sa1_log(const char *fmt, ...) __attribute__((format(printf, 1, 2))); /* one line to the sink */
 void sa1_seam_stub(sh4_ctx *c, uint32_t addr, const char *name);
