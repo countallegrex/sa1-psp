@@ -3,8 +3,11 @@
 Exit test (README §8): the same tree built with pspsdk boots to the title
 screen, in PPSSPP first, then on the test PSP-3001.
 
-Status: **PPSSPP passed 2026-10-19; hardware pending** (the card is
-staged, §8). Everything below was measured with
+Status: **passed 2026-10-19.** PPSSPP first, then the test PSP-3001 (ARK
+CFW): the title, the menus, character select, Station Square and its
+opening event, the Chaos 0 fight to its result screen, 11,829 guest
+frames and 997 s without a crash, quit with HOME (§8). Two faults showed
+only on the console and are fixed (§8). Everything below was measured with
 `build-psp/sa1psp/EBOOT.PBP` (psp-gcc 15.2.0, pspdev v20261001, game code
 `-Os`, HLE and backend `-O2`), the US v1.005 dump, PPSSPP 1.20.4 (default
 settings: PSP-2000/3000 model, JIT) on Windows 11.
@@ -17,7 +20,7 @@ settings: PSP-2000/3000 model, JIT) on Windows 11.
 | recompiled boot, headless | `--headless --frames 900`: `SEGALOGO.PRS` at frame 10, `ADVERTISE.PRS` installed at 202, the title textures at 332, exit 0 at 900 |
 | title rendered | Sega logo, then the title from frame 344: the same picture as the desktop build (screenshot not included in the public repository) |
 | `title_menu.tape` | `--replay title_menu.tape --check title_menu.check --no-pace`: **`check: PASS at frame 3000: 0/7 primary failed, 0/25 secondary drifted`**, the desktop's verdict; Station Square installed at 2458 and drawn through its opening event (matches the desktop's frame) |
-| hardware | pending (§8) |
+| hardware | the title at frame 344, then the maintainer's controller through character select, Station Square (opening event at 1227) and the Chaos 0 fight to its result screen (11,705); HOME at 11,829 (§8) |
 
 The tape replays in strict mode, so the PSP build reproduces the desktop's
 run frame for frame: the same game modes at the same frames (1 at 11, 8 at
@@ -38,7 +41,8 @@ the console's own numbers.
 | Region | Size | Where | Note |
 |---|---|---|---|
 | EBOOT `.text` | 12,030 KB | user RAM at 0x08804000 | recompiled main image 3,862 KB (+ 34 KB function table), **recompiled overlays 7,916 KB (57 files, all linked)**, HLE 163 KB, backend 38 KB, libc/pspsdk the rest |
-| EBOOT `.bss` | 4,822 KB | user RAM | display list 2,048 KB, coroutine stacks 1,504 KB (root 256 KB + 39 x 32 KB), vertex batches 240 KB, HLE statics 638 KB |
+| EBOOT `.bss` | 3,318 KB | user RAM | display list 2,048 KB, vertex batches 240 KB, HLE statics 638 KB |
+| Main thread stack | 2,048 KB | kernel-allocated | the coroutine stacks, 1,504 KB (root 256 KB + 39 x 32 KB), are carved from it (§3, §8) |
 | Guest RAM | 20,608 KB | heap | 16 MB + the 2 MB TA list area (0x8D000000) + 64 KB slack + the 2 MB null page + 64 KB (`SA1_COMPACT_RAM`, §3) |
 | Textures, title | 1,037–1,355 KB (17–21 textures) | heap | 16-bit / CLUT, swizzled, with mip levels |
 | Textures, Station Square | 8,834–8,962 KB (972 textures, 50 mirror copies) | heap | the desktop counts 5.99 MB for the same set without mips |
@@ -57,6 +61,10 @@ the guest RAM's list area and null page (+4.1 MB), and the mip levels
 (+~2.9 MB in Station Square). The title fits with 11.7 MB to spare; Station
 Square with 3.9 MB, which is the first thing M5 has to win back (§7).
 
+These are build 1's figures in PPSSPP; build 3 moved the 1.5 MB of
+coroutine stacks from `.bss` to the main thread's stack (image 15,501 KB +
+2 MB of stack, the same total), and §8 has the console's own numbers.
+
 Stack high water on the whole tape: root 2 KB of 256 KB, tasks 1 KB of
 32 KB (painted stacks, `coro_psp.c`).
 
@@ -72,10 +80,14 @@ Stack high water on the whole tape: root 2 KB of 256 KB, tasks 1 KB of
   The cost is one compare per guest access; constant addresses still fold.
 - **Coroutines**: the game's task system runs on our own stacks as on the
   desktop (`backend/psp/coro_psp.c`): the same 40 slots (slot 0 the root),
-  one static region at a fixed address, and a context switch in Allegrex
+  one block carved from the PSP main thread's own 2 MB stack (a region in
+  `.bss` powered the console off at the first switch, §8), and a context switch in Allegrex
   assembly that saves what the PSP's EABI keeps across calls (s0–s7, fp,
-  ra, gp, $f20–$f31). The kernel does not care where a user thread's sp
-  points, so no thread state follows the switch. No MMU, so no guard pages:
+  ra, gp, $f20–$f31). The kernel does care where a user thread's sp points
+  (it must stay inside the thread's stack), which is why the block comes
+  from the main thread's stack; no other thread state follows the switch.
+  A self-test at start-up switches into a coroutine, makes a syscall and
+  writes a log line from it before anything else runs. No MMU, so no guard pages:
   the stacks are painted, `sa1_depth_hook` traps 5 KB before a slot's end,
   and the report measures high water.
 - **Tail calls**: psp-gcc 15 has `musttail`, so `SA1_TAIL` keeps the
@@ -130,17 +142,27 @@ EBOOT and copied to stdout (psplink, PPSSPP's log).
 
 | Scene | PPSSPP | Hardware |
 |---|---|---|
-| Title (frames 360–700) | **33.4 ms** per drawn frame (two vblanks: the console's 30 fps); 222 MHz gave 50 ms | pending |
-| Station Square, opening event (2458–3000) | 78–100 ms (10–13 fps), 5,100–7,800 strips, up to 16,037 triangles | pending |
+| Title (frames 360–700) | **33.4 ms** per drawn frame (two vblanks: the console's 30 fps); 222 MHz gave 50 ms | **76.3 ms** (13 fps), GE wait 5.5 ms |
+| Menus, character select | 26–33 ms | 26 ms (menus), 63–73 ms (character select), GE wait 6–8 ms |
+| Station Square, opening event | 78–100 ms (10–13 fps), 5,100–7,800 strips, up to 16,037 triangles | **217–388 ms** (2.6–4.6 fps), GE wait ~0.02 ms |
+| Station Square, walking (the maintainer's run, 2700–3900) | | 51–279 ms by view (148 ms typical) |
+| Chaos 0 fight (4200–9900) | | 124–277 ms (typically 125–200 ms) |
 
-GE wait at the end of the frame is ~0.01 ms in every scene: the frame is
-CPU-bound (recompiled game logic, the HLE's TA parse and the list build).
-PPSSPP times the CPU from its own model of the Allegrex, so the hardware
-column is the one that counts.
+On the console the 3D scenes are CPU-bound (GE wait ~0.02 ms at the end
+of a Station Square frame); the title's 2,009 translucent strips are the
+one place the GE shows (5.5 ms). The console runs 2.3x (title) to 3–4x
+(Station Square) slower than PPSSPP's model of the Allegrex predicted:
+memory latency, which PPSSPP does not charge, is the likeliest difference,
+and the guest-RAM traffic of the recompiled code and the HLE's TA parse
+are where M5 starts (§9). Frame times include a 0.1 s hitch every 300
+frames from the memory probe of `--stats`.
 
-Time to title: in PPSSPP, `main()` to game mode 11 (title) 6.7 s with the
-tape's 2.4 s hash of `1ST_READ.BIN`; the title's textures are in by frame
-344. Hardware pending.
+Time to title, on the console (build 3, write-through log): `main()` to
+game mode 11 in 10.9 s, the title's textures in at 14.4 s (frame 332),
+the title on screen from frame 344; about 3 s of that is the log itself
+(~115 lines written and closed one by one, ~30 ms each). Loading from the
+XMB to `main()` (the 12.5 MB EBOOT) is not in the log. In PPSSPP: game
+mode 11 at 6.7 s including the tape's 2.4 s hash of `1ST_READ.BIN`.
 
 ## 6. What differs from the desktop
 
@@ -180,28 +202,73 @@ tape's 2.4 s hash of `1ST_READ.BIN`; the title's textures are in by frame
 ## 8. Hardware
 
 The card (the test PSP-3001, ARK CFW, `E:\PSP\GAME\SA1PSP\`) holds the
-EBOOT, `data/` (1ST_READ.BIN and SONICADV, 981 MB) and `args.txt`, which
-plays with the pad and logs frame time and memory every 300 frames
-(`--stats 300 --mem 400`) to `sa1psp.log`. A second boot can replay the
-tape instead (the commented line in `args.txt`). Results pending.
+EBOOT, `sa1exc.prx`, `data/` (1ST_READ.BIN and SONICADV, 981 MB) and
+`args.txt` (`--stats 300 --mem 400 --sync-log`: play with the pad, frame
+time and memory every 300 frames, every log line written through to the
+card). Four boots:
+
+| Build | Result | Cause | Fix |
+|---|---|---|---|
+| 1 (dd24662) | black screen, console off; `sa1psp.log` created, empty | (the log was buffered) | the log writes through to the card until frame 300 or with `--sync-log`, a `step:` line before each init call (404e644) |
+| probe 1 (404e644) | the same; the log ends at `step: root coroutine` | the first switch onto a coroutine stack in `.bss` (or the first syscall from it): the kernel wants a thread's sp inside its stack; PPSSPP does not care | the coroutine stacks are carved from the main thread's stack, 2 MB, and a self-test runs first (4df2e01) |
+| probe 2 (4df2e01) | **the title on the console**, Start, the menus; off while character select loaded the character models (after `E102.PRS`, frame 1745) | the PSP starts threads with FPU traps on (FCSR 0x00000E00: invalid, divide by zero, overflow); the game runs on the SH-4 with all of them masked, and a float 0/0 or overflow in the recompiled code trapped; PPSSPP raises no FPU exceptions | FCSR 0x01000000: traps masked, flush to zero (the SH-4's DN) (5d3e4f9) |
+| build 3 (5d3e4f9) | title, menus, character select, Station Square with its opening event, the Chaos 0 fight to the result screen, 11,829 frames, 997 s; HOME | | |
+
+Build 3 also carries `sa1exc.prx`, a kernel-mode crash screen the EBOOT
+loads through ARK's kubridge (`backend/psp/exc/sa1exc.c`): an exception
+then paints EPC, BadVAddr, Cause and the registers on the screen instead
+of powering the console off. It loaded on the console (`sa1exc.prx load
+0x04341129, start 0x04341129`); nothing has crashed since.
+
+Memory on the console (heap in use / largest free block; the EBOOT image
+is 15,501 KB and the main thread's stack 2 MB besides):
+
+| Point | Heap in use | Largest free block |
+|---|---|---|
+| start | 0 KB | 33,856 KB |
+| boot (guest RAM allocated) | 20,708 KB | 13,120 KB |
+| **title (frame 400)** | 22,359 KB | **11,456 KB** |
+| character select (900) | 24,206 KB | 8,576 KB |
+| Station Square (1500–3900) | 29,855–30,142 KB | **3,520–3,904 KB** |
+| Chaos 0 (4200–9900) | 25,184–25,592 KB | 4,096 KB |
+
+So resident at the title is 15.1 MB of image + 2 MB of stack + 21.8 MB of
+heap = 38.9 MB, with 11.2 MB still free; Station Square leaves 3.4 MB, as
+§2 estimated.
+
+The GE's guard band: the backend counted 19,000–56,000 strips per 150
+frames in Station Square with a vertex past the GE's 4096-pixel window
+(~130–380 a frame). The maintainer did not report missing ground or walls; a
+side-by-side with PPSSPP at the same frame is open (§9).
+
+PSPLink (pspdev/psplinkusb v3.2.1) and `tools/psp_run.py` (cb8a67f) are
+set up for the next milestone: the EBOOT then runs from `host0:` over USB
+with the data still on the card, its log streams to the PC, and an
+exception leaves the console on with PSPLink's register dump
+(`--no-crash-screen` keeps `sa1exc.prx` out of PSPLink's way). Not yet run
+on the console.
 
 ## 9. Open items for M5
 
-1. **Frame time** in Station Square (CPU-bound): profile on hardware,
-   then the README §5 levers (hot functions at `-O2`, VFPU in the Ninja
-   HLE, the TA parse, fewer GE state commands per state change).
+1. **Frame time**: 76 ms at the title, 125–390 ms in Station Square and
+   the Chaos 0 fight on the console, CPU-bound. Profile on the console
+   (PSPLink), then the README §5 levers (hot functions at `-O2`, VFPU in
+   the Ninja HLE, the TA parse, fewer GE state commands per state change,
+   the guest-access compare of `SA1_COMPACT_RAM`).
 2. **Memory**: page the recompiled overlays (7.9 MB of native code for
    57 overlays, of which at most ~0.4 MB run at once: `ADV00` is 343 KB),
    for example one PRX per overlay loaded with the guest file; shrink the
    stacks (2 KB / 1 KB used); textures without mip levels for the 2D layer
    or downscaled (M6's pass).
-3. **GE guard band**: clip strips that run past the GE's window on the CPU,
-   if hardware shows them missing.
+3. **GE guard band**: compare a console frame of Station Square with
+   PPSSPP's at the same frame (PSPLink and `--screenshot`, which reads
+   EDRAM on the console); clip strips that run past the GE's window on the
+   CPU if they are missing.
 4. Display list double-buffering, once the GE is the bottleneck anywhere
    (GE wait is ~0 today); list peak 1.8 MB of 2 MB.
 5. Depth: a per-frame depth range fitted to the 1/w the lists use (M2
    report §6).
-6. A kernel-side exception handler (ARK's kubridge loads kernel PRXs) for
-   hardware crashes with registers.
+6. Memory: Station Square leaves 3.4 MB on the console; Emerald Coast's
+   textures are about the same size, so item 2 comes before M5's exit run.
 7. Overlap file reads with frames (`sceIoReadAsync` is in place; gdFs would
    report "busy" until the read completes).

@@ -322,9 +322,20 @@ Each one has a single exit test. Do not start the next before the test passes.
       what it needs is in the report.*
 - [ ] **M3 Desktop audio.** ADX streaming plus pre-rendered SFX. Exit: BGM
       and jump/ring sounds in Emerald Coast.
-- [ ] **M4 PSP boot.** Same tree built with pspsdk: 16 MB guest array,
+- [x] **M4 PSP boot.** Same tree built with pspsdk: 16 MB guest array,
       sceGu Ninja backend, sceCtrl, sceIo from `ms0:/`. Run in PPSSPP first.
       Exit: title screen on PPSSPP, then on hardware.
+      *Passed 2026-10-19 (`docs/m4-psp-report.md`). PPSSPP: the title, and
+      `title_menu.tape` passes its check file. The test PSP-3001 (ARK):
+      the title, then by controller character select, Station Square and
+      the Chaos 0 fight to its result screen, 11,829 frames without a
+      crash. Two console-only faults were fixed on the way: coroutine
+      stacks must lie inside the thread's own stack, and the FPU starts
+      with traps on that the SH-4 game expects masked. Measured on the
+      console: title 76 ms a frame, Station Square and Chaos 0 125–390 ms
+      (CPU-bound); resident 38.9 MB at the title with 11.2 MB free, 3.4 MB
+      free in Station Square; 12.0 MB of the EBOOT is recompiled code, 7.9
+      MB of it overlays (paging them is M5's first memory lever).*
 - [ ] **M5 PSP playable.** Exit: Emerald Coast completed on real hardware;
       profile recorded (fps, frame time split, RAM high-water mark).
 - [ ] **M6 Complete.** All stories, saves, Chao Garden, cutscenes (PMF or
