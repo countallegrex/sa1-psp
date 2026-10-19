@@ -301,11 +301,17 @@ Each one has a single exit test. Do not start the next before the test passes.
       bugs (register sync at calls, switch-table bounds, pointer-table
       entries), each with a test in `tests/emitter/`; `SUMMARY.PRS` added
       to the overlays; the game's 32 direct TA writers wrapped as no-ops.*
-- [ ] **M2 Desktop graphics.** Ninja HLE on OpenGL fixed function, reading
+- [x] **M2 Desktop graphics.** Ninja HLE on OpenGL fixed function, reading
       models and textures from guest RAM. Exit: Emerald Coast completed with
       a controller, draw order correct, no desktop-only features.
-      *Renderer done 2026-10-17, exit test not yet run
-      (`docs/m2-render-report.md`). The desktop build opens an SDL2 window
+      *Passed 2026-10-19: the maintainer's controller run of the whole route
+      (title → Station Square → Chaos 0 won → Emerald Coast act 1 to the
+      goal → Station Square) is `tests/replay/sonic_ec1.tape` with its
+      check file, and `tools/replay_test.py` passes on it; the draw state
+      was verified against the TA parameters strip by strip and the
+      frames that the console can reach match it in blend, order and tint
+      (`docs/m2-render-report.md` §11; what still differs is in its §6).
+      Renderer done 2026-10-17. The desktop build opens an SDL2 window
       (480x272, controller or keyboard) and draws the Sega logo, title,
       menus, character select, Station Square and Emerald Coast from guest
       RAM: the game's own PowerVR parameter stream is parsed out of KAMUI's

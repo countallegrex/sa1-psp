@@ -237,8 +237,12 @@ stick), `--hwwatch FRAME:ADDR[:LEN]` (x86 debug-register write watch; each
 write logs the guest call stack), `SA1_TASK_CHECK=1` (per-frame check of the
 task lists' parent/prev links; logs the first broken one with the task's
 main), `SA1_HANG_DUMP=FILE` (guest RAM when the watchdog fires),
-`SA1_KAMUI_DUMP=<frame>` (every header, pointer hand-off, writer and sprite
-call of that frame, with each strip's screen extent; `SA1_KAMUI_DUMP_VERTS=1`
+`SA1_KAMUI_DUMP=<frame>[,<frame>...]` (every header, pointer hand-off, writer
+and sprite call of those frames, with each strip's screen extent and an
+`audit:` line decoding its TA state: list, depth compare and Z write, cull,
+blend factors, use-alpha and ignore-texture-alpha, fog mode, clamp/flip,
+colour type and face colour, shading instruction, and the texture's format,
+name and whether its alpha channel is used; §11. `SA1_KAMUI_DUMP_VERTS=1`
 adds the vertices of the odd strips; `SA1_TA_BT=<address>` the writer call
 behind one strip; §10), `SA1_MODEL_DEBUG=1`, `SA1_NOVSYNC=1`, `SA1_REPORT_TOP=N`,
 `SA1_TEX_LOG=1` / `SA1_TEX_DUMP_DIR=<dir>` (every texture decode, as PPM;
@@ -774,15 +778,220 @@ to look at: the Chaos 0 arrival and fight (rain, pavement, subtitles,
 Chaos's body), the ring sparkle, and Emerald Coast past the point of the
 fourth run's crash.
 
+## 11. Round four: translucency at the TA level, and the exit test (2026-10-19)
+
+The maintainer's fifth run completed the whole route with a controller (title →
+Sonic → Station Square at night → Chaos 0, won → Station Square by day →
+Emerald Coast act 1 to the goal → Station Square), 36,478 frames with a
+clean end line and no crash; it is `tests/replay/sonic_ec1.tape`, with a
+check file of seven milestones and the rings/lives/position samples, and
+`tools/replay_test.py` passes on it (and on the two older tapes). His
+verdict on the picture: the game plays mostly fine, the biggest issue is
+the transparency of some textures, mostly particle effects, splashes and
+sparkles; one police headlight spot z-fights. His shots: 17 and 18, the
+Emerald Coast cave pool (TIME 02:00:06 and 02:10:46, guest frames 24988 and
+25612) with the water "fully opaque cyan" and a splash "a solid white
+particle block"; 12 and 14, the arrival cutscene with the headlight spots
+on the pavement (frames 5000 and 5120); 13, a crop of a ring behind an
+officer's legs (nothing identifiable); 15, 16 and 19 fine.
+
+### The audit
+
+`SA1_KAMUI_DUMP` now takes a list of frames and writes, under every
+header it parses, an `audit:` line with the TA state decoded (§5), and the
+texture record keeps the archive entry name and an alpha classification
+(`texture_alpha_info`: no alpha channel / all 255 / used, with the
+smallest texel alpha). One replay with `SA1_KAMUI_DUMP=5000,5120,5880,24988,25612`
+gave every strip of the five frames (79–401 opaque, 72–396 translucent
+headers per frame; 2,663 strips in all). What the game sets, without a
+single exception across the five frames:
+
+| Field | Value on every strip |
+|---|---|
+| list | opaque (0) or translucent (2); **no punch-through strip** on the route, no modifier volumes in these frames |
+| ISP depth compare | GREATER-OR-EQUAL on 1/w, opaque and translucent alike |
+| ISP Z-write disable | **never set**: the translucent strips write Z too |
+| ISP culling | 1 (cull small), never the signed modes |
+| TSP blend | opaque: ONE/ZERO (the writers force it); translucent: SRC_ALPHA/INV_SRC_ALPHA (the bulk), SRC_ALPHA/ONE (lights, flares, the sparkle, bubbles), ONE/ONE (the splash) |
+| TSP use-alpha | 0 on the opaque list (forced), 1 on every translucent strip |
+| TSP ignore-texture-alpha | 1 on the opaque list (forced), 0 on every translucent strip |
+| TSP fog | table (0) everywhere but the sprites of the splash and the lens flares (none, 2); the per-vertex mode (1) never |
+| TSP clamp / flip | per texture, as the landtable materials say (clamp 11 for sprites and most objects, 00/01/10 and flip on the sea and wall tiles) |
+| colour type | packed (0) for the game's own strips, intensity (2) for every sprite and 2D quad (the face colour in the header, a float intensity per vertex); floating (1) never |
+| shading | modulate-alpha (3) on the packed strips, modulate (1) on every intensity sprite, decal (0) on a few HUD/light quads; decal-alpha (2) never |
+
+Per strip the ones in question:
+
+| Strip | List, blend | Shading, colour | Texture | What it is |
+|---|---|---|---|---|
+| the cave pool, frame 24988 (3 strips of 41, 76 and 72 vertices; 25612 the same) | translucent, SRC_ALPHA/INV_SRC_ALPHA | modulate-alpha, packed colour `0x65A9A9A9` / `0x65BFBFBF` / `0x65D6D6D6` (alpha 0x65 = 0.40) | `m128_sand005`, `m128_sand008` (565, no alpha) | the pool's **sand floor drawn as a 40 % layer over the opaque water** below it: the water is the opaque cyan, the sand the translucent strip |
+| the pool's edges, 12 strips | translucent, SRC_ALPHA/INV_SRC_ALPHA | modulate-alpha, packed `0x99F8F8F8` | `los_wt05` (565) | the shoreline foam |
+| the splash, frame 25612 (11 quads of 4 vertices, 50–80 px) | translucent, **ONE/ONE**, fog none | modulate, intensity, face `0xFFFFFFFF`, intensity 1.0 | `splash_a06/07/08` (1555 VQ 64x64, alpha used, min 0) | the water splash particles |
+| the headlight spots, frames 5000/5120/5880 (6 quads, 230–370 px wide, 12–50 high) | translucent, **SRC_ALPHA/ONE** | modulate, intensity, face `0x80FFFFFF` | `spotlight0` (565 32x32: a soft white disc on black, no alpha) | the additive light pool on the pavement, coplanar with it |
+| the beacons' glow (`panlight`), 7–10 quads | translucent, SRC_ALPHA/ONE | modulate, intensity, face alpha 0x4E–0xE1 pulsing, RGB fixed per colour | 565 16x16 | the rotating police lights |
+| the sun's lens flare (`lens02`–`lens07`), every frame | translucent, SRC_ALPHA/ONE | modulate, intensity, **face alpha 0x00** while the sun is out of view | 1555 (rings and discs, alpha used) | the flare elements, parked at alpha 0 |
+| Chaos's body (`c2tx_mizu0`, 68 strips) | translucent, SRC_ALPHA/INV_SRC_ALPHA | modulate-alpha, packed, alpha 0x98 | 565 | the boss |
+| Chaos's trail (`c_ato`, up to 299 quads) and drips (`drop`, 187) | translucent, SRC_ALPHA/INV_SRC_ALPHA | modulate, intensity, face alpha 0x09–0xF7, RGB 0 (`c_ato`) / `0xCCFFFFFF` (`drop`) | 4444 (alpha used) | off-screen in frame 5000 (y 1000–7500), on screen in the fight |
+| the ring sparkle (frame 17684, first pickup) | translucent, SRC_ALPHA/ONE | modulate, intensity | `ring02/04/06` (4444) | the three expanding rings |
+
+What the backend set for them before this round: blend factors, depth
+compare and Z write per strip as the header says (all honoured since M2);
+alpha test on list 4 (unused on the route); vertex alpha from packed,
+floating and intensity colours (the face alpha carried through
+`scale_argb`), `use_alpha` forcing it to 1; texture alpha always used, so
+`ignore_tex_alpha` was not honoured (it is set only on the opaque list,
+where the blend is ONE/ZERO anyway, so nothing drew differently); the
+shading instruction mapped to GL's REPLACE / DECAL / MODULATE, so MODULATE
+and MODULATE_ALPHA both multiplied the alphas; and 2D elements with 1/w
+above 1 clamped to the near plane. So the state mapping was already what
+the TA says, and the three guesses the round started with (water drawn
+with blending off or alpha 1, the splash drawn as alpha blend instead of
+additive, decals with Z-write disabled drawn with it on) are all false
+for this game: the water layer is blended at 0.40 as asked, the splash is
+drawn ONE/ONE, and **the game never disables Z-write**, not even for its
+decals. Whatever differs from the console in those frames is not a flag.
+
+### What changed in the backend
+
+1. **The shading instruction is now a GL 1.3 combiner** (`draw_gl.c`),
+   one rule per PowerVR mode (`draw.h` has the table): DECAL takes the
+   texture alpha alone, DECAL_ALPHA interpolates the texture over the
+   vertex colour by the texture alpha and takes the vertex alpha, the two
+   MODULATE forms multiply colours and alphas; `ignore_tex_alpha` replaces
+   the texture alpha with 1 (the env colour) in every mode, where GL's
+   fixed modes could not. The PSP GE has the same switch (`sceGuTexFunc`
+   with `GU_TCC_RGB` for the ignored alpha).
+   The hardware manual gives MODULATE's alpha as the texture alpha alone,
+   and the first build of this round did that; it lit every parked lens
+   flare (face alpha 0, texture alpha 1 inside the ring: a blue disc over
+   Sonic on the beach, rings over the police) and froze the beacons at full
+   glow, none of which the console shows in the §10 montages. The game is
+   the better reference than the manual here: both modulate forms take the
+   vertex alpha, which is what the old mapping did.
+2. **Translucent strips get a depth offset** of two units and one slope
+   (`glPolygonOffset(-1, -2)` with `GL_POLYGON_OFFSET_FILL`, through a new
+   `translucent` flag in `draw_state`). The game's decals sit on their
+   surfaces without a Z-write change, so the only thing that keeps a
+   headlight spot above the pavement is depth precision, and ours is the
+   PSP's: 16 bits over `1 − 2/z`. The step in z grows with the square of
+   the distance:
+
+   | z (units) | 1/w | 16-bit step (`1 − 2/z`) | float32 1/w step |
+   |---|---|---|---|
+   | 20 | 0.050 | 0.006 | 1.5e-6 |
+   | 50 | 0.020 | 0.038 | 4.7e-6 |
+   | 100 | 0.010 | 0.15 | 9.3e-6 |
+   | 200 | 0.005 | 0.61 | 1.9e-5 |
+   | 400 | 0.0025 | 2.4 | 3.7e-5 |
+
+   The spots in frames 5000–5880 are at 1/w 0.005–0.015 (z 70–200): a
+   decal lifted a tenth of a unit resolves on the console's float
+   compare and ties or loses on ours, so GEQUAL picks it or the pavement
+   by rounding, pixel by pixel. Two units of offset win the tie. The PSP
+   backend has the same 16-bit buffer and `sceGuDepthOffset` for the
+   same purpose; the bigger lever there is the depth mapping itself (a
+   per-frame range fit to the 1/w the lists actually use, instead of
+   spending the top half of the buffer between z = 1 and z = 2 where
+   nothing draws), noted in §6.
+3. The offset-colour pass scales the highlight by the vertex alpha only
+   under source-alpha blending (an additive strip adds it in full, as
+   the hardware adds the offset before the blend).
+4. The pass order is unchanged and matches the TA: opaque with depth
+   write in submission order, punch-through with the alpha test, then the
+   translucent strips sorted far to near by mean 1/w with ties in
+   submission order, each strip with the depth write the header asks
+   for (always on, in this game).
+
+### Against the console
+
+Method as in §10: ours replayed with `--screenshot`, the console through
+the oracle from the state library (`tools/flycast/oracle_states.py build`
+on the new tape: title 300, Station Square 1300, night cutscene 5300,
+Chaos 0 fight 7500 reachable; everything after the fight dropped, because
+the console loses the fight on the maintainer's inputs, twice over, and is back on
+the title by vblank 29,760; a fifth state named `ss_day` at 12800 passed
+the mode/level/act check but is the console mid-fight with three lives
+against our four, so it must not be used). The console captures are taken
+with the emulator thread held in the Lua vblank callback at the aligned
+game frame (`shots_c4.lua`, scratch), so each pair is the same game
+frame. Montages ours left, console right, in
+`..\private\exit-test-3\compare4\` (not committed), with a `README.txt`
+listing what each side shows:
+
+| Montage | Frames (ours guest = game; console game) | Verdict |
+|---|---|---|
+| `night_surrounded_f5000.png` | 5000 = 2497; 2497 | Same shot, pose and tint. The console has thin rain streaks; ours none (below). |
+| `night_surrender_f5120.png` | 5120 = 2557; 2557 | The maintainer's shot 12. Same composition; the headlight pools blend as on the console, with the same shape and no z-fighting at the car's spot in ours; theirs are brighter (40x40 patch at the pool centre: ours 153/163/164 RGB, console 193/203/202; the unlit asphalt next to it 49 against 49). Rain on the console. |
+| `night_headlights_f5880.png` (and `_console+30.png`) | 5880 = 2937; 2937 (and 2967) | Same pose, camera and subtitle; Chaos's body, the beacons and the headlight pools blend the same. The console's searchlight at the top left is a soft bright shaft, ours is not there (a `smokelight` strip, ONE/ONE, below). The +30 capture shows the console cutscene is **not** 30 frames behind on this tape (the §10 lag was that tape's). |
+| `night_f6040.png` | 6040 = 3017; 3017 | The maintainer's shot 14 neighbourhood: identical composition and tint; rain on the console. |
+| `ec_scripted_g2763.png` | the scripted route (ec_scripted + the stage poke) 5531 = 2763; 2763 | The ring sparkle: the same small green burst on both; the console's a touch brighter (as §10). |
+| `ec_scripted_g2800.png`, `g2830.png`, `g2850.png` | 5605, 5665, 5705 = 2800, 2830, 2850; the same | The shoreline: the sea over sand, the foam line, the umbrellas. The sea is translucent over the sand on both; ours is darker and bluer (open sea patch at 2830: ours 23/154/180 RGB, console 53/184/199; the dry sand 225 against 227) and the console has more bright glints on the water. |
+| `ec_scripted_g2856.png` … `g3250.png` | from 2856 on | **Not rendering comparisons**: the routes split at game frame 2860 (below). |
+
+What could not be paired: the cave pool and the splash of shots 17 and
+18 (frames 24988 and 25612), which lie past the Chaos 0 fight; the
+scripted route never reaches the cave. For those two the audit above is
+the evidence: the sand layer over the pool is blended at the 0.40 the
+header asks, and the splash is drawn ONE/ONE with its 1555 texture's alpha
+intact (the particles are dense across the 64x64, so the quad reads as a
+speckled square on any renderer); whether the console's look differs is
+not established.
+
+Verdict: the translucency of the frames that can be paired matches the
+console in blend, shape, order and tint. The headlight pools' brightness
+(ours about 20 % lower at the centre, the header's face alpha 0x80
+honoured on both sides as far as the audit can tell) and the sea's
+colour are differences of degree that the TA flags do not explain; the
+searchlight shaft and the rain are absent in ours. Those four are listed
+in §6 with what is known about each.
+
+### Found on the way
+
+- **The rain streaks are zero-wide.** The `drop` quads (187 per frame,
+  the rain) come out of the sprite path with x0 = x1 to the pixel (e.g.
+  `x -463..-463 y 9..10`), so nothing rasterises; the console draws them
+  one or two pixels wide. §10 item 4 called the rain right after the
+  billboard fix; on this tape's frames it is not. Sprite path, not
+  translucency.
+- **The searchlight cone** (`smokelight`, 565, ONE/ONE, modulate-alpha,
+  colour `0xFFFFFFFF`/`0xB2FFFFFF`, 14 vertices, 1/w 0.005–0.018) is
+  drawn additively with the night scene's fog off (the fog table here
+  runs from z 7111, so nothing in view is fogged) and still leaves no
+  shaft in ours. Not understood; the strip is identified for the next
+  pass (`SA1_TA_BT` on it).
+- **A collision difference on the scripted route.** The desktop and the
+  console agree in Sonic's position to under a unit through game frame
+  2851, both stop against the beach deck chairs at 2852, and at 2860 ours
+  jumps 55 units forward past the chairs (z 407 → 463) while the console
+  stays stuck there (it is then hit by the Egg Keeper at about 3070 and
+  loses a life; ours runs on into the pier). The first divergence of the
+  recompiled game from the console found by the oracle that is not
+  timing; a seam or collision body to find.
+- The console's stage timer reads three hundredths behind ours
+  throughout Emerald Coast (the intro-pan timing of §10).
+
 ## 6. Open items
 
-- **The exit test.** Needs a controller run through the real route, recorded:
-  `build-desktop\backend\desktop\sa1psp.exe ..\private\dump\sa1_us_1005\data\1ST_READ.BIN ..\private\dump\sa1_us_1005\data --record tests\replay\sonic_ec1.tape`
-  (title → Sonic → Station Square → Chaos 0 win → Emerald Coast act 1
-  complete; `tests/replay/README.md`). The Chaos 0 fight must be won (the
-  overlays doc says the scripted pad cannot). M2 is ticked only after that
-  run passes. Four runs so far (§7, §9, §10); the fifth is pending, with
-  the command in §10.
+- **The exit test passed** with the fifth run (§11): `tests/replay/sonic_ec1.tape`
+  and its check file; `tools/replay_test.py` passes on it. M2 is ticked
+  in README §8. What the fourth round left (§11):
+  - the headlight pools are about 20 % dimmer than the console's at the
+    centre, with the asphalt beside them equal; the sea on the shoreline
+    is darker and bluer (ours 23/154/180 against 53/184/199) with fewer
+    glints. Neither is a TA flag; the offset-colour pass and the texture
+    filtering are the suspects.
+  - the searchlight shaft of the arrival cutscene (`smokelight`, ONE/ONE)
+    does not show in ours; the rain (`drop` sprites) comes out of the
+    sprite path zero pixels wide. Sprite/strip path work, not blending.
+  - the cave pool and the splash (shots 17 and 18) could not be paired
+    with the console (past the fight the console loses); the audit says
+    both are drawn as the headers ask.
+  - the scripted route diverges from the console at game frame 2860 at
+    the beach deck chairs (ours passes them, the console stays stuck):
+    a collision difference to find.
+  - `..\flycast\states\sonic_ec1__ss_day.state` is misnamed and mid-fight
+    on the console (lives differ); the builder's check should compare
+    lives too, or the entry be dropped.
 - Console timing (§10): the Chaos 0 arrival cutscene runs about 30 game
   frames slower on the console (voice playback the HLE finishes at once is
   the suspect), and the Emerald Coast intro pan ends later here than on
@@ -813,7 +1022,14 @@ fourth run's crash.
   wrappers. Dropping the rows means a main-image re-emit.
 - PSP shape to keep for M4: 32 MB desktop window vs 18 MB on the PSP
   (§1 item 4); CLUT textures stay paletted there; strips should be merged
-  per state change; the 16-bit depth buffer with `1 − 2/z` loses precision
-  far away (no artefact seen at 480x272); the offset-colour pass is a second
-  draw of every textured strip that has one.
+  per state change; the offset-colour pass is a second draw of every
+  textured strip that has one. **Depth**: the 16-bit buffer over `1 − 2/z`
+  resolves 0.6 units at z = 200 and 2.4 at z = 400 (§11), and the game's
+  decals rely on the console's float 1/w with Z-write on; the desktop
+  pulls translucent strips nearer by two depth units (`glPolygonOffset`),
+  the GE has `sceGuDepthOffset` for the same, and a per-frame depth range
+  fitted to the 1/w the lists use (nothing draws between z = 1 and 2, where
+  half the buffer goes) would buy the rest. The shading rules of `draw.h`
+  map to `sceGuTexFunc` (modulate / decal / replace, `GU_TCC_RGB` for
+  ignore-texture-alpha).
 - `njDrawPolygon2D` fans are approximated as strips; no fan on the route.
