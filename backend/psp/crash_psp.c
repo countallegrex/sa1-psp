@@ -67,7 +67,7 @@ static const host_fn *lookup(uintptr_t pc) {
 }
 
 static int is_call_return(uintptr_t ra) {
-    if ((ra & 3) || ra < 0x08804000u + 8 || ra >= 0x0A000000u) return 0;   /* user RAM, where the EBOOT is */
+    if ((ra & 3) || ra < 0x08804000u + 8 || ra >= 0x0C000000u) return 0;   /* user RAM (MEMSIZE=1), where the EBOOT is */
     uint32_t ins = *(const uint32_t *)(ra - 8);
     return (ins >> 26) == 3 || ((ins >> 26) == 0 && (ins & 0x3F) == 9);  /* jal, jalr */
 }

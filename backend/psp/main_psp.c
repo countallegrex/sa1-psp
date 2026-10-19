@@ -38,6 +38,7 @@
 #include <pspdisplay.h>
 #include <pspiofilemgr.h>
 #include <pspsysmem.h>
+#include <psppower.h>
 
 #include <malloc.h>
 #include <stdio.h>
@@ -88,8 +89,10 @@ static uint32_t heap_largest_free(void) {
     uint32_t lo = 0, hi = 64u << 20;
     while (hi - lo > (64u << 10)) {
         uint32_t mid = lo + (hi - lo) / 2u;
-        void *p = malloc(mid);
-        if (p) { free(p); lo = mid; } else hi = mid;
+        uint8_t *p = malloc(mid);
+        /* PPSSPP's sbrk never refuses; a block past user RAM (0x0C000000 with MEMSIZE=1) is a refusal too */
+        if (p && (uintptr_t)p + mid <= 0x0C000000u) { free(p); lo = mid; }
+        else { free(p); hi = mid; }
     }
     return lo;
 }
@@ -101,11 +104,11 @@ static void mem_report(const char *when) {
     uint32_t image = (_end && __executable_start) ? (uint32_t)(_end - __executable_start) : 0;
     uint32_t text = (_etext && __executable_start) ? (uint32_t)(_etext - __executable_start) : 0;
     uint32_t bss = (_end && __bss_start) ? (uint32_t)(_end - __bss_start) : 0;
-    sa1_log("mem (%s): EBOOT image %u KB (text %u KB, bss %u KB incl. coroutine stacks and the display list); "
-            "heap in use %u KB, largest free block %u KB (guest RAM %u KB, textures %u KB in %u); outside the heap %u KB (largest %u KB)",
-            when, image / 1024u, text / 1024u, bss / 1024u, (unsigned)mi.uordblks / 1024u, largest / 1024u,
-            SA1_RAM_ALLOC / 1024u, ds->texture_bytes / 1024u, ds->textures_alive,
-            (unsigned)sceKernelTotalFreeMemSize() / 1024u, (unsigned)sceKernelMaxFreeMemSize() / 1024u);
+    sa1_log("mem (%s): EBOOT image %u KB (text %u KB, bss %u KB: coroutine stacks, display list)",
+            when, image / 1024u, text / 1024u, bss / 1024u);
+    sa1_log("mem (%s): heap in use %u KB (guest RAM %u KB, textures %u KB in %u), sbrk %u KB, largest free block %u KB; outside the heap %u KB",
+            when, (unsigned)mi.uordblks / 1024u, SA1_RAM_ALLOC / 1024u, ds->texture_bytes / 1024u, ds->textures_alive,
+            (unsigned)mi.arena / 1024u, largest / 1024u, (unsigned)sceKernelTotalFreeMemSize() / 1024u);
     uint32_t root = sa1_plat_coro_high_water(0), task = 0;
     int task_i = -1;
     for (int i = 1; i < SA1_CORO_SLOTS; i++) { uint32_t h = sa1_plat_coro_high_water(i); if (h > task) { task = h; task_i = i; } }
@@ -315,6 +318,10 @@ int main(int argc, char **argv) {
     sa1_log("sa1-psp (PSP): base %s, data %s, %d args from args.txt%s", base_dir, data_dir, args_c, headless ? ", headless" : "");
     for (int i = 0; i < args_c; i++) sa1_log("  arg %s", args_v[i]);
     mem_report("start");
+
+    /* The PSP boots at 222 MHz; the game wants all of it (README section 5). */
+    int clk = scePowerSetClockFrequency(333, 333, 166);
+    sa1_log("clock: cpu %d MHz, bus %d MHz (set: %d)", scePowerGetCpuClockFrequencyInt(), scePowerGetBusClockFrequencyInt(), clk);
 
     sa1_depth_hook = stack_probe;
     sa1_trap_hook = on_trap;

@@ -74,6 +74,7 @@ static int cull_flip;                         /* --cull-flip (main_psp.c): the o
 
 /* Counters for the report beyond draw_stats. */
 static struct { uint32_t list_high, dropped, offscreen, mirrors, mirror_fail, downscaled, frames;
+                uint32_t flush_state, flush_proj, flush_offset, last_strips, last_draws, last_states;
                 uint64_t gpu_wait_us, frame_us_sum, frame_us_max, last_end; } gs;
 
 typedef struct { float u, v; uint32_t color; float x, y, z; } gu_vtx;
@@ -508,6 +509,7 @@ void draw_end_frame(void) {
         gs.frames++;
     }
     gs.last_end = now;
+    gs.last_strips = stats.strips; gs.last_draws = stats.draw_calls; gs.last_states = stats.state_changes;
     list_open = 0;
     for (unsigned i = 0; i < nfree_later; i++) texture_release(free_later[i]);
     nfree_later = 0;
@@ -521,10 +523,13 @@ void draw_end_frame(void) {
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
 void draw_gu_report(void) {
     sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, GE wait %.2f ms/frame; list high water %u KB; "
-            "%u strips dropped (list full), %u off the GE's guard band; %u mirrors (%u too big), %u textures downscaled",
+            "%u strips dropped (list full), %u off the GE's guard band",
             gs.frames, gs.frames ? gs.frame_us_sum / 1000.0 / gs.frames : 0.0, gs.frame_us_max / 1000.0,
-            gs.frames ? gs.gpu_wait_us / 1000.0 / gs.frames : 0.0, gs.list_high / 1024u, gs.dropped, gs.offscreen,
-            gs.mirrors, gs.mirror_fail, gs.downscaled);
+            gs.frames ? gs.gpu_wait_us / 1000.0 / gs.frames : 0.0, gs.list_high / 1024u, gs.dropped, gs.offscreen);
+    sa1_log("draw: last frame %u strips -> %u GE draws, %u state changes; batch breaks by state %u, projection %u, offset colour %u; "
+            "%u mirrors (%u too big), %u textures downscaled", gs.last_strips, gs.last_draws, gs.last_states,
+            gs.flush_state, gs.flush_proj, gs.flush_offset, gs.mirrors, gs.mirror_fail, gs.downscaled);
+    gs.flush_state = gs.flush_proj = gs.flush_offset = 0;
     gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = 0; gs.dropped = gs.offscreen = 0;
 }
 
@@ -610,7 +615,7 @@ static void apply_state(const draw_state *s) {
 
 void draw_set_state(const draw_state *s) {
     if (cur_valid && memcmp(s, &cur, sizeof cur) == 0) return;
-    if (!headless && list_open) batch_flush();
+    if (!headless && list_open) { if (nbatch) gs.flush_state++; batch_flush(); }
     cur = *s; cur_valid = 1;
     stats.state_changes++;
     if (headless) return;
@@ -629,7 +634,7 @@ static void select_proj(const draw_vertex *v, int n) {
         for (int i = 1; i < n; i++) { if (v[i].x < xmin) xmin = v[i].x; if (v[i].x > xmax) xmax = v[i].x; }
         p = (xmin <= 0.5f && xmax >= DC_W - 0.5f) ? PROJ_FULL : PROJ_2D;
     }
-    if (p != cur_proj) { batch_flush(); sceGuSetMatrix(GU_PROJECTION, &proj[p]); cur_proj = p; }
+    if (p != cur_proj) { if (nbatch) gs.flush_proj++; batch_flush(); sceGuSetMatrix(GU_PROJECTION, &proj[p]); cur_proj = p; }
 }
 
 static inline uint32_t sat_add(uint32_t c, uint32_t o) {
@@ -710,7 +715,7 @@ void draw_strip(const draw_vertex *v, int n) {
     select_proj(v, n);
     int has_offset = 0;
     if (cur.texture) for (int i = 0; i < n && !has_offset; i++) if (v[i].ocolor & 0x00FFFFFFu) has_offset = 1;
-    if (has_offset) batch_flush();
+    if (has_offset) { if (nbatch) gs.flush_offset++; batch_flush(); }
     int need = n + (nbatch ? 3 : 0);
     if (nbatch + need > BATCH_MAX) batch_flush();
     int start = nbatch;
