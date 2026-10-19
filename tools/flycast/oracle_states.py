@@ -208,7 +208,7 @@ def build(tape, frames, exe, data, gdi, flycast=None, poke_ec=False, work=None, 
         os.remove(state_out)
     nframes = tape_io.read(tape).end
     env = dict(os.environ, SA1_ORACLE_GPAD=gpad, SA1_ORACLE_WATCH=WATCH, SA1_ORACLE_OUT=os.path.join(work, "flycast.tsv"),
-               SA1_ORACLE_MAX=str((max(p["game_frame"] for p in plan) if plan else nframes // 2) * 2 + 7000), SA1_ORACLE_STATE_OUT=state_out,
+               SA1_ORACLE_MAX=str((max(p["game_frame"] for p in plan) if plan else nframes // 2) * 2 + 10000), SA1_ORACLE_STATE_OUT=state_out,   # the intro movie alone is 6,900 console vblanks
                SA1_ORACLE_SAVE=",".join("%d:%d" % (p["slot"], p["game_frame"]) for p in plan),
                SA1_ORACLE_STOP=str(max(p["game_frame"] for p in plan) + 4) if plan else "-1")
     if poke_ec:
