@@ -85,38 +85,65 @@ void draw_gu_set_cull_flip(int on) { cull_flip = on; }
 /* --gu-debug N (main_psp.c): bisection switches for console-only drawing
  * differences.  1 = mip level 0 only (GU_TEXTURE_CONST), 2 = no mip levels
  * built, 4 = no swizzle, 8 = no depth test on the 2D layer. */
+#define TEX_LEVELS_DEFAULT 8
 static int gu_debug;
 void draw_gu_set_debug(int flags) { gu_debug = flags; }
+static float lod_bias;
+void draw_gu_set_lod_bias(float b) { lod_bias = b; }
+static int max_levels = TEX_LEVELS_DEFAULT;
+void draw_gu_set_max_mip(int n) { max_levels = n < 0 ? 1 : n + 1 > 8 ? 8 : n + 1; }
 
 /* ---- projection --------------------------------------------------------------- */
 enum { PROJ_3D = 0, PROJ_2D, PROJ_FULL, PROJ_N };
-static ScePspFMatrix4 proj[PROJ_N];
-/* The near end of the depth range: depth is 1 - 2 zn/z, linear in w = 1/z,
- * 16 bits from z = zn out; a vertex nearer than zn (the 2D layer's) is drawn
- * at zn, the front of the buffer.  It stays 1: following the previous
- * frame's nearest vertex (694b9e8) changed the mapping from frame to frame
- * and collapsed HUD and close geometry between 1 and zn to the front, which
- * flickered on the console (the maintainer's run). */
-static float depth_zn = 1.0f;
+/* ---- depth: two passes ------------------------------------------------------
+ * The PowerVR compares float 1/w per pixel; the GE has one 16-bit buffer.
+ * Linear in w over z 1..infinity, a step is z^2/65534 units: 0.075 at
+ * z = 70, where Sonic stands in Station Square, and his face and eye-white
+ * strips, a few hundredths apart, then lost to each other by rounding on
+ * the console (the maintainer's mono-eye).  No single range fixes that: a nearer
+ * start clamps the floor in front of the camera (z ~5).  So the frame is
+ * drawn in two passes split at z = depth_split: the far pass (z >= split,
+ * depth 1 - 2 split/z, 16 bits over w 0..1/split, 16x finer at split 16)
+ * and, after a depth clear, the near pass (z 1..split, the 16 bits over
+ * w 1/split..1).  The far pass is entirely behind the near one, so the
+ * clear loses nothing.  Draws are recorded during the frame and replayed by
+ * draw_end_frame, pass by pass, in their order (opaque, punch-through,
+ * sorted translucent); a strip that spans the split is cut there (w is
+ * linear in screen space, as for the guard band).  --gu-split 0: one pass,
+ * the old 1 - 2/z. */
+enum { PASS_FAR = 0, PASS_NEAR = 1, PASSES };
+static ScePspFMatrix4 proj[PASSES][PROJ_N];
+static float depth_split = 16.0f;
+static const float depth_zn = 1.0f;          /* nearer vertices (the 2D layer's) draw at z = 1, the front */
 static void build_projs(void);
-void draw_gu_set_zn(float zn) { depth_zn = zn >= 1.0f ? zn : 1.0f; build_projs(); }
+void draw_gu_set_split(float z) { depth_split = z > 1.0f ? z : 0.0f; build_projs(); }
 static int cur_proj = -1;
 /* x in 640-space from left to right -> NDC [lo, hi]; y 0..480 -> 1..-1; the
- * vertex is (x*z, y*z, -z), clip w = z, clip z = z - 2 (draw_gl.c's
- * 1 - 2/z).  Columns are x, y, z, w (GL order). */
-static void build_proj(ScePspFMatrix4 *m, float left, float right, float lo, float hi) {
+ * vertex is (x*z, y*z, -z) and clip w = z.  Depth: clip z = a z + b gives
+ * NDC z = a + b/z, from -1 at z = z0 to +1 at z = z1 (z1 = 0: infinity).
+ * Columns are x, y, z, w (GL order). */
+static void build_proj(ScePspFMatrix4 *m, float left, float right, float lo, float hi, float z0, float z1) {
     float sx = (hi - lo) / (right - left), ox = lo - left * sx;
+    float a, b;
+    if (z1 <= 0.0f) { a = 1.0f; b = -2.0f * z0; }
+    else { b = -2.0f * z0 * z1 / (z1 - z0); a = -1.0f - b / z0; }
     memset(m, 0, sizeof *m);
     m->x.x = sx;  m->z.x = -ox;
     m->y.y = -2.0f / DC_H; m->z.y = -1.0f;
-    m->z.z = -1.0f; m->w.z = -2.0f * depth_zn;
+    m->z.z = -a; m->w.z = b;
     m->z.w = -1.0f;
 }
 static void build_projs(void) {
-    if (aspect_wide) build_proj(&proj[PROJ_3D], DRAW_WIDE_LEFT, DRAW_WIDE_RIGHT, -1.0f, 1.0f);
-    else build_proj(&proj[PROJ_3D], 0.0f, DC_W, -0.75f, 0.75f);
-    build_proj(&proj[PROJ_2D], 0.0f, DC_W, -0.75f, 0.75f);
-    build_proj(&proj[PROJ_FULL], 0.0f, DC_W, -1.0f, 1.0f);
+    for (int pass = 0; pass < PASSES; pass++) {
+        /* the far pass starts a hair before the split and the near pass ends
+         * a hair after it, so the cut's own vertices stay inside both ranges */
+        float z0 = depth_split ? (pass == PASS_FAR ? depth_split * 0.999f : depth_zn) : depth_zn;
+        float z1 = depth_split && pass == PASS_NEAR ? depth_split * 1.001f : 0.0f;
+        if (aspect_wide) build_proj(&proj[pass][PROJ_3D], DRAW_WIDE_LEFT, DRAW_WIDE_RIGHT, -1.0f, 1.0f, z0, z1);
+        else build_proj(&proj[pass][PROJ_3D], 0.0f, DC_W, -0.75f, 0.75f, z0, z1);
+        build_proj(&proj[pass][PROJ_2D], 0.0f, DC_W, -0.75f, 0.75f, z0, z1);
+        build_proj(&proj[pass][PROJ_FULL], 0.0f, DC_W, -1.0f, 1.0f, z0, z1);
+    }
     cur_proj = -1;
 }
 void draw_set_aspect(int wide) {
@@ -216,12 +243,14 @@ static uint8_t *halve(const uint8_t *src, int w, int h, int fmt) {
     for (int y = 0; y < nh; y++)
         for (int x = 0; x < nw; x++) {
             if (bits <= 8) { px_set(dst, drb, bits, x, y, px_get(src, srb, bits, x * sx, y * sy)); continue; }
-            unsigned acc[4] = {0, 0, 0, 0}, c[4];
+            unsigned acc[4] = {0, 0, 0, 0}, c[4], amin = 255;
             for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
                 unpack(fmt, px_get(src, srb, bits, x * sx + (sx > 1 ? i : 0), y * sy + (sy > 1 ? j : 0)), c);
                 for (int k = 0; k < 4; k++) acc[k] += c[k];
+                if (c[3] < amin) amin = c[3];
             }
             for (int k = 0; k < 4; k++) acc[k] = (acc[k] + 2) / 4;
+            if (gu_debug & 16) acc[3] = amin;
             px_set(dst, drb, bits, x, y, pack(fmt, acc));
         }
     return dst;
@@ -262,7 +291,7 @@ static int texture_build(int slot, int w, int h, int fmt, const uint8_t *pixels,
     uint8_t *lin[TEX_LEVELS] = {0};
     int lw = w, lh = h, levels = 1;
     lin[0] = (uint8_t *)pixels;
-    while (!(gu_debug & 2) && levels < TEX_LEVELS && (w >> levels) >= 8 && (h >> levels) >= 8) levels++;
+    while (!(gu_debug & 2) && levels < max_levels && (w >> levels) >= 8 && (h >> levels) >= 8) levels++;
     for (int l = 1; l < levels; l++) {
         lin[l] = halve(lin[l - 1], w >> (l - 1), h >> (l - 1), fmt);
         if (!lin[l]) { levels = l; break; }
@@ -483,8 +512,8 @@ int draw_init(int scale, int want_headless) {
     sceGuEnable(GU_CLIP_PLANES);
     sceGuEnable(GU_DEPTH_TEST);
     sceGuShadeModel(GU_SMOOTH);
-    sceGuTexLevelMode((gu_debug & 1) ? GU_TEXTURE_CONST : GU_TEXTURE_AUTO, 0.0f);
-    sa1_log("draw: --gu-debug %d, depth near end z %.1f", gu_debug, depth_zn);
+    sceGuTexLevelMode((gu_debug & 1) ? GU_TEXTURE_CONST : GU_TEXTURE_AUTO, (gu_debug & 1) ? 0.0f : lod_bias);
+    sa1_log("draw: --gu-debug %d, depth split z %.1f (0: one pass)", gu_debug, depth_split);
     static const ScePspIMatrix4 dither = { {-4, 0, -3, 1}, {2, -2, 3, -1}, {-3, 1, -4, 0}, {3, -1, 2, -2} };
     sceGuSetDither(&dither);
     sceGuEnable(GU_DITHER);
@@ -519,13 +548,14 @@ void draw_set_fog(uint32_t color_argb, float z_near, float z_far) {
     if (!headless && list_open) apply_fog();
 }
 
-static int nbatch, nobatch;
 static float tex_su = -1.0f, tex_sv = -1.0f;
-static void batch_flush(void);
+static void rec_reset(void);
+static void replay(void);
 
 void draw_begin_frame(uint32_t clear_argb) {
     stats.draw_calls = stats.triangles = stats.strips = stats.state_changes = 0;
-    cur_valid = 0; cur_proj = -1; bound_tex = 0; nbatch = 0; nobatch = 0;
+    cur_valid = 0; cur_proj = -1; bound_tex = 0;
+    rec_reset();
     if (headless) return;
     tex_su = tex_sv = -1.0f;        /* re-sent with the first texture */
     /* the buffer we are about to draw is on screen until the swap's vblank */
@@ -569,7 +599,7 @@ static void write_shot(void) {
 
 void draw_end_frame(void) {
     if (headless || !list_open) return;
-    batch_flush();
+    replay();
     uint32_t used = (uint32_t)sceGuCheckList();
     if (used > gs.list_high) gs.list_high = used;
     sceGuFinish();
@@ -607,8 +637,8 @@ void draw_gu_report(void) {
     sa1_log("draw: last frame %u strips -> %u GE draws, %u state changes; batch breaks by state %u, projection %u; "
             "%u mirrors (%u too big), %u textures downscaled", gs.last_strips, gs.last_draws, gs.last_states,
             gs.flush_state, gs.flush_proj, gs.mirrors, gs.mirror_fail, gs.downscaled);
-    sa1_log("draw: depth near end %.2f; nearest 3D z %.2f; 3D vertices nearer than z 2 / 4 / 8 / 16: %u / %u / %u / %u",
-            depth_zn, gs.zmin_win < 1e29f ? gs.zmin_win : 0.0f, gs.znear_verts[0], gs.znear_verts[1], gs.znear_verts[2], gs.znear_verts[3]);
+    sa1_log("draw: depth split z %.1f; nearest 3D z %.2f; 3D vertices nearer than z 2 / 4 / 8 / 16: %u / %u / %u / %u",
+            depth_split, gs.zmin_win < 1e29f ? gs.zmin_win : 0.0f, gs.znear_verts[0], gs.znear_verts[1], gs.znear_verts[2], gs.znear_verts[3]);
     gs.zmin_win = 1e30f; memset(gs.znear_verts, 0, sizeof gs.znear_verts);
     gs.flush_state = gs.flush_proj = gs.flush_offset = 0;
     gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = 0; gs.dropped = gs.offscreen = 0;
@@ -712,19 +742,67 @@ static void apply_state(const draw_state *s) {
     sceGuShadeModel(s->gouraud ? GU_SMOOTH : GU_FLAT);
 }
 
+static void batch_flush(void);
+static int rec_state(const draw_state *s);
+
 void draw_set_state(const draw_state *s) {
     if (cur_valid && memcmp(s, &cur, sizeof cur) == 0) return;
-    if (!headless && list_open) { if (nbatch) gs.flush_state++; batch_flush(); }
+    if (!headless && list_open) batch_flush();
     cur = *s; cur_valid = 1;
     stats.state_changes++;
     if (headless) return;
-    if (!list_open) { cur_valid = 0; return; }   /* applied when a frame is open */
-    apply_state(s);
+    if (!list_open || rec_state(s) != 0) { cur_valid = 0; return; }   /* recorded only while a frame is open */
 }
 
 /* ---- primitives ----------------------------------------------------------------- */
-#define BATCH_MAX 6144
-static gu_vtx batch[BATCH_MAX];
+#define BATCH_MAX 4096
+#define STATE_MAX 4096
+#define ITEM_MAX 6144
+typedef struct { uint32_t color; float x, y, z; } gu_ovtx;
+#define OVTX_FMT (GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
+
+/* One recorded draw: a run of strips (or a line strip) of one state and
+ * projection in one pass, its vertices already in the display list (the
+ * list jumps over them), the offset-colour vertices beside them. */
+typedef struct { uint16_t state; uint8_t proj, prim; uint16_t n, on; void *v, *ov; } gu_item;
+static draw_state rstates[STATE_MAX];
+static int nrstates;
+static gu_item items[PASSES][ITEM_MAX];
+static int nitems[PASSES];
+static gu_vtx batch[PASSES][BATCH_MAX];
+static gu_ovtx obatch[PASSES][BATCH_MAX];
+static int nbatch[PASSES], nobatch[PASSES];
+
+static void rec_reset(void) {
+    nrstates = 0;
+    for (int p = 0; p < PASSES; p++) nitems[p] = nbatch[p] = nobatch[p] = 0;
+}
+
+static int rec_state(const draw_state *s) {
+    if (nrstates == STATE_MAX) { gs.dropped++; return -1; }
+    rstates[nrstates++] = *s;
+    return 0;
+}
+
+static void batch_flush_pass(int pass) {
+    if (!nbatch[pass]) return;
+    if (nitems[pass] == ITEM_MAX || nrstates == 0) { gs.dropped++; nbatch[pass] = nobatch[pass] = 0; return; }
+    gu_item *it = &items[pass][nitems[pass]++];
+    it->state = (uint16_t)(nrstates - 1); it->proj = (uint8_t)cur_proj; it->prim = GU_TRIANGLE_STRIP;
+    it->n = (uint16_t)nbatch[pass]; it->on = (uint16_t)nobatch[pass];
+    it->v = sceGuGetMemory((int)(nbatch[pass] * sizeof(gu_vtx)));
+    memcpy(it->v, batch[pass], nbatch[pass] * sizeof(gu_vtx));
+    it->ov = NULL;
+    if (nobatch[pass]) {
+        it->ov = sceGuGetMemory((int)(nobatch[pass] * sizeof(gu_ovtx)));
+        memcpy(it->ov, obatch[pass], nobatch[pass] * sizeof(gu_ovtx));
+    }
+    nbatch[pass] = nobatch[pass] = 0;
+}
+
+static void batch_flush(void) {
+    for (int p = 0; p < PASSES; p++) batch_flush_pass(p);
+}
 
 static void select_proj(const draw_vertex *v, int n) {
     int p = PROJ_3D;
@@ -734,18 +812,54 @@ static void select_proj(const draw_vertex *v, int n) {
         p = (xmin <= 0.5f && xmax >= DC_W - 0.5f) ? PROJ_FULL : PROJ_2D;
     } else if (cur.layer == DRAW_LAYER_3D_43) p = PROJ_2D;
     if (p != cur_proj) {
-        if (nbatch) gs.flush_proj++;
+        if (nbatch[0] || nbatch[1]) gs.flush_proj++;
         batch_flush();
-        sceGuSetMatrix(GU_PROJECTION, &proj[p]);
-        /* The 2D layer's 4:3 area is the game's whole screen: what it draws
-         * past x 0 or 640 (the title's water wobble) was off a console's
-         * screen, so it is cut at the area's edges, not drawn into the sides.
-         * In 4:3 mode everything is in the area already (begin_frame). */
-        if (aspect_wide) {
-            if (p == PROJ_2D) sceGuScissor(SCR_W / 8, 0, SCR_W * 7 / 8, SCR_H);
-            else sceGuScissor(0, 0, SCR_W, SCR_H);
-        }
         cur_proj = p;
+    }
+}
+
+/* Sets the projection of pass for proj p and the scissor that goes with it:
+ * the 2D layer's 4:3 area is the game's whole screen, so what it draws past
+ * x 0 or 640 (the title's water wobble) is cut at the area's edges.  In
+ * 4:3 mode everything is in the area already (begin_frame). */
+static void set_proj(int pass, int p) {
+    sceGuSetMatrix(GU_PROJECTION, &proj[pass][p]);
+    if (aspect_wide) {
+        if (p == PROJ_2D) sceGuScissor(SCR_W / 8, 0, SCR_W * 7 / 8, SCR_H);
+        else sceGuScissor(0, 0, SCR_W, SCR_H);
+    }
+}
+
+/* Draws what the frame recorded: the far pass, a depth clear, the near pass. */
+static void replay(void) {
+    batch_flush();
+    for (int pass = 0; pass < PASSES; pass++) {
+        if (!nitems[pass]) continue;
+        if (pass == PASS_NEAR && nitems[PASS_FAR]) {
+            sceGuScissor(0, 0, SCR_W, SCR_H);
+            sceGuDepthMask(GU_FALSE);
+            sceGuClearDepth(0);
+            sceGuClear(GU_DEPTH_BUFFER_BIT);
+            if (!aspect_wide) sceGuScissor(SCR_W / 8, 0, SCR_W * 7 / 8, SCR_H);
+        }
+        int st = -1, pj = -1;
+        for (int i = 0; i < nitems[pass]; i++) {
+            gu_item *it = &items[pass][i];
+            const draw_state *s = &rstates[it->state];
+            if (it->state != st) { apply_state(s); st = it->state; }
+            if (it->proj != pj) { set_proj(pass, it->proj); pj = it->proj; }
+            sceGuDrawArray(it->prim, VTX_FMT, it->n, 0, it->v);
+            stats.draw_calls++;
+            if (it->on) {                 /* the offset colour: additive, untextured, at equal depth */
+                sceGuDisable(GU_TEXTURE_2D);
+                sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
+                sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
+                sceGuDisable(GU_ALPHA_TEST);
+                sceGuDrawArray(GU_TRIANGLE_STRIP, OVTX_FMT, it->on, 0, it->ov);
+                stats.draw_calls++;
+                apply_blend_depth(s);     /* the texture stays bound; only its enable changed */
+            }
+        }
     }
 }
 
@@ -768,47 +882,17 @@ static inline void conv(gu_vtx *o, const draw_vertex *v) {
     o->color = a << 24 | (c & 0xFF00u) | ((c >> 16) & 255u) | ((c & 255u) << 16);
 }
 
-/* The offset (specular) colour of textured strips: a second, additive,
- * untextured draw at equal depth (draw_gl.c's emit_offset).  Strips of one
- * state run collect their offset vertices in a batch of their own, drawn
- * after the run's main batch; within a run that orders highlights after
- * all the run's surfaces instead of after each, which the depth test makes
- * the same picture for opaque runs. */
-typedef struct { uint32_t color; float x, y, z; } gu_ovtx;
-#define OVTX_FMT (GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
-static gu_ovtx obatch[BATCH_MAX];
-
-static void batch_flush(void) {
-    if (nbatch) {
-        gu_vtx *p = sceGuGetMemory((int)(nbatch * sizeof *p));
-        memcpy(p, batch, nbatch * sizeof *p);
-        sceGuDrawArray(GU_TRIANGLE_STRIP, VTX_FMT, nbatch, 0, p);
-        stats.draw_calls++;
-        nbatch = 0;
-    }
-    if (nobatch) {
-        gu_ovtx *p = sceGuGetMemory((int)(nobatch * sizeof *p));
-        memcpy(p, obatch, nobatch * sizeof *p);
-        sceGuDisable(GU_TEXTURE_2D);
-        sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
-        sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
-        sceGuDisable(GU_ALPHA_TEST);
-        sceGuDrawArray(GU_TRIANGLE_STRIP, OVTX_FMT, nobatch, 0, p);
-        stats.draw_calls++;
-        nobatch = 0;
-        apply_blend_depth(&cur);      /* the texture stays bound; only its enable changed */
-    }
-}
-
 static int list_full(void) {
     if ((uint32_t)sceGuCheckList() + LIST_SLACK < LIST_BYTES) return 0;
     gs.dropped++;
     return 1;
 }
 
-/* The offset vertex: the colour scaled by the vertex alpha under
- * source-alpha blending (the PowerVR adds it before the blend), in full for
- * an additive strip. */
+/* The offset (specular) colour of textured strips: a second, additive,
+ * untextured draw at equal depth (draw_gl.c's emit_offset), collected per
+ * recorded run beside the run's own vertices and drawn after them.  The
+ * colour is scaled by the vertex alpha under source-alpha blending (the
+ * PowerVR adds it before the blend), in full for an additive strip. */
 static inline void conv_offset(gu_ovtx *o, const draw_vertex *v) {
     uint32_t c = v->ocolor;
     unsigned a = (cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA) ? (v->color >> 24) & 255 : 255;
@@ -829,7 +913,8 @@ static inline void conv_offset(gu_ovtx *o, const draw_vertex *v) {
  * layers reach x -3093..3733, the full-width one -2240..2880, y -3120..3600)
  * is cut into triangles and each is clipped here, in screen space: x, y
  * and w = 1/z are linear there, the texture coordinates and colours are
- * interpolated through w (perspective-correct, as the GE does). */
+ * interpolated through w (perspective-correct, as the GE does).  The same
+ * clipper cuts a strip at the depth split (w = 1/split). */
 #define GUARD_X0 (-2000.0f)
 #define GUARD_X1 2640.0f
 #define GUARD_Y0 (-2000.0f)
@@ -865,43 +950,68 @@ static draw_vertex lerp_vertex(const draw_vertex *a, const draw_vertex *b, float
     return o;
 }
 
-/* One plane of Sutherland-Hodgman: keep the side where (coord * sign) <= lim * sign. */
+/* One plane of Sutherland-Hodgman on x (axis 0), y (1) or w (2): keep the
+ * side where (coord * sign) <= lim * sign. */
+static float axis_of(const draw_vertex *v, int axis) { return axis == 0 ? v->x : axis == 1 ? v->y : v->w; }
 static int clip_plane(const draw_vertex *in, int n, draw_vertex *out, int axis, float lim, float sign) {
     int m = 0;
     for (int i = 0; i < n; i++) {
         const draw_vertex *a = &in[i], *b = &in[(i + 1) % n];
-        float da = ((axis ? a->y : a->x) - lim) * sign, db = ((axis ? b->y : b->x) - lim) * sign;
+        float da = (axis_of(a, axis) - lim) * sign, db = (axis_of(b, axis) - lim) * sign;
         if (da <= 0.0f) out[m++] = *a;
         if ((da <= 0.0f) != (db <= 0.0f)) out[m++] = lerp_vertex(a, b, da / (da - db));
     }
     return m;
 }
 
-static void strip_emit(const draw_vertex *v, int n);
+static void strip_emit(int pass, const draw_vertex *v, int n);
 
-static void strip_clipped(const draw_vertex *v, int n) {
-    gs.offscreen++;
+/* A convex polygon (consistent winding) as a strip, zigzag from vertex 0. */
+static void poly_emit(int pass, const draw_vertex *poly, int k) {
+    draw_vertex strip[16];
+    int lo = 1, hi = k - 1, m = 0;
+    strip[m++] = poly[0];
+    while (lo <= hi) {
+        strip[m++] = poly[lo++];
+        if (lo <= hi) strip[m++] = poly[hi--];
+    }
+    strip_emit(pass, strip, m);
+}
+
+/* Which pass a run of vertices belongs to: -1 when it spans the split. */
+static int pass_of(const draw_vertex *v, int n) {
+    if (!depth_split || (cur.layer == DRAW_LAYER_2D && v[0].w >= 1.0f)) return PASS_NEAR;
+    float ws = 1.0f / depth_split;
+    int near = 0, far = 0;
+    for (int i = 0; i < n; i++) { if (v[i].w > ws) near = 1; else far = 1; }
+    return near && far ? -1 : near ? PASS_NEAR : PASS_FAR;
+}
+
+/* Triangle by triangle: clipped to the guard band when guard, cut at the
+ * split, each piece to its pass. */
+static void strip_split(const draw_vertex *v, int n, int guard) {
+    if (guard) gs.offscreen++;
+    float ws = depth_split ? 1.0f / depth_split : 0.0f;
     for (int i = 0; i + 2 < n; i++) {
-        draw_vertex poly[2][12];
-        /* the strip's triangle i, in a consistent winding */
+        draw_vertex poly[2][16];
         poly[0][0] = v[(i & 1) ? i + 1 : i];
         poly[0][1] = v[(i & 1) ? i : i + 1];
         poly[0][2] = v[i + 2];
-        int k = 3;
-        k = clip_plane(poly[0], k, poly[1], 0, GUARD_X0, -1.0f);
-        if (k >= 3) k = clip_plane(poly[1], k, poly[0], 0, GUARD_X1, 1.0f); else continue;
-        if (k >= 3) k = clip_plane(poly[0], k, poly[1], 1, GUARD_Y0, -1.0f); else continue;
-        if (k >= 3) k = clip_plane(poly[1], k, poly[0], 1, GUARD_Y1, 1.0f); else continue;
-        if (k < 3) continue;
-        /* the polygon as a strip, zigzag from vertex 0: same winding */
-        draw_vertex strip[12];
-        int lo = 1, hi = k - 1, m = 0;
-        strip[m++] = poly[0][0];
-        while (lo <= hi) {
-            strip[m++] = poly[0][lo++];
-            if (lo <= hi) strip[m++] = poly[0][hi--];
+        int k = 3, c = 0;
+        if (guard) {
+            k = clip_plane(poly[c], k, poly[c ^ 1], 0, GUARD_X0, -1.0f); c ^= 1;
+            if (k >= 3) { k = clip_plane(poly[c], k, poly[c ^ 1], 0, GUARD_X1, 1.0f); c ^= 1; }
+            if (k >= 3) { k = clip_plane(poly[c], k, poly[c ^ 1], 1, GUARD_Y0, -1.0f); c ^= 1; }
+            if (k >= 3) { k = clip_plane(poly[c], k, poly[c ^ 1], 1, GUARD_Y1, 1.0f); c ^= 1; }
+            if (k < 3) continue;
         }
-        strip_emit(strip, m);
+        int pass = pass_of(poly[c], k);
+        if (pass >= 0) { poly_emit(pass, poly[c], k); continue; }
+        draw_vertex part[16];
+        int kn = clip_plane(poly[c], k, part, 2, ws, -1.0f);     /* w >= ws: near */
+        if (kn >= 3) poly_emit(PASS_NEAR, part, kn);
+        int kf = clip_plane(poly[c], k, part, 2, ws, 1.0f);      /* w <= ws: far */
+        if (kf >= 3) poly_emit(PASS_FAR, part, kf);
     }
 }
 
@@ -910,22 +1020,24 @@ void draw_strip(const draw_vertex *v, int n) {
     stats.strips++; stats.triangles += (uint32_t)(n - 2);
     if (headless || !list_open || !cur_valid || n > BATCH_MAX - 4 || list_full()) return;
     select_proj(v, n);
-    if (!in_guard(v, n)) { strip_clipped(v, n); return; }
-    strip_emit(v, n);
+    int guard = !in_guard(v, n), pass = guard ? -1 : pass_of(v, n);
+    if (pass >= 0) strip_emit(pass, v, n);
+    else strip_split(v, n, guard);
 }
 
-static void strip_emit(const draw_vertex *v, int n) {
+static void strip_emit(int pass, const draw_vertex *v, int n) {
     int has_offset = 0;
     if (cur.texture) for (int i = 0; i < n && !has_offset; i++) if (v[i].ocolor & 0x00FFFFFFu) has_offset = 1;
-    if (nbatch + n + 3 > BATCH_MAX || (has_offset && nobatch + n + 3 > BATCH_MAX)) batch_flush();
-    if (nbatch) {                     /* degenerate joint; keep the next strip's winding parity */
-        gu_vtx last = batch[nbatch - 1];
-        int odd = nbatch & 1;
-        batch[nbatch++] = last;
-        if (odd) batch[nbatch++] = last;
-        conv(&batch[nbatch++], &v[0]);
+    if (nbatch[pass] + n + 3 > BATCH_MAX || (has_offset && nobatch[pass] + n + 3 > BATCH_MAX)) batch_flush_pass(pass);
+    gu_vtx *b = batch[pass];
+    if (nbatch[pass]) {               /* degenerate joint; keep the next strip's winding parity */
+        gu_vtx last = b[nbatch[pass] - 1];
+        int odd = nbatch[pass] & 1;
+        b[nbatch[pass]++] = last;
+        if (odd) b[nbatch[pass]++] = last;
+        conv(&b[nbatch[pass]++], &v[0]);
     }
-    for (int i = 0; i < n; i++) conv(&batch[nbatch++], &v[i]);
+    for (int i = 0; i < n; i++) conv(&b[nbatch[pass]++], &v[i]);
     if (cur.layer != DRAW_LAYER_2D)
         for (int i = 0; i < n; i++) {
             float z = v[i].w > 1e-6f ? 1.0f / v[i].w : 1e6f;
@@ -933,26 +1045,31 @@ static void strip_emit(const draw_vertex *v, int n) {
             for (int k = 0; k < 4; k++) if (z < (float)(2 << k)) gs.znear_verts[k]++;
         }
     if (has_offset) {
-        if (nobatch) {
-            gu_ovtx last = obatch[nobatch - 1];
-            int odd = nobatch & 1;
-            obatch[nobatch++] = last;
-            if (odd) obatch[nobatch++] = last;
-            conv_offset(&obatch[nobatch++], &v[0]);
+        gu_ovtx *o = obatch[pass];
+        if (nobatch[pass]) {
+            gu_ovtx last = o[nobatch[pass] - 1];
+            int odd = nobatch[pass] & 1;
+            o[nobatch[pass]++] = last;
+            if (odd) o[nobatch[pass]++] = last;
+            conv_offset(&o[nobatch[pass]++], &v[0]);
         }
-        for (int i = 0; i < n; i++) conv_offset(&obatch[nobatch++], &v[i]);
+        for (int i = 0; i < n; i++) conv_offset(&o[nobatch[pass]++], &v[i]);
     }
 }
 
 void draw_line_strip(const draw_vertex *v, int n) {
     if (n < 2) return;
-    if (headless || !list_open || !cur_valid || list_full()) return;
+    if (headless || !list_open || !cur_valid || list_full() || n > 4096) return;
     select_proj(v, n);
-    batch_flush();
+    int pass = pass_of(v, n);
+    if (pass < 0) pass = PASS_NEAR;
+    batch_flush_pass(pass);
+    if (nitems[pass] == ITEM_MAX) { gs.dropped++; return; }
     gu_vtx *p = sceGuGetMemory((int)(n * sizeof *p));
     for (int i = 0; i < n; i++) conv(&p[i], &v[i]);
-    sceGuDrawArray(GU_LINE_STRIP, VTX_FMT, n, 0, p);
-    stats.draw_calls++;
+    gu_item *it = &items[pass][nitems[pass]++];
+    it->state = (uint16_t)(nrstates - 1); it->proj = (uint8_t)cur_proj; it->prim = GU_LINE_STRIP;
+    it->n = (uint16_t)n; it->on = 0; it->v = p; it->ov = NULL;
 }
 
 /* Written after the GE finishes the frame (draw_end_frame), from EDRAM. */
