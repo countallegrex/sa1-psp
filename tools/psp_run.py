@@ -3,7 +3,7 @@
 
     psp_run.py [--timeout S] [--quiet S] [--wait S] [--no-reset] [--build DIR]
                [--tools DIR] [--out FILE] [--linger S] [-- GAME_OPTION ...]
-    psp_run.py --stop
+    psp_run.py --stop --force
 
 The PSP runs PSPLink (ms0:/PSP/GAME/PSPLINK, started from the XMB) and is
 on the USB cable; usbhostfs_pc on this machine serves DIR (default
@@ -14,7 +14,7 @@ build-psp/sa1psp) to it as host0:.  One run:
      --stdout --no-crash-screen --data ms0:/PSP/GAME/SA1PSP/data unless
      given);
   2. starts usbhostfs_pc rooted at DIR if nothing listens on its port
-     (it keeps running for the next run; --stop ends it);
+     (it keeps running for the next run: leave it running, see below);
   3. waits for PSPLink to answer, resets it ('reset': a clean reboot into
      PSPLink, so the run starts from the same state every time), waits for
      it to come back and checks host0: is DIR;
@@ -51,6 +51,16 @@ console in exception context, which takes the USB link down with it.  With
 PSPLink's handler the faulting thread sleeps, the rest of the console runs,
 and the next psp_run.py resets it.  The PSP is left as the run ended: after
 an exception pspsh can still look around (thctx, exprint, memory).
+
+Never kill usbhostfs_pc while the PSP is connected (--stop refuses without
+--force).  PSPLink's usbhostfs.prx reads the host's hello only in its USB
+attach handler, a blocking read with no timeout: after a connected host
+dies, the next one's hello is never read (usbhostfs_pc -v: "Bulk Write
+returned -7" on every connect, then a port reset, once a second), and
+only restarting PSPLink on the console recovers it.  This wedged the
+console twice on 2026-10-19.  A running usbhostfs_pc that serves another
+folder: stop it with --force only right after power-cycling the PSP, or
+with the PSP unplugged.
 
 This script holds PSPLink's shell connection while it runs; a pspsh opened
 meanwhile takes it over (usbhostfs_pc keeps one client per channel) and the
@@ -174,7 +184,12 @@ def start_hostfs(exe: str, root: str, log_path: str) -> None:
     raise SetupError(f"usbhostfs_pc did not open port {BASE_PORT} (see {log_path})")
 
 
-def stop_hostfs() -> int:
+def stop_hostfs(force: bool) -> int:
+    if not force:
+        print("psp_run: not stopping usbhostfs_pc: killing it while the PSP is connected wedges PSPLink on the "
+              "console until PSPLink is restarted there (see the top of this script). --stop --force if the PSP "
+              "is unplugged or about to be power-cycled.", file=sys.stderr)
+        return 1
     if os.name == "nt":
         r = subprocess.run(["taskkill", "/IM", "usbhostfs_pc.exe", "/F"])
     else:
@@ -544,7 +559,8 @@ def main() -> int:
     ap.add_argument("--out", help="the run's console log (default BUILD/psplink-run/psp_run.log)")
     ap.add_argument("--linger", type=float, default=3, help="seconds to keep reading after the exit line (the exit reports)")
     ap.add_argument("--wsl-distro", default="Ubuntu", help="WSL distribution with pspdev, for addr2line")
-    ap.add_argument("--stop", action="store_true", help="stop usbhostfs_pc and exit")
+    ap.add_argument("--stop", action="store_true", help="stop usbhostfs_pc and exit (needs --force: see the top of this script)")
+    ap.add_argument("--force", action="store_true", help="with --stop: kill usbhostfs_pc even though a connected PSP then needs PSPLink restarted")
     ap.add_argument("--sample-after", type=float, help="profile: sample the game thread's PC from S seconds after the launch")
     ap.add_argument("--sample-for", type=float, default=60, help="profile: seconds to sample (default 60)")
     ap.add_argument("--sample-thread", default="user_main", help="profile: the game's thread (default user_main)")
@@ -554,7 +570,7 @@ def main() -> int:
         sys.stdout.reconfigure(errors="replace")
 
     if a.stop:
-        return stop_hostfs()
+        return stop_hostfs(a.force)
 
     build = os.path.abspath(a.build)
     pbp = os.path.join(build, "EBOOT.PBP")
@@ -598,7 +614,7 @@ def main() -> int:
             r = sess.command("ls", f"host0:/{STAGE}/", timeout=10)
             if not r or not any(l.endswith(" sa1psp.prx") or l == "sa1psp.prx" for l in sess.cmd_lines):
                 raise SetupError(f"host0:/{STAGE}/sa1psp.prx not visible on the PSP: the running usbhostfs_pc "
-                                 f"serves another folder (psp_run.py --stop, then run again)")
+                                 f"serves another folder (psp_run.py --stop --force wedges a connected PSP: see the top of this script)")
             sess.say(f"starting host0:/{STAGE}/sa1psp.prx")
             r = sess.command("ldstart", f"host0:/{STAGE}/sa1psp.prx", timeout=120)
             if not r or any("Failed to Load/Start" in l or "Error invalid file" in l for l in sess.cmd_lines):

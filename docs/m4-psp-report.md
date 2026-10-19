@@ -268,10 +268,13 @@ states land on the PC.
   handler from PSPLink and stop the console in exception context, which
   takes the USB link down; with PSPLink's handler the thread sleeps and
   the registers come back over USB.
-- PSPLink can wedge: after a long play session ended with HOME, the PSP
-  still enumerated on USB but took no bulk transfers (usbhostfs_pc `-v`:
-  `Bulk Write returned -7`, a timeout, once a second, even with `-t 8000`).
-  Only restarting PSPLink on the console clears it.
+- Never kill usbhostfs_pc while the PSP is connected.  PSPLink's
+  `usbhostfs.prx` reads the host's hello only in its USB attach handler,
+  a blocking read with no timeout; after a connected host dies, the next
+  one's hello is never read (usbhostfs_pc `-v`: `Bulk Write returned -7`,
+  a timeout, then a port reset, once a second, even with `-t 8000`), and
+  only restarting PSPLink on the console recovers it.  `psp_run.py --stop`
+  did exactly that twice on 2026-10-19; it now refuses without `--force`.
 
 A run takes about 30 s including the reset.  Test checkpoints, so a
 console test reaches its scene in seconds (4754f0d):
