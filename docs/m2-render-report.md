@@ -753,7 +753,10 @@ stack of the game writer call that produced the strip at that translucent
 buffer address; `texture_describe` prints the backend handle;
 `--screenshot` takes 64 entries; `tools/minidump.py` reads a Windows
 minidump (modules, exception, registers, the faulting thread's stack with
-the exe offsets to symbolise against a matching build).
+the exe offsets to symbolise against a matching build). A library of Flycast save states keyed by tape frame
+(`tools/flycast/oracle_states.py`, `../flycast/states/` with a hashed
+manifest) lets `run_oracle.py --from-state N` start the console from the
+nearest state instead of from boot (`tests/replay/README.md`).
 
 **Seam stubs still called on the tape** (first frame): the sound driver's
 `0x8C643xxx` family (they test the driver's init flag and return an error

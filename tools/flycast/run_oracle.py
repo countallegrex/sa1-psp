@@ -2,6 +2,7 @@
 """Run a tape on the desktop build and in Flycast, then diff them by game frame.
 
   run_oracle.py tests/replay/title_menu.tape [--flycast DIR] [--gdi FILE]
+  run_oracle.py TAPE --from-state N [--until G] [--poke-ec]
 
 1. Replays the tape on the desktop build with --watch-trace (desktop.tsv).
 2. tools/tape_diff.py gpad: the pad of each game frame (gpad.txt).
@@ -12,45 +13,43 @@
    first use) with the VMUs unplugged, as the desktop build has none.
 4. tools/tape_diff.py diff desktop.tsv flycast.tsv.
 
+--from-state N starts Flycast from the state library's nearest state at or
+before tape frame N instead of from boot (tools/flycast/oracle_states.py:
+the states live in ../flycast/states/ with a manifest; the library of the
+tape is rebuilt first when the tape's hash no longer matches it), and the
+comparison covers the game frames from there.  --until G stops the console
+once the aligned desktop game frame reaches G.  --poke-ec applies the
+scripted route's Emerald Coast poke on the console side.
+
 Needs SA1_DUMP (the data and the GD-ROM image) and a desktop build
 (--exe, $SA1_EXE, build-desktop/ or build-tape/).  Outputs go to --work
 (default a temporary directory, printed).  Flycast is GPL and stays
-outside the repository; so do the traces (they are game state).
+outside the repository; so do the traces and the states (they are game
+state).
 
 Part of sa1-psp (MIT).
 """
 import argparse
 import glob
 import os
-import shutil
-import subprocess
 import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, HERE)
+import oracle_states  # noqa: E402
 import replay_test  # noqa: E402
 import tape_diff  # noqa: E402
 import tape_io  # noqa: E402
 
-WATCH = os.path.join(ROOT, "tests", "replay", "watch.txt")
-FLYCAST_HOME = os.path.join(os.path.dirname(ROOT), "flycast")
+WATCH = oracle_states.WATCH
+FLYCAST_HOME = oracle_states.FLYCAST_HOME
 
 
 def oracle_dir(path):
-    """A Flycast copy of our own: portable config (emu.cfg beside the exe), no VMU saves."""
-    exe = os.path.join(path, "flycast.exe")
-    if os.path.isfile(exe):
-        return exe
-    release = os.path.join(FLYCAST_HOME, "release-2.7", "flycast.exe")
-    if not os.path.isfile(release):
-        sys.exit("no Flycast: %s or %s" % (exe, release))
-    os.makedirs(os.path.join(path, "data"), exist_ok=True)
-    shutil.copy2(release, exe)
-    open(os.path.join(path, "emu.cfg"), "w").close()
-    print("oracle: made %s from %s" % (path, os.path.dirname(release)))
-    return exe
+    return oracle_states.oracle_dir(path)
 
 
 def main(argv=None):
@@ -61,6 +60,9 @@ def main(argv=None):
     ap.add_argument("--gdi", help="GD-ROM image (default: the .gdi in $SA1_DUMP)")
     ap.add_argument("--work", help="output directory")
     ap.add_argument("--timeout", type=int, default=0, help="seconds to wait for Flycast (default: 3x the tape at 60 Hz + 120)")
+    ap.add_argument("--from-state", type=int, metavar="N", help="start the console from the library state nearest before tape frame N")
+    ap.add_argument("--until", type=int, metavar="G", help="stop the console at desktop game frame G")
+    ap.add_argument("--poke-ec", action="store_true", help="the scripted route: --poke 5290 on the desktop replay, the same rewrite on the console when Chaos 0 would load")
     a = ap.parse_args(argv)
 
     dump = os.environ.get("SA1_DUMP")
@@ -77,26 +79,34 @@ def main(argv=None):
     work = os.path.abspath(a.work or tempfile.mkdtemp(prefix="sa1-oracle-"))
     os.makedirs(work, exist_ok=True)
     tape = os.path.abspath(a.tape)
-    desk, gpad, fly = (os.path.join(work, n) for n in ("desktop.tsv", "gpad.txt", "flycast.tsv"))
-
-    code, _ = replay_test.run(os.path.abspath(exe), data, ["--replay", tape, "--watch-list", WATCH, "--watch-trace", desk],
-                              os.path.join(work, "desktop.log"))
-    if code != 0:
-        sys.exit("desktop replay failed (exit %d), log %s" % (code, os.path.join(work, "desktop.log")))
-    tape_diff.main(["gpad", tape, desk, "-o", gpad])
+    desk, gpad = oracle_states.desktop_trace(exe, data, tape, work, a.poke_ec)
+    fly = os.path.join(work, "flycast.tsv")
 
     fexe = oracle_dir(a.flycast)
-    shutil.copy2(os.path.join(HERE, "tape_oracle.lua"), os.path.join(os.path.dirname(fexe), "tape_oracle.lua"))
     env = dict(os.environ, SA1_ORACLE_GPAD=gpad, SA1_ORACLE_WATCH=WATCH, SA1_ORACLE_OUT=fly)
     frames = tape_io.read(tape).end
     timeout = a.timeout or frames * 3 // 60 + 120
     env["SA1_ORACLE_MAX"] = str(frames * 4 + 3600)      # loads take vblanks the desktop does not
-    cmd = [fexe, "-config", "config:LuaFileName=tape_oracle.lua,input:device1.1=10,input:device1.2=10", os.path.abspath(gdi)]
-    print("oracle: running Flycast (up to %d s): %s" % (timeout, " ".join(cmd)))
-    try:
-        subprocess.run(cmd, env=env, cwd=os.path.dirname(fexe), timeout=timeout)
-    except subprocess.TimeoutExpired:
-        print("oracle: Flycast did not exit in %d s; diffing what it traced" % timeout)
+    if a.until is not None:
+        env["SA1_ORACLE_STOP"] = str(a.until)
+    if a.poke_ec:
+        env["SA1_ORACLE_POKE_EC"] = "1"
+    extra = []
+    if a.from_state is not None:
+        m = oracle_states.read_manifest()
+        if not oracle_states.is_fresh(m, tape):
+            print("oracle: the state library of %s is stale or missing; building it" % oracle_states.tape_key(tape))
+            end = tape_io.read(tape).end
+            oracle_states.build(tape, oracle_states.default_frames(tape, end), exe, data, gdi, a.flycast, a.poke_ec,
+                                os.path.join(work, "states"), a.timeout)
+            m = oracle_states.read_manifest()
+        entry = oracle_states.nearest(m, tape, a.from_state)
+        if not entry:
+            sys.exit("no library state of this tape at or before frame %d" % a.from_state)
+        env.update(oracle_states.stage(entry, fexe, gdi))
+        print("oracle: starting the console from state %s (tape frame %d = game frame %d, console vblank %d)"
+              % (entry["name"], entry["frame"], entry["game_frame"], entry["vblank"]))
+    code = oracle_states.run_flycast(fexe, gdi, "tape_oracle.lua", env, timeout, os.path.join(work, "flycast.out"), extra)
     if not os.path.isfile(fly):
         sys.exit("Flycast wrote no trace (Lua not loaded? see %s)" % os.path.dirname(fexe))
     print("oracle: traces in %s" % work)

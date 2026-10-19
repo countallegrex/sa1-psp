@@ -8,6 +8,29 @@
 --   SA1_ORACLE_WATCH  watch list (tests/replay/watch.txt)
 --   SA1_ORACLE_OUT    trace to write (same columns as sa1psp --watch-trace)
 --   SA1_ORACLE_MAX    optional: stop after this many vblanks
+--   SA1_ORACLE_STOP   optional: stop once the aligned desktop game frame
+--                     reaches this value
+--   SA1_ORACLE_POKE_EC  optional, 1: when the level variable becomes 15
+--                     (Chaos 0) rewrite the stage variables to Emerald Coast
+--                     act 1, what the scripted desktop route's --poke 5290
+--                     does (tools/replay_test.py ROUTE_POKES)
+--   SA1_ORACLE_SAVE   optional: "slot:g,slot:g,...": save a Flycast state
+--                     into that slot when the aligned desktop game frame
+--                     first reaches g (tools/flycast/oracle_states.py builds
+--                     the state library with it).  The save runs from the
+--                     overlay callback (the UI thread: a save from the vblank
+--                     callback deadlocks the emulator), and a line per state
+--                     goes to SA1_ORACLE_STATE_OUT: the script's alignment
+--                     variables, which a later run restores through
+--                     SA1_ORACLE_RESUME.
+--   SA1_ORACLE_LOAD_SLOT  optional: load that Flycast state slot from the
+--                     first overlay callback (the UI thread again) before any
+--                     vblank is processed, with
+--   SA1_ORACLE_RESUME "vblank offset next_sync last_mode aligned
+--                     unaligned_since", the line the save wrote, so the pad
+--                     table and the trace continue as if the run had never
+--                     stopped.  (Flycast's Dreamcast.AutoLoadState setting
+--                     does not take effect from the command line.)
 --
 -- The pad is chosen by the game's own frame counter (the game_frame watch),
 -- not by vblank: every vblank, read the counter G and present the pad the
@@ -27,6 +50,11 @@
 local env = os.getenv
 local GPAD, WATCH, OUT = env("SA1_ORACLE_GPAD"), env("SA1_ORACLE_WATCH"), env("SA1_ORACLE_OUT")
 local MAX = tonumber(env("SA1_ORACLE_MAX") or "") or 0
+local STOP = tonumber(env("SA1_ORACLE_STOP") or "") or -1
+local POKE_EC = (env("SA1_ORACLE_POKE_EC") or "") ~= "" and env("SA1_ORACLE_POKE_EC") ~= "0"
+local STATE_OUT = env("SA1_ORACLE_STATE_OUT")
+local LOAD_SLOT = tonumber(env("SA1_ORACLE_LOAD_SLOT") or "") or -1
+local loaded = LOAD_SLOT < 0          -- vblanks before the state is in are not the run
 
 local pads, first_g, last_g = {}, nil, -1
 local watches, counter, modew = {}, nil, nil
@@ -37,6 +65,7 @@ local out, vblank, done = nil, 0, false
 local last_ag = -1
 function sa1_oracle_aligned_g() return last_ag end   -- for wrapper scripts (screenshots at a desktop game frame)
 local NEUTRAL = {0, 0, 0, 0, 0}
+local saves, save_pending, poked = {}, nil, false
 
 local function load()
   for line in io.lines(GPAD) do
@@ -60,6 +89,18 @@ local function load()
     end
   end
   assert(counter and modew, "watch list needs game_frame and game_mode rows")
+  for slot, g in string.gmatch(env("SA1_ORACLE_SAVE") or "", "(%d+):(%d+)") do
+    saves[#saves + 1] = {slot = tonumber(slot), g = tonumber(g), done = false}
+  end
+  local r = env("SA1_ORACLE_RESUME")
+  if r and r ~= "" then
+    local v, o, ns, lm, al, us = r:match("(%-?%d+)%s+(%-?%d+)%s+(%d+)%s+(%-?%d+)%s+(%d)%s+(%-?%d+)")
+    assert(v, "SA1_ORACLE_RESUME: expected 6 numbers")
+    vblank, offset, next_sync = tonumber(v), tonumber(o), tonumber(ns)
+    last_mode = tonumber(lm) >= 0 and tonumber(lm) or nil
+    aligned, unaligned_since = al == "1", tonumber(us)
+    print(string.format("tape_oracle: resumed at vblank %d, offset %d, next sync %d, mode %s", vblank, offset, next_sync, tostring(last_mode)))
+  end
   out = assert(io.open(OUT, "w"))
   local names = {"frame"}
   for _, w in ipairs(watches) do names[#names + 1] = w.name end
@@ -91,8 +132,13 @@ local function finish(why)
 end
 
 local function on_vblank()
-  if done then return end
+  if done or not loaded then return end
   vblank = vblank + 1
+  if POKE_EC and not poked and mem.read16(0x8c7493ba) == 15 then
+    mem.write16(0x8c7493ba, 1); mem.write16(0x8c7493bc, 0); mem.write16(0x8c7493be, 1); mem.write16(0x8c7493c0, 0)
+    poked = true
+    print("tape_oracle: Chaos 0 -> Emerald Coast act 1 at vblank " .. vblank)
+  end
   local g = mem.read32(counter.addr)
   local mode = tonumber(value(modew))
   if mode ~= last_mode then
@@ -125,8 +171,36 @@ local function on_vblank()
   row[#row + 1] = tostring(ag)
   out:write(table.concat(row, "\t"), "\n")
   if vblank % 600 == 0 then out:flush() end
+  if not save_pending then
+    for _, s in ipairs(saves) do
+      if not s.done and ag >= s.g then s.done = true; save_pending = s; break end
+    end
+  end
   if ag > last_g then finish("tape ended (game frame " .. g .. ")")
+  elseif STOP >= 0 and ag >= STOP then finish("reached desktop game frame " .. ag)
   elseif MAX > 0 and vblank >= MAX then finish("vblank limit") end
+end
+
+-- The UI thread: a pending state save runs here (flycast.emulator.saveState
+-- pauses the emulator, which the vblank callback cannot do to itself).
+local function on_overlay()
+  if not loaded then
+    flycast.emulator.loadState(LOAD_SLOT)
+    loaded = true
+    print(string.format("tape_oracle: loaded slot %d: game frame %d, mode %d", LOAD_SLOT, mem.read32(counter.addr), tonumber(value(modew))))
+    return
+  end
+  local s = save_pending
+  if not s or done then return end
+  save_pending = nil
+  local g = mem.read32(counter.addr)
+  local ag = aligned and g - offset or -1
+  flycast.emulator.saveState(s.slot)
+  out:flush()
+  local line = string.format("%d %d %d %d %d %d %d %d %d %d", s.slot, s.g, vblank, g, ag, offset, next_sync,
+                             last_mode or -1, aligned and 1 or 0, unaligned_since)
+  print("tape_oracle: saved slot " .. s.slot .. " (" .. line .. ")")
+  if STATE_OUT then local f = io.open(STATE_OUT, "a"); if f then f:write(line, "\n"); f:close() end end
 end
 
 local ok, err = pcall(load)
@@ -135,6 +209,7 @@ if not ok then
 else
   flycast_callbacks = {
     vblank = on_vblank,
+    overlay = on_overlay,
     terminate = function() if not done then done = true; out:close() end end,
   }
 end

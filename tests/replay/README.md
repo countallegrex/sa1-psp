@@ -20,6 +20,7 @@ that has one.
 |---|---|---|
 | `title_menu` | title, Start, new Sonic story, file select (no VMU), Station Square loads and runs | 3000 |
 | `sonic_to_ec1_start` | The maintainer's third run: title, Sonic, Station Square at night, Chaos 0 arrival and fight (won), Station Square by day, Emerald Coast start (stopped before the act's end) | 18402 |
+| `ec_scripted` | the scripted route into Emerald Coast: the M1 presses, then the stick held from frame 5450 (collects three rings at 5524-5544). Needs the stage pokes, which a tape does not carry: `tools/replay_test.py` ROUTE_POKES on the desktop, `--poke-ec` in the oracle tools; no check file, so `replay_test.py` skips it | 6600 |
 | `sonic_ec1` | *reserved for the full route*: title, Sonic, Station Square, Chaos 0 win, Emerald Coast act 1 complete | |
 
 ## Recording a tape
@@ -234,6 +235,37 @@ every watched value for all 1,497 compared game frames (title, menus, file
 select, Station Square: game mode, level, act, rings, lives, player
 position), with one slip: the opening event moves Sonic to (362.5, 1450.7)
 one game frame later on Flycast (game frame 1232).
+
+### Starting the console from a save state
+
+A comparison at tape frame N need not replay the console from boot:
+
+```
+SA1_DUMP=..\private\dump\sa1_us_1005 python tools/flycast/oracle_states.py build tests/replay/sonic_to_ec1_start.tape
+SA1_DUMP=..\private\dump\sa1_us_1005 python tools/flycast/run_oracle.py tests/replay/sonic_to_ec1_start.tape --from-state 5400 --until 2800
+```
+
+`oracle_states.py build` runs the tape once in Flycast and saves a state at
+each of a tape's scenes (by default the title, the Station Square arrival,
+the Chaos 0 cutscene start, the Chaos 0 fight, the Emerald Coast start and
+the frame before the fourth run's crash for `sonic_to_ec1_start`; every
+3000 frames for a tape it does not know; `--frames NAME:FRAME,...` to
+choose).  The states live outside the repository in `../flycast/states/`
+(they hold the console's RAM) under a `manifest.json` that names, for each
+state, the tape, the tape's SHA-256, the tape (guest) frame and the desktop
+game frame it stands for, where exactly the console was when the state was
+written, and the oracle script's alignment variables.  `run_oracle.py
+--from-state N` loads the nearest state at or before frame N into Flycast
+from the script's first overlay callback (Flycast's own auto-load setting
+does not take effect from the command line, and a load from the vblank
+callback deadlocks the emulator), restores the alignment, and feeds the
+tape from there; `--until G` stops at desktop game frame G.  When the tape's
+hash no longer matches the manifest the library of that tape is rebuilt
+first.  `oracle_states.py list` shows the library, `check TAPE` whether it
+is current (exit 1 when not).  A frame the console never reaches on a tape
+is reported and left out: on `sonic_to_ec1_start` the console loses the
+Chaos 0 fight, so nothing after it has a state; the scripted `ec_scripted`
+tape (with `--poke-ec`) provides the Emerald Coast one.
 
 Limits: the console clock and the RTC are Flycast's (host time), not the
 tape's epoch; Flycast's own flash (HLE BIOS) stands in for the desktop's
