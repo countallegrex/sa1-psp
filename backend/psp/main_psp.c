@@ -49,7 +49,9 @@
 
 PSP_MODULE_INFO("SA1PSP", PSP_MODULE_USER, 0, 4);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
-PSP_MAIN_THREAD_STACK_SIZE_KB(256);
+/* 256 KB for main itself plus the coroutine stacks (coro_psp.c), which are
+ * carved from this stack so the kernel sees sp inside the thread's stack. */
+PSP_MAIN_THREAD_STACK_SIZE_KB(2048);
 /* Heap = all free user memory (backend/psp/hello.c, README section 7). */
 #ifdef PSP_HEAP_SIZE_MAX
 PSP_HEAP_SIZE_MAX();
@@ -66,7 +68,7 @@ uint32_t hle_task_running(void);
 
 static char base_dir[256] = "ms0:/PSP/GAME/SA1PSP";
 static const char *data_dir = "data", *log_path = "sa1psp.log";
-static int headless, no_pad, no_pace, to_stdout, sync_log, stats_every;
+static int headless, no_pad, no_pace, to_stdout, sync_log, stats_every, coro_heap;
 static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
@@ -282,7 +284,41 @@ static int callback_thread(SceSize args, void *argp) {
     return 0;
 }
 
+/* Start-up self-test of the coroutine switch, each stage logged from the
+ * main stack before the next: a bare switch in and out, a syscall on the
+ * coroutine's stack, then a log line (file I/O) from it. */
+static volatile int coro_crumb;
+static void coro_test_fn(void *arg) {
+    (void)arg;
+    coro_crumb = 1;
+    sa1_plat_coro_switch(sa1_plat_coro_supervisor());
+    coro_crumb = 2;
+    (void)sceKernelGetSystemTimeWide();
+    coro_crumb = 3;
+    sa1_plat_coro_switch(sa1_plat_coro_supervisor());
+    sa1_log("coro test: a log line written from the coroutine's stack");
+    coro_crumb = 4;
+    for (;;) sa1_plat_coro_switch(sa1_plat_coro_supervisor());
+}
+static void coro_self_test(void) {
+    sa1_coro *co = sa1_plat_coro_create(coro_test_fn, NULL, 0);
+    if (!co) { sa1_log("coro test: cannot create"); return; }
+    sa1_log("coro test: first switch into slot %d", sa1_plat_coro_index(co));
+    sa1_plat_coro_switch(co);
+    sa1_log("coro test: switch in and out ok (crumb %d); now a syscall on its stack", coro_crumb);
+    sa1_plat_coro_switch(co);
+    sa1_log("coro test: syscall ok (crumb %d); now a log line from it", coro_crumb);
+    sa1_plat_coro_switch(co);
+    sa1_log("coro test: back (crumb %d); all three stages passed", coro_crumb);
+    sa1_plat_coro_destroy(co);
+}
+
 int main(int argc, char **argv) {
+    /* The coroutine stacks, on this thread's stack (main never returns
+     * while the game runs). */
+    static uint8_t *coro_block;
+    uint8_t coro_area[SA1_CORO_REGION_BYTES] __attribute__((aligned(64)));
+    coro_block = coro_area;
     { SceUID th = sceKernelCreateThread("callbacks", callback_thread, 0x11, 0xFA0, 0, NULL); if (th >= 0) sceKernelStartThread(th, 0, NULL); }
     if (argc > 0 && argv[0] && strchr(argv[0], '/')) {
         snprintf(base_dir, sizeof base_dir, "%s", argv[0]);
@@ -302,6 +338,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--no-pace")) no_pace = 1;
         else if (!strcmp(av[i], "--stdout")) to_stdout = 1;
         else if (!strcmp(av[i], "--sync-log")) sync_log = 1;
+        else if (!strcmp(av[i], "--coro-heap")) coro_heap = 1;
         else if (!strcmp(av[i], "--cull-flip")) draw_gu_set_cull_flip(1);
         else if (!strcmp(av[i], "--stats") && i + 1 < args_c) stats_every = atoi(av[++i]);
         else if (!strcmp(av[i], "--mem") && i + 1 < args_c && nmem < 16) mem_frames[nmem++] = (uint32_t)strtoul(av[++i], NULL, 0);
@@ -332,6 +369,9 @@ int main(int argc, char **argv) {
     t0 = sa1_plat_time_us();
     sa1_log("sa1-psp (PSP): base %s, data %s, %d args from args.txt%s", base_dir, data_dir, args_c, headless ? ", headless" : "");
     for (int i = 0; i < args_c; i++) sa1_log("  arg %s", args_v[i]);
+    if (!coro_heap) sa1_plat_coro_set_region(coro_block);
+    sa1_log("step: coroutine self-test (%s)", coro_heap ? "stacks on the heap" : "stacks on the main thread's stack");
+    coro_self_test();
     sa1_log("step: memory report");
     mem_report("start");
 

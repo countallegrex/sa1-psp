@@ -21,6 +21,12 @@
 #define SA1_CORO_STACK        (32u << 10)
 #define SA1_CORO_CANARY       (1u << 10)
 #define SA1_CORO_PAINT        0x5A1C0DE5u
+#define SA1_CORO_REGION_BYTES (SA1_CORO_ROOT_STACK + (SA1_CORO_SLOTS - 1) * SA1_CORO_STACK)
+
+/* The block the stacks are carved from (SA1_CORO_REGION_BYTES, 64-aligned);
+ * set before the first coroutine call, or the heap gives one. */
+void sa1_plat_coro_set_region(void *mem);
+sa1_coro *sa1_plat_coro_supervisor(void);
 
 sa1_coro *sa1_plat_coro_current(void);
 void sa1_plat_coro_stack(int i, uintptr_t *lo, uintptr_t *hi);

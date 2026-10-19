@@ -13,6 +13,7 @@
  * Part of sa1-psp (MIT). */
 #include "platform_psp.h"
 
+#include <malloc.h>
 #include <string.h>
 
 void sa1_coro_swap(uintptr_t *from_sp, uintptr_t *to_sp);
@@ -100,8 +101,14 @@ struct sa1_coro {
     int used, index;          /* index -1 = the supervisor (the PSP main thread) */
 };
 
-#define REGION_BYTES (SA1_CORO_ROOT_STACK + (SA1_CORO_SLOTS - 1) * SA1_CORO_STACK)
-static uint8_t region[REGION_BYTES] __attribute__((aligned(64)));
+/* Where the stacks live: main_psp.c hands over a block of the PSP main
+ * thread's own stack (sa1_plat_coro_set_region), so the kernel always sees
+ * the thread's sp inside the thread's stack.  The first hardware boot put
+ * the region in .bss and the console powered off at the first switch into
+ * it (PPSSPP does not mind); without a block from main the region comes
+ * from the heap, which keeps that layout for comparison (--coro-heap). */
+static uint8_t *region;
+void sa1_plat_coro_set_region(void *mem) { region = mem; }
 static sa1_coro slots[SA1_CORO_SLOTS];
 static sa1_coro supervisor = { 0, NULL, NULL, 0, 0, 1, -1 };
 static sa1_coro *current = &supervisor;
@@ -112,8 +119,11 @@ static int mapped;
 static void stacks_map(void) {
     if (mapped) return;
     mapped = 1;
+    const char *where = region ? "a block of the main thread's stack" : "the heap";
+    if (!region) region = memalign(64, SA1_CORO_REGION_BYTES);
+    sa1_log("coroutine: stacks at %p-%p (%s)", (void *)region, (void *)(region + SA1_CORO_REGION_BYTES), where);
     uint32_t *w = (uint32_t *)region;
-    for (uint32_t i = 0; i < REGION_BYTES / 4; i++) w[i] = SA1_CORO_PAINT;
+    for (uint32_t i = 0; i < SA1_CORO_REGION_BYTES / 4; i++) w[i] = SA1_CORO_PAINT;
     uintptr_t at = (uintptr_t)region;
     for (int i = 0; i < SA1_CORO_SLOTS; i++) {
         uint32_t size = i == 0 ? SA1_CORO_ROOT_STACK : SA1_CORO_STACK;
@@ -147,6 +157,7 @@ void sa1_coro_entry_c(void *p) {
 }
 
 sa1_coro *sa1_plat_coro_current(void) { return current; }
+sa1_coro *sa1_plat_coro_supervisor(void) { return &supervisor; }
 sa1_coro *sa1_plat_coro_main(void) { return &slots[0]; }
 
 static sa1_coro *create_at(int i, void (*fn)(void *), void *arg) {
