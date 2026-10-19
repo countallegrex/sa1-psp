@@ -245,6 +245,7 @@ behind one strip; §10), `SA1_MODEL_DEBUG=1`, `SA1_NOVSYNC=1`, `SA1_REPORT_TOP=N
 `--texdump DIR` is the same with the review names of §0, plus F9 /
 `--mark FRAME`), `SA1_PVM_SAVE_DIR=<dir>` (every texture archive as found
 in guest RAM, for `tools/pvm_ram_check.py`).
+The window title shows the guest frame (`sa1-psp (desktop)  f<N>`, refreshed every 10 rendered frames) so screen captures carry it; `SA1_NO_TITLE_FRAME=1` keeps the plain title.
 Debug builds (`CMAKE_BUILD_TYPE=Debug`, or `-DSA1_RAM_CHECK=ON`) check
 every guest access in the flat-RAM macros against the RAM window
 (`sh4_rt.h`, §8 item 4): an address outside it is logged once with the

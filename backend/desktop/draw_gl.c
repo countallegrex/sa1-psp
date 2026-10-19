@@ -48,6 +48,7 @@ static SDL_GameController *pad;
 
 static int headless = 1, win_w = 480, win_h = 272;
 static int pace_on;                       /* fixed 60 Hz pacing (draw_gl_pace); off with SA1_NOVSYNC */
+static int title_frame_on;                /* guest frame in the window title; off with SA1_NO_TITLE_FRAME */
 static draw_stats stats;
 static draw_state cur;
 static int cur_valid;
@@ -244,6 +245,7 @@ int draw_init(int scale, int want_headless) {
     if (!glctx) { sa1_log("draw: GL context: %s", SDL_GetError()); return -1; }
     pace_on = getenv("SA1_NOVSYNC") == NULL;
     SDL_GL_SetSwapInterval(pace_on ? 1 : 0);   /* SA1_NOVSYNC=1: run unpaced, for timing */
+    title_frame_on = getenv("SA1_NO_TITLE_FRAME") == NULL;
     sa1_log("draw: GL %s on %s, window %dx%d", (const char *)glGetString(GL_VERSION),
             (const char *)glGetString(GL_RENDERER), win_w, win_h);
     SDL_DisplayMode mode;
@@ -310,6 +312,16 @@ void draw_begin_frame(uint32_t clear_argb) {
 void draw_end_frame(void) {
 #ifndef SA1_NO_SDL
     if (headless) return;
+    if (title_frame_on) {
+        /* The guest frame in the title bar, so screen captures carry it;
+         * every 10 rendered frames to keep the call cheap. */
+        static unsigned title_tick;
+        if (title_tick++ % 10 == 0) {
+            char buf[64];
+            snprintf(buf, sizeof buf, "sa1-psp (desktop)  f%lu", (unsigned long)hle_frame_count());
+            SDL_SetWindowTitle(win, buf);
+        }
+    }
     SDL_GL_SwapWindow(win);
 #endif
 }
