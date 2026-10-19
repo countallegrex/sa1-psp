@@ -145,8 +145,6 @@ __asm__(
     "    subq $8, %rsp\n"
     "    call sa1_coro_entry_c\n"
     "    ud2\n"
-    ".section .note.GNU-stack,\"\",@progbits\n"
-    ".text\n
     /* sa1_call_on_stack(fn, arg, stack_top): rdi = fn, rsi = arg, rdx = stack top */
     ".globl sa1_call_on_stack\n"
     ".type sa1_call_on_stack, @function\n"
@@ -160,7 +158,9 @@ __asm__(
     "    call *%rax\n"
     "    movq %rbp, %rsp\n"
     "    popq %rbp\n"
-    "    retq\n"");       /* back to .text: the C below must not land in the note section */
+    "    retq\n"
+    ".section .note.GNU-stack,\"\",@progbits\n"
+    ".text\n");       /* back to .text: the C below must not land in the note section */
 #define SA1_CORO_SAVE_BYTES (6 * 8)
 #endif
 
