@@ -271,7 +271,7 @@ static void on_frame(uint32_t frame) {
     for (int i = 0; i < nmem; i++) if (mem_frames[i] == frame) { char w[32]; snprintf(w, sizeof w, "frame %u", frame); mem_report(w); }
     input_tape_frame_end(frame);
     for (int i = 0; i < nsaves; i++) if (saves[i].frame == frame) savestate_save(saves[i].path);
-    if (stats_every && frame % (uint32_t)stats_every == 0) { char w[32]; snprintf(w, sizeof w, "frame %u", frame); kamui_report(); draw_gu_report(); mem_report(w); }
+    if (stats_every && frame % (uint32_t)stats_every == 0) { char w[32]; snprintf(w, sizeof w, "frame %u", frame); kamui_report(); draw_gu_report(); plat_io_report(); mem_report(w); }
     if (frame == 300 && !sync_log) { sa1_log("log: buffered from here (--sync-log keeps writing through)"); plat_log_sync(0); }
     if (frame % 120 == 0) plat_log_flush();
     if (frame_limit && frame >= frame_limit) { sa1_log("frame limit %u reached", frame_limit); report_and_exit(0); }

@@ -117,6 +117,7 @@ static int ptr_trace(void) {
 int kamui_ptr_trace(void) { return ptr_trace(); }
 static int frame_rendered;
 static uint32_t stat_frames, stat_polys[3], stat_strips[3], stat_modvols, stat_overflow, stat_sprites, stat_fogmode[4];
+static uint64_t parse_us; static uint32_t parse_frames;     /* render_lists CPU time since the last report */
 static uint32_t last_tris, last_calls, frame_rendered_count, last_polys[3], frame_polys[3];
 
 /* ---- strip head access --------------------------------------------------- */
@@ -785,6 +786,7 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
 }
 
 static void render_lists(void) {
+    uint64_t t_start = sa1_plat_time_us();
     menu_mode = hle_rd16(0x8C760970u) == 11;
     uint32_t ends[3];
     for (int i = 0; i < 3; i++) {
@@ -826,6 +828,7 @@ static void render_lists(void) {
     for (int i = 0; i < 3; i++) last_polys[i] = frame_polys[i];
     stat_frames++;
     frame_rendered = 1;
+    parse_us += sa1_plat_time_us() - t_start; parse_frames++;
 }
 
 /* ---- the frame ------------------------------------------------------------- */
@@ -897,6 +900,8 @@ void kamui_report(void) {
     sa1_log("render: textures %d (%u bytes); TA buffer high-water op %u tr %u pt %u bytes, %u overflows; %u modifier volumes skipped, %u sprites",
             texture_count(), texture_memory_bytes(), buf_high[0], buf_high[1], buf_high[2], stat_overflow, stat_modvols, stat_sprites);
     sa1_log("render: polygon headers by fog mode: table %u, per-vertex %u, none %u, table2 %u", stat_fogmode[0], stat_fogmode[1], stat_fogmode[2], stat_fogmode[3]);
+    sa1_log("render: TA parse and record %.2f ms/frame over %u frames", parse_frames ? parse_us / 1000.0 / parse_frames : 0.0, parse_frames);
+    parse_us = 0; parse_frames = 0;
 }
 
 /* ---- helpers for the native draw entries (draw2d.c) ------------------------ */

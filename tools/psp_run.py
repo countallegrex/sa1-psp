@@ -32,6 +32,16 @@ tools/psp_addr2line.sh through WSL), or at
 PSPLink for its version; no answer means the console is hung below PSPLink
 (interrupts off, a kernel or bus fault) and only holding POWER recovers it.
 
+Sampling profiler (--sample-after S): from S seconds after the launch,
+for --sample-for seconds, the script asks PSPLink for the game thread's
+context ('thctx @user_main') as fast as PSPLink answers (a few tens of
+times a second over USB) and writes one line per sample to
+DIR/psplink-run/prof_samples.tsv: the PC where the thread was preempted,
+the user return address when it was in a syscall (waiting), and ra and
+sp.  The PSPLink shell thread preempts the game at a time unrelated to
+what it runs, so the PCs are an unbiased sample of where the CPU goes.
+tools/psp_prof.py names them against sa1psp_prx.elf.
+
 Exit status: 0 the exit line was seen, 2 an exception, 3 timeout or no
 response, 4 setup failure (no tools, no PSP, a load error).
 
@@ -201,6 +211,7 @@ class Session:
         self.hostfs_log = hostfs_log
         self.main_at: int | None = None      # the game's "image: main at 0x..." line (the PRX's load address)
         self.hostfs_pos = 0
+        self.quiet_shell = False             # sampling: thctx text is parsed, not echoed
 
     def say(self, text: str) -> None:
         line = "psp_run: " + text
@@ -319,7 +330,8 @@ class Session:
             self.emit("psplink| ", f"instruction at {addr}: {insn}")
 
     def _shell_line(self, line: str) -> None:
-        self.emit("psplink| ", line)
+        if not self.quiet_shell:
+            self.emit("psplink| ", line)
         self.cmd_lines.append(line)
         if "Resetting psplink" in line:
             self.resetting = True
@@ -458,6 +470,64 @@ def report_exception(sess: Session, elf: str, distro: str) -> None:
 
 # ---- main -----------------------------------------------------------------
 
+class Sampler:
+    """thctx of the game thread, one in flight at a time, between start and end (monotonic seconds)."""
+    EPC = re.compile(r"Context EPC 0x([0-9A-Fa-f]{8}), Real EPC 0x([0-9A-Fa-f]{8})")
+    REG = re.compile(r"\b(ra|sp):0x([0-9A-Fa-f]{8})")
+
+    def __init__(self, sess: Session, thread: str, start: float, end: float, path: str):
+        self.sess, self.thread, self.start, self.end = sess, thread, start, end
+        self.f = open(path, "w", encoding="utf-8", newline="\n")
+        self.f.write("# t\tepc\treal_epc\tra\tsp  (psp_run.py thctx samples of %s)\n" % thread)
+        self.inflight = 0.0
+        self.n = self.failed = 0
+        self.started = self.done = False
+
+    def step(self, now: float) -> None:
+        if self.done or now < self.start:
+            return
+        if not self.started:
+            self.started = True
+            self.sess.say(f"sampling thread {self.thread} for {self.end - self.start:g} s")
+        if self.inflight:
+            if self.sess.reply is None and now - self.inflight < 5:
+                return
+            self._take(now)
+        if now >= self.end:
+            self.finish()
+            return
+        self.sess.quiet_shell = True
+        self.sess.send("thctx", "@" + self.thread)
+        self.inflight = now
+
+    def _take(self, now: float) -> None:
+        self.inflight = 0.0
+        text = "\n".join(self.sess.cmd_lines)
+        m = self.EPC.search(text)
+        if not m:
+            self.failed += 1
+            if self.failed == 1:
+                self.sess.say("thctx gave no context: " + " | ".join(self.sess.cmd_lines[:6]))
+            if self.failed >= 20 and not self.n:
+                self.sess.say("sampling stopped: thctx keeps failing (the thread name? 'thlist' in pspsh)")
+                self.finish()
+            self.sess.pending = 0
+            return
+        regs = dict(self.REG.findall(text))
+        self.f.write("%.4f\t%s\t%s\t%s\t%s\n" % (now, m.group(1).lower(), m.group(2).lower(),
+                                                     regs.get("ra", "0" * 8).lower(), regs.get("sp", "0" * 8).lower()))
+        self.n += 1
+
+    def finish(self) -> None:
+        if self.done:
+            return
+        self.done = True
+        self.sess.quiet_shell = False
+        self.f.close()
+        if self.started:
+            self.sess.say(f"sampling done: {self.n} samples ({self.failed} failed) in {self.f.name}")
+
+
 def main() -> int:
     argv = sys.argv[1:]
     game_args: list[str] = []
@@ -475,6 +545,10 @@ def main() -> int:
     ap.add_argument("--linger", type=float, default=3, help="seconds to keep reading after the exit line (the exit reports)")
     ap.add_argument("--wsl-distro", default="Ubuntu", help="WSL distribution with pspdev, for addr2line")
     ap.add_argument("--stop", action="store_true", help="stop usbhostfs_pc and exit")
+    ap.add_argument("--sample-after", type=float, help="profile: sample the game thread's PC from S seconds after the launch")
+    ap.add_argument("--sample-for", type=float, default=60, help="profile: seconds to sample (default 60)")
+    ap.add_argument("--sample-thread", default="user_main", help="profile: the game's thread (default user_main)")
+    ap.add_argument("--sample-out", help="profile: samples file (default BUILD/psplink-run/prof_samples.tsv)")
     a = ap.parse_args(argv)
     if sys.stdout and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
@@ -531,9 +605,20 @@ def main() -> int:
                 raise SetupError("ldstart failed" + ("" if r else " (no answer in 120 s)"))
             t0 = time.monotonic()
             probe_due = time.monotonic() + a.quiet
+            sampler = None
+            if a.sample_after is not None:
+                sampler = Sampler(sess, a.sample_thread, t0 + a.sample_after, t0 + a.sample_after + a.sample_for,
+                                  a.sample_out or os.path.join(stage, "prof_samples.tsv"))
             while True:
-                sess.pump(0.2)
+                sess.pump(0.01 if sampler and sampler.started and not sampler.done else 0.2)
                 now = time.monotonic()
+                if sampler:
+                    if sess.exit_line or sess.ex_lines is not None or sess.lost:
+                        sampler.finish()
+                    else:
+                        sampler.step(now)
+                        if sampler.started and not sampler.done:
+                            probe_due = now + a.quiet
                 if sess.lost:
                     sess.say(sess.lost)
                     return EXIT_SETUP

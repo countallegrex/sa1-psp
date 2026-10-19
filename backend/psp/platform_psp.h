@@ -48,6 +48,8 @@ int sa1_plat_coro_run_root(void (*fn)(void *), void *arg);
 void plat_set_data_root(const char *root);
 /* Files kept open between reads (gdFs reads a file in many pieces). */
 void plat_files_close_all(void);
+/* --stats: opens and reads since the last call, and the time in them. */
+void plat_io_report(void);
 /* Log sink: buffered to a file on the Memory Stick, copied to stdout (psplink,
  * PPSSPP's log).  plat_log_flush writes the buffer out. */
 int plat_log_open(const char *path, int to_stdout);
