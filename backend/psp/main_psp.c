@@ -172,7 +172,7 @@ static void pace(uint32_t frame) {
 }
 
 /* Milestones for the hardware log: the game mode and the level as the
- * check files name them (tests/replay/*.check: 0x8C760970 mode, 0x8C7493BA
+ * check files name them (tests/replay/NAME.check: 0x8C760970 mode, 0x8C7493BA
  * level, 0x8C7493BC act), with the time since main(). */
 static void milestones(uint32_t frame) {
     static uint32_t mode = ~0u, level = ~0u, act = ~0u;
