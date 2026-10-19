@@ -40,6 +40,7 @@
 #include <pspiofilemgr.h>
 #include <pspsysmem.h>
 #include <psppower.h>
+#include <kubridge.h>
 
 #include <malloc.h>
 #include <stdio.h>
@@ -372,6 +373,29 @@ int main(int argc, char **argv) {
     if (!coro_heap) sa1_plat_coro_set_region(coro_block);
     sa1_log("step: coroutine self-test (%s)", coro_heap ? "stacks on the heap" : "stacks on the main thread's stack");
     coro_self_test();
+    /* The crash screen (backend/psp/exc/sa1exc.c), a kernel module: only
+     * kubridge (ARK, PRO) can load it from a user EBOOT. */
+    {
+        SceUID m = kuKernelLoadModule(abs_path(path, sizeof path, "sa1exc.prx"), 0, NULL);
+        int st = 0, r = m >= 0 ? sceKernelStartModule(m, 0, NULL, &st, NULL) : m;
+        sa1_log("crash screen: sa1exc.prx load 0x%08x, start 0x%08x%s", (unsigned)m, (unsigned)r,
+                r >= 0 ? " (exceptions now show their registers)" : " (not installed: an exception powers the console off)");
+    }
+    /* The FPU as the SH-4 runs the game (FPSCR 0x00040001: every exception
+     * masked, denormals are zero).  The PSP starts threads with the invalid,
+     * divide-by-zero and overflow traps enabled (FCSR 0x00000E00): a float
+     * 0/0 in the recompiled code then traps and the console powers off,
+     * which PPSSPP never shows (it raises no FPU exceptions).  So: enables
+     * (bits 7-11) and causes (12-17) cleared, FS (24, flush to zero) set,
+     * rounding to nearest as on the desktop. */
+    {
+        uint32_t fcsr, now;
+        __asm__ volatile("cfc1 %0, $31" : "=r"(fcsr));
+        uint32_t want = (fcsr & ~0x0003FF83u) | (1u << 24);
+        __asm__ volatile("ctc1 %0, $31" : : "r"(want));
+        __asm__ volatile("cfc1 %0, $31" : "=r"(now));
+        sa1_log("fpu: FCSR 0x%08x -> 0x%08x (exceptions masked, flush to zero)", fcsr, now);
+    }
     sa1_log("step: memory report");
     mem_report("start");
 

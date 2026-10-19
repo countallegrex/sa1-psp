@@ -47,6 +47,20 @@ add_library(sa1_backend_psp OBJECT
 target_link_libraries(sa1_backend_psp PUBLIC sa1_hle_psp)
 target_compile_options(sa1_backend_psp PRIVATE -O2 -fno-strict-aliasing -Wall -g)
 
+# sa1exc.prx: the kernel-mode crash screen the EBOOT loads through kubridge
+# (exc/sa1exc.c).  Kernel modules link without libc, so it is built by
+# pspsdk's own makefile, in a copy under the build tree.
+set(SA1_EXC_DIR ${CMAKE_BINARY_DIR}/sa1exc)
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/sa1psp/sa1exc.prx
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/exc ${SA1_EXC_DIR}
+  COMMAND make -C ${SA1_EXC_DIR}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/sa1psp
+  COMMAND ${CMAKE_COMMAND} -E copy ${SA1_EXC_DIR}/sa1exc.prx ${CMAKE_BINARY_DIR}/sa1psp/sa1exc.prx
+  DEPENDS exc/sa1exc.c exc/Makefile
+  COMMENT "Building sa1exc.prx (kernel-mode crash screen)")
+add_custom_target(sa1exc ALL DEPENDS ${CMAKE_BINARY_DIR}/sa1psp/sa1exc.prx)
+
 file(GLOB SA1_GAME_SRCS CONFIGURE_DEPENDS "${SA1_RECOMP_OUT}/emitter/game_[0-9]*.c")
 file(GLOB SA1_OVERLAY_SRCS CONFIGURE_DEPENDS "${SA1_RECOMP_OUT}/overlays/emitter/*/ovl_*.c")
 if(SA1_GAME_SRCS)
@@ -62,7 +76,8 @@ if(SA1_GAME_SRCS)
   target_include_directories(sa1psp BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime)
   target_include_directories(sa1psp PRIVATE ${SA1_RECOMP_OUT}/emitter
     ${CMAKE_SOURCE_DIR}/hle ${CMAKE_SOURCE_DIR}/backend)
-  target_link_libraries(sa1psp PRIVATE pspgu pspge pspdisplay pspctrl psppower psprtc pspdebug)
+  target_link_libraries(sa1psp PRIVATE pspgu pspge pspdisplay pspctrl psppower psprtc pspdebug pspkubridge)
+  add_dependencies(sa1psp sa1exc)
   # -Os for the game code: README section 7 budgets its size (3.66 MB at M1).
   set(SA1_PSP_GAME_OPT "-Os" CACHE STRING "Optimisation level for the recompiled game code on the PSP")
   target_compile_options(sa1psp PRIVATE -fno-strict-aliasing -ffp-contract=off -Wall
