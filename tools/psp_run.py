@@ -9,8 +9,8 @@ The PSP runs PSPLink (ms0:/PSP/GAME/PSPLINK, started from the XMB) and is
 on the USB cable; usbhostfs_pc on this machine serves DIR (default
 build-psp/sa1psp) to it as host0:.  One run:
 
-  1. stages DIR/psplink-run/: eboot.elf (the EBOOT's DATA.PSP, the static
-     ELF the XMB would run) and args.txt (the GAME_OPTIONs after "--", plus
+  1. stages DIR/psplink-run/: sa1psp.prx (the game linked as a PRX: PSPLink
+     refuses the EBOOT's static ELF on ARK-4, 0x80020148) and args.txt (the GAME_OPTIONs after "--", plus
      --stdout --no-crash-screen --data ms0:/PSP/GAME/SA1PSP/data unless
      given);
   2. starts usbhostfs_pc rooted at DIR if nothing listens on its port
@@ -18,7 +18,7 @@ build-psp/sa1psp) to it as host0:.  One run:
   3. waits for PSPLink to answer, resets it ('reset': a clean reboot into
      PSPLink, so the run starts from the same state every time), waits for
      it to come back and checks host0: is DIR;
-  4. starts host0:/psplink-run/eboot.elf ('ldstart'): argv[0] puts the
+  4. starts host0:/psplink-run/sa1psp.prx ('ldstart'): argv[0] puts the
      EBOOT's folder (args.txt, sa1psp.log, stderr.txt) on the PC, and the
      1 GB of game data comes from the card (--data ms0:/...);
   5. streams the PSP's stdout and stderr and PSPLink's shell output to the
@@ -26,7 +26,8 @@ build-psp/sa1psp) to it as host0:.  One run:
 
 It returns when the game logs its exit line ("] exit: "), when PSPLink
 reports an exception (the registers, then EPC and RA named against
-build-psp/sa1psp/sa1psp.elf with tools/psp_addr2line.sh through WSL), or at
+build-psp/sa1psp/sa1psp_prx.elf, less the PRX's load offset, with
+tools/psp_addr2line.sh through WSL), or at
 --timeout.  --quiet S: after S seconds without a byte from the PSP it asks
 PSPLink for its version; no answer means the console is hung below PSPLink
 (interrupts off, a kernel or bus fault) and only holding POWER recovers it.
@@ -93,26 +94,18 @@ class SetupError(Exception):
 
 # ---- staging --------------------------------------------------------------
 
-def extract_data_psp(pbp: str, dst: str) -> None:
-    """The EBOOT's DATA.PSP (PBP section 6), rewritten only when the EBOOT changed."""
-    st = os.stat(pbp)
+def stage_prx(prx: str, dst: str) -> None:
+    """The game as a PRX (build-psp/sa1psp/sa1psp.prx, the CMake target
+    sa1psp_prx): PSPLink's ldstart refuses the EBOOT's static ELF on ARK-4
+    (0x80020148).  Copied only when it changed."""
+    st = os.stat(prx)
     try:
-        if os.stat(dst).st_mtime >= st.st_mtime:
+        if os.stat(dst).st_mtime >= st.st_mtime and os.stat(dst).st_size == st.st_size:
             return
     except FileNotFoundError:
         pass
-    with open(pbp, "rb") as f:
-        head = f.read(40)
-        if len(head) < 40 or head[:4] != b"\0PBP":
-            raise SetupError(f"{pbp} is not a PBP")
-        offs = struct.unpack("<8I", head[8:40])
-        f.seek(offs[6])
-        elf = f.read(offs[7] - offs[6])
-    if elf[:4] != b"\x7fELF":
-        raise SetupError(f"DATA.PSP in {pbp} is not a plain ELF ({elf[:4]!r}): psplink loads the ELF")
     tmp = dst + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(elf)
+    shutil.copyfile(prx, tmp)
     os.replace(tmp, dst)
 
 
@@ -189,7 +182,13 @@ class Session:
         self.partial = {"out": "", "err": "", "shell": ""}
         self.frame: bytearray | None = None
         self.reply = None                    # ("ok"|"error", value) of the last command
-        self.cmd_lines: list[str] = []       # shell text since the last command was sent
+        self.cmd_lines: list[str] = []       # shell text of the last command
+        # PSPLink answers commands in order, with no tag: a command that timed
+        # out (a 'ver' while the PSP is still connecting) is answered later,
+        # and that answer must not be taken for the next command's.  Replies
+        # are counted against commands sent; the last command's reply is the
+        # one that brings the count to zero.  A reset drops the old ones.
+        self.pending = 0
         self.last_data = time.monotonic()
         self.exit_line: str | None = None
         self.exit_at = 0.0
@@ -200,6 +199,7 @@ class Session:
         self.ex_done = False
         self.lost: str | None = None
         self.hostfs_log = hostfs_log
+        self.main_at: int | None = None      # the game's "image: main at 0x..." line (the PRX's load address)
         self.hostfs_pos = 0
 
     def say(self, text: str) -> None:
@@ -242,7 +242,9 @@ class Session:
     def send(self, *args: str) -> None:
         """A shell command as pspsh sends it: each argument NUL-terminated, then 0x01."""
         self.reply = None
-        self.cmd_lines = []
+        if self.pending == 0:
+            self.cmd_lines = []
+        self.pending += 1
         payload = b"".join(a.encode("latin-1") + b"\0" for a in args) + b"\x01"
         self.socks["shell"].sendall(payload)
 
@@ -277,6 +279,9 @@ class Session:
     def _text(self, name: str, text: str) -> None:
         for line in self._lines(name, text):
             self.emit("" if name == "out" else "stderr| ", line)
+            m = re.search(r"image: main at (0x[0-9a-fA-F]+)", line) if name == "out" else None
+            if m:
+                self.main_at = int(m.group(1), 16)
             if name == "out" and "] exit: " in line and self.exit_line is None:
                 self.exit_line = line
                 self.exit_at = time.monotonic()
@@ -300,10 +305,15 @@ class Session:
             for line in self._lines("shell", fr.decode("latin-1")):
                 self._shell_line(line)
         elif code in (CMD_SUCCESS, CMD_ERROR):
-            self.reply = ("ok" if code == CMD_SUCCESS else "error", body)
+            self.pending = max(0, self.pending - 1)
+            if self.pending == 0:
+                self.reply = ("ok" if code == CMD_SUCCESS else "error", body)
+            else:
+                self.cmd_lines = []          # that text answered an older command
         elif code == CMD_CWD:
             if self.resetting:
                 self.booted = True
+                self.pending = 0             # the new instance: nothing older is answered
         elif code == CMD_DISASM:
             addr, _, insn = body.partition(":")
             self.emit("psplink| ", f"instruction at {addr}: {insn}")
@@ -314,6 +324,7 @@ class Session:
         if "Resetting psplink" in line:
             self.resetting = True
             self.booted = False
+            self.pending = 0                 # the old instance answers nothing more
         if line.startswith("Exception - ") and self.ex_lines is None:
             self.ex_lines, self.ex_at = [], time.monotonic()
         if self.ex_lines is not None and not self.ex_done:
@@ -340,16 +351,26 @@ class Session:
 # ---- PSPLink steps --------------------------------------------------------
 
 def wait_psplink(sess: Session, seconds: float) -> bool:
+    """One 'ver' at a time: a resend while the first is still queued in
+    usbhostfs_pc (the PSP connecting, or rebooting) would be answered too,
+    later, and flood the shell; so a 'ver' is resent only every 15 s."""
     end = time.monotonic() + seconds
-    hint = time.monotonic() + 10
+    resend = 0.0
     while time.monotonic() < end and not sess.lost:
-        r = sess.command("ver", timeout=2.5)
-        if r and r[0] == "ok" and any("PSPLink" in l for l in sess.cmd_lines):
+        if time.monotonic() >= resend:
+            if resend:
+                sess.say("still waiting for PSPLink (running on the PSP? cable in? driver bound with Zadig?)")
+            sess.pending = 0
+            sess.send("ver")
+            resend = time.monotonic() + 15
+        sess.pump(0.2)
+        if sess.reply and sess.reply[0] == "ok" and any("PSPLink" in l for l in sess.cmd_lines):
+            # let any answer to an older 'ver' arrive before the next command
+            quiet_until = time.monotonic() + 1.0
+            while time.monotonic() < quiet_until and not sess.lost:
+                sess.pump(0.2)
+            sess.pending = 0
             return True
-        if time.monotonic() > hint:
-            sess.say("still waiting for PSPLink (running on the PSP? cable in? driver bound with Zadig?)")
-            hint = time.monotonic() + 15
-        sess.pump(0.5)
     return False
 
 
@@ -370,9 +391,29 @@ def reset_psplink(sess: Session, seconds: float) -> bool:
     return wait_psplink(sess, max(10.0, seconds - (time.monotonic() - t0)))
 
 
-def name_addresses(addrs: list[str], elf: str, distro: str) -> list[str]:
-    """tools/psp_addr2line.sh on the addresses: through WSL on Windows."""
-    addrs = [a for a in addrs if 0x08800000 <= int(a, 16) < 0x0A000000]
+def link_address(symbol: str, elf: str, distro: str) -> int | None:
+    """symbol's address in the ELF (psp-nm, through WSL on Windows)."""
+    if os.name == "nt":
+        drive, rest = os.path.splitdrive(os.path.abspath(elf))
+        path = "/mnt/" + drive[0].lower() + rest.replace("\\", "/")
+        cmd = ["wsl.exe", "-d", distro, "--exec", os.environ.get("SA1_PSP_WSL_PSPDEV", "/opt/pspdev") + "/bin/psp-nm", path]
+    else:
+        cmd = ["psp-nm", elf]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in r.stdout.splitlines():
+        f = line.split()
+        if len(f) == 3 and f[2] == symbol:
+            return int(f[0], 16)
+    return None
+
+
+def name_addresses(addrs: list[str], elf: str, distro: str, delta: int = 0) -> list[str]:
+    """tools/psp_addr2line.sh on the addresses (less the PRX's load offset):
+    through WSL on Windows."""
+    addrs = ["0x%08x" % ((int(a, 16) - delta) & 0xFFFFFFFF) for a in addrs if 0x08800000 <= int(a, 16) < 0x0C000000]
     if not addrs:
         return []
     if os.name == "nt":
@@ -400,10 +441,16 @@ def report_exception(sess: Session, elf: str, distro: str) -> None:
     ra = re.search(r"\bra:(0x[0-9A-Fa-f]{8})", text)
     names = [("EPC", epc.group(1) if epc else None), ("RA", ra.group(1) if ra else None)]
     sess.say("exception: " + ", ".join(f"{n} {v}" for n, v in names if v))
+    delta = 0
+    if sess.main_at is not None:
+        link = link_address("main", elf, distro)
+        if link is not None:
+            delta = sess.main_at - link
+            sess.say(f"the PRX loaded 0x{delta & 0xFFFFFFFF:08x} above its link address (main at 0x{sess.main_at:08x})")
     for (n, v) in names:
         if not v:
             continue
-        for line in name_addresses([v], elf, distro):
+        for line in name_addresses([v], elf, distro, delta):
             sess.say(f"  {n} {v}: {line}")
     sess.say("the PSP is halted in PSPLink (the faulting thread sleeps): pspsh can look further "
              "(thctx, exprint, memory); the next psp_run.py resets it")
@@ -437,13 +484,16 @@ def main() -> int:
 
     build = os.path.abspath(a.build)
     pbp = os.path.join(build, "EBOOT.PBP")
-    elf = os.path.join(build, "sa1psp.elf")
+    elf = os.path.join(build, "sa1psp_prx.elf")
+    prx = os.path.join(build, "sa1psp.prx")
     stage = os.path.join(build, STAGE)
     try:
         if not os.path.isfile(pbp):
             raise SetupError(f"no {pbp} (tools/build_psp.sh)")
         os.makedirs(stage, exist_ok=True)
-        extract_data_psp(pbp, os.path.join(stage, "eboot.elf"))
+        if not os.path.isfile(prx):
+            raise SetupError(f"no {prx} (build the sa1psp_prx target)")
+        stage_prx(prx, os.path.join(stage, "sa1psp.prx"))
         args = write_args(os.path.join(stage, "args.txt"), game_args)
     except (SetupError, OSError) as e:
         print(f"psp_run: {e}", file=sys.stderr)
@@ -472,11 +522,11 @@ def main() -> int:
             if not a.no_reset and not reset_psplink(sess, a.wait):
                 raise SetupError(sess.lost or "PSPLink did not come back after the reset")
             r = sess.command("ls", f"host0:/{STAGE}/", timeout=10)
-            if not r or not any(l.endswith(" eboot.elf") or l == "eboot.elf" for l in sess.cmd_lines):
-                raise SetupError(f"host0:/{STAGE}/eboot.elf not visible on the PSP: the running usbhostfs_pc "
+            if not r or not any(l.endswith(" sa1psp.prx") or l == "sa1psp.prx" for l in sess.cmd_lines):
+                raise SetupError(f"host0:/{STAGE}/sa1psp.prx not visible on the PSP: the running usbhostfs_pc "
                                  f"serves another folder (psp_run.py --stop, then run again)")
-            sess.say(f"starting host0:/{STAGE}/eboot.elf")
-            r = sess.command("ldstart", f"host0:/{STAGE}/eboot.elf", timeout=120)
+            sess.say(f"starting host0:/{STAGE}/sa1psp.prx")
+            r = sess.command("ldstart", f"host0:/{STAGE}/sa1psp.prx", timeout=120)
             if not r or any("Failed to Load/Start" in l or "Error invalid file" in l for l in sess.cmd_lines):
                 raise SetupError("ldstart failed" + ("" if r else " (no answer in 120 s)"))
             t0 = time.monotonic()

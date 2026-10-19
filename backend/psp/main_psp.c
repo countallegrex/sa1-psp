@@ -373,6 +373,9 @@ int main(int argc, char **argv) {
     plat_log_open(abs_path(path, sizeof path, log_path), to_stdout);
     t0 = sa1_plat_time_us();
     sa1_log("sa1-psp (PSP): base %s, data %s, %d args from args.txt%s", base_dir, data_dir, args_c, headless ? ", headless" : "");
+    /* The PRX build (PSPLink) loads anywhere: tools/psp_run.py names crash
+     * addresses from this line and the ELF's own address of main. */
+    sa1_log("image: main at %p", (void *)main);
     for (int i = 0; i < args_c; i++) sa1_log("  arg %s", args_v[i]);
     if (!coro_heap) sa1_plat_coro_set_region(coro_block);
     sa1_log("step: coroutine self-test (%s)", coro_heap ? "stacks on the heap" : "stacks on the main thread's stack");

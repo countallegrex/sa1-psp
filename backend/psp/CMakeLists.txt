@@ -64,26 +64,26 @@ add_custom_target(sa1exc ALL DEPENDS ${CMAKE_BINARY_DIR}/sa1psp/sa1exc.prx)
 file(GLOB SA1_GAME_SRCS CONFIGURE_DEPENDS "${SA1_RECOMP_OUT}/emitter/game_[0-9]*.c")
 file(GLOB SA1_OVERLAY_SRCS CONFIGURE_DEPENDS "${SA1_RECOMP_OUT}/overlays/emitter/*/ovl_*.c")
 if(SA1_GAME_SRCS)
-  # Object libraries, not static ones: the weak stubs in hle/seam_stubs.c
-  # must see every strong HLE body at link time (as on the desktop).
-  add_executable(sa1psp
-    $<TARGET_OBJECTS:sa1_hle_psp> $<TARGET_OBJECTS:sa1_backend_psp>
-    ${SA1_GAME_SRCS}
-    ${SA1_RECOMP_OUT}/emitter/game_table.c
-    ${SA1_OVERLAY_SRCS})
-  # The runtime header first: the emitter leaves a copy of sh4_rt.h next to
-  # its output, which must not shadow the one in the tree.
-  target_include_directories(sa1psp BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime)
-  target_include_directories(sa1psp PRIVATE ${SA1_RECOMP_OUT}/emitter
-    ${CMAKE_SOURCE_DIR}/hle ${CMAKE_SOURCE_DIR}/backend)
-  target_link_libraries(sa1psp PRIVATE pspgu pspge pspdisplay pspctrl psppower psprtc pspdebug pspkubridge)
-  add_dependencies(sa1psp sa1exc)
+  # The recompiled code, compiled once for both images below.
   # -Os for the game code: README section 7 budgets its size (3.66 MB at M1).
   set(SA1_PSP_GAME_OPT "-Os" CACHE STRING "Optimisation level for the recompiled game code on the PSP")
-  target_compile_options(sa1psp PRIVATE -fno-strict-aliasing -ffp-contract=off -Wall
+  add_library(sa1_game_psp OBJECT ${SA1_GAME_SRCS} ${SA1_RECOMP_OUT}/emitter/game_table.c ${SA1_OVERLAY_SRCS})
+  # The runtime header first: the emitter leaves a copy of sh4_rt.h next to
+  # its output, which must not shadow the one in the tree.
+  target_include_directories(sa1_game_psp BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime)
+  target_include_directories(sa1_game_psp PRIVATE ${SA1_RECOMP_OUT}/emitter
+    ${CMAKE_SOURCE_DIR}/hle ${CMAKE_SOURCE_DIR}/backend)
+  target_compile_options(sa1_game_psp PRIVATE ${SA1_PSP_GAME_OPT} -fno-strict-aliasing -ffp-contract=off -Wall
     -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable -Wno-parentheses)
-  set_source_files_properties(${SA1_GAME_SRCS} ${SA1_OVERLAY_SRCS} ${SA1_RECOMP_OUT}/emitter/game_table.c
-    PROPERTIES COMPILE_OPTIONS "${SA1_PSP_GAME_OPT}")
+  # Object libraries, not static ones: the weak stubs in hle/seam_stubs.c
+  # must see every strong HLE body at link time (as on the desktop).
+  set(SA1_PSP_OBJS $<TARGET_OBJECTS:sa1_hle_psp> $<TARGET_OBJECTS:sa1_backend_psp> $<TARGET_OBJECTS:sa1_game_psp>)
+  set(SA1_PSP_LIBS pspgu pspge pspdisplay pspctrl psppower psprtc pspdebug pspkubridge)
+
+  # 1. The EBOOT the XMB runs: a static ELF at 0x08804000.
+  add_executable(sa1psp ${SA1_PSP_OBJS})
+  target_link_libraries(sa1psp PRIVATE ${SA1_PSP_LIBS})
+  add_dependencies(sa1psp sa1exc)
   # Keep the linked ELF with its symbols for tools/psp_addr2line.sh, and put
   # a stripped copy in the EBOOT (these run before create_pbp_file's own
   # post-build steps, which pack the target file).
@@ -99,6 +99,25 @@ if(SA1_GAME_SRCS)
     MEMSIZE 1
     OUTPUT_DIR ${CMAKE_BINARY_DIR}/sa1psp
   )
+
+  # 2. The same program as a relocatable PRX, for PSPLink (tools/psp_run.py):
+  # PSPLink's ldstart refuses a static ELF (0x80020148 on ARK-4).  It loads
+  # wherever the kernel puts it, so its addresses differ from sa1psp.elf's;
+  # sa1psp_prx.elf keeps its symbols at link addresses (tools/psp_run.py
+  # subtracts the load base before naming a crash address).
+  add_executable(sa1psp_prx ${SA1_PSP_OBJS})
+  target_link_libraries(sa1psp_prx PRIVATE ${SA1_PSP_LIBS})
+  target_link_options(sa1psp_prx PRIVATE
+    -specs=$ENV{PSPDEV}/psp/sdk/lib/prxspecs -Wl,-q,-T$ENV{PSPDEV}/psp/sdk/lib/linkfile.prx
+    $ENV{PSPDEV}/psp/sdk/lib/prxexports.o)
+  add_custom_command(TARGET sa1psp_prx POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/sa1psp
+    COMMAND $ENV{PSPDEV}/bin/psp-fixup-imports $<TARGET_FILE:sa1psp_prx>
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:sa1psp_prx> ${CMAKE_BINARY_DIR}/sa1psp/sa1psp_prx.elf
+    COMMAND $ENV{PSPDEV}/bin/psp-prxgen $<TARGET_FILE:sa1psp_prx> ${CMAKE_BINARY_DIR}/sa1psp/sa1psp.prx
+    COMMENT "Building sa1psp.prx for PSPLink")
+  add_dependencies(sa1psp_prx sa1exc)
+
   list(LENGTH SA1_GAME_SRCS n_game)
   list(LENGTH SA1_OVERLAY_SRCS n_ovl)
   message(STATUS "sa1psp (PSP): ${n_game} game chunks, ${n_ovl} overlay chunks from ${SA1_RECOMP_OUT}")
