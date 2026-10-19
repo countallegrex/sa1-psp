@@ -19,6 +19,9 @@
  *   --sync-log      write every log line through to the card for the whole
  *                   run (default: through frame 300, then buffered)
  *   --cull-flip     the other winding convention for PowerVR culling (draw_gu.c)
+ *   --no-crash-screen  do not load sa1exc.prx: under psplink, whose own
+ *                   exception handler keeps the console on and the USB link
+ *                   up (ours would replace it and stop at a red screen)
  *   --data DIR      the data root (default data)
  *
  * Without args.txt the EBOOT plays: the pad drives the game, frames are
@@ -69,7 +72,7 @@ uint32_t hle_task_running(void);
 
 static char base_dir[256] = "ms0:/PSP/GAME/SA1PSP";
 static const char *data_dir = "data", *log_path = "sa1psp.log";
-static int headless, no_pad, no_pace, to_stdout, sync_log, stats_every, coro_heap;
+static int headless, no_pad, no_pace, to_stdout, sync_log, stats_every, coro_heap, no_crash_screen;
 static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
@@ -340,6 +343,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--stdout")) to_stdout = 1;
         else if (!strcmp(av[i], "--sync-log")) sync_log = 1;
         else if (!strcmp(av[i], "--coro-heap")) coro_heap = 1;
+        else if (!strcmp(av[i], "--no-crash-screen")) no_crash_screen = 1;
         else if (!strcmp(av[i], "--cull-flip")) draw_gu_set_cull_flip(1);
         else if (!strcmp(av[i], "--stats") && i + 1 < args_c) stats_every = atoi(av[++i]);
         else if (!strcmp(av[i], "--mem") && i + 1 < args_c && nmem < 16) mem_frames[nmem++] = (uint32_t)strtoul(av[++i], NULL, 0);
@@ -375,7 +379,8 @@ int main(int argc, char **argv) {
     coro_self_test();
     /* The crash screen (backend/psp/exc/sa1exc.c), a kernel module: only
      * kubridge (ARK, PRO) can load it from a user EBOOT. */
-    {
+    if (no_crash_screen) sa1_log("crash screen: not loaded (--no-crash-screen; under psplink its own handler reports exceptions)");
+    else {
         SceUID m = kuKernelLoadModule(abs_path(path, sizeof path, "sa1exc.prx"), 0, NULL);
         int st = 0, r = m >= 0 ? sceKernelStartModule(m, 0, NULL, &st, NULL) : m;
         sa1_log("crash screen: sa1exc.prx load 0x%08x, start 0x%08x%s", (unsigned)m, (unsigned)r,
