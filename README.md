@@ -363,6 +363,8 @@ Ordered by cost, cheapest first.
 | **Voice language** | Japanese or English voices (both are on the US disc) | File-path switch in the sound HLE | nothing | with M3 |
 | **Texture packs** | Replace textures by name | `mods/` overlay folder applied before asset conversion in the launcher | nothing | with M7 |
 | **"Internet" option** | The 1999 online menu: event packs (Christmas, Halloween, Twinkle Circuit, special Chao) and rankings | Replace the on-disc browser with an offline installer for user-supplied preserved event packs; rankings local or a community board | the event packs (user-supplied, never shipped) | after M6 |
+| **16:9 title screen** | A widescreen title in place of the pillarboxed 4:3 art | Research whether SADX PC has wide title art: if so, an optional second asset source in the launcher, never in the repo; otherwise extend the 4:3 art | nothing (the PC art would be user-supplied) | after M6 |
+| **PSP button prompts** | PSP buttons wherever the game shows Dreamcast ones | Survey where they appear: icon textures in menus, the title's press-start text, button names in hint and tutorial strings (Tikal's hints), special font glyphs. Replace them at load time with our own PSP-style icons (original art, fine in the repo) and patched strings, following the button remap setting | nothing | after M6 |
 | **VMU support** | Saves (M6), the 48x32 LCD widget, and **Chao Adventure** | Saves: a file. LCD: optional HUD corner. Chao Adventure: emulate the VMU's 8-bit core (reference: Flycast's VMU emulation) and pair the in-game Chao transfer with a saved VMU image; the VMU program comes off the user's own disc | nothing beyond the disc | after M6 |
 
 Also noted, not committed to: a 60 fps mode for the desktop build (the game

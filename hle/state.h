@@ -29,6 +29,14 @@ const void *hle_state_bytes(const hle_state_io *io, size_t *n);   /* writer: wha
 const char *hle_state_error(const hle_state_io *io);              /* NULL when all is well */
 int hle_state_at_end(const hle_state_io *io);                     /* reader: every chunk consumed */
 void hle_state_free(hle_state_io *io);
+/* Stream mode (the PSP, which has no room for a whole state in memory): the
+ * chunks go straight to f, or come straight from it.  A stream reader keeps
+ * only the last two hle_state_var payloads (a texture's pixels and its
+ * CLUT): each is valid until the second var call after it. */
+#include <stdio.h>
+hle_state_io *hle_state_stream_writer(FILE *f);
+hle_state_io *hle_state_stream_reader(FILE *f);
+size_t hle_state_stream_written(const hle_state_io *io);   /* bytes so far */
 
 /* The modules' state functions, and the one that runs them all in a fixed
  * order (hle_init.c).  The list is the inventory in docs/savestate.md. */

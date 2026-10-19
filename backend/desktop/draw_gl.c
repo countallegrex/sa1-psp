@@ -310,6 +310,7 @@ void draw_shutdown(void) {
 void draw_begin_frame(uint32_t clear_argb) {
     stats.draw_calls = stats.triangles = stats.strips = stats.state_changes = 0;
     cur_valid = 0;
+    cur_proj = -1;                /* the clear below resets the scissor; the first strip sets it again */
 #ifndef SA1_NO_SDL
     if (headless) return;
     glDepthMask(GL_TRUE);
@@ -493,8 +494,19 @@ static void select_proj(const draw_vertex *v, int n) {
         float xmin = v[0].x, xmax = v[0].x;
         for (int i = 1; i < n; i++) { if (v[i].x < xmin) xmin = v[i].x; if (v[i].x > xmax) xmax = v[i].x; }
         p = (xmin <= 0.5f && xmax >= DC_W - 0.5f) ? PROJ_FULL : PROJ_2D;
+    } else if (cur.layer == DRAW_LAYER_3D_43) p = PROJ_2D;
+    if (p != cur_proj) {
+        glMatrixMode(GL_PROJECTION); glLoadMatrixf(proj[p]); glMatrixMode(GL_MODELVIEW);
+        /* The 2D layer's 4:3 area is the game's whole screen: what it draws
+         * past x 0 or 640 (the title's water wobble) is cut at the area's
+         * edges, as a console's screen would, not drawn into the sides (the
+         * PSP backend does the same; 4:3 mode scissors everything already). */
+        if (aspect_wide) {
+            if (p == PROJ_2D) { glEnable(GL_SCISSOR_TEST); glScissor(win_w / 8, 0, win_w * 3 / 4, win_h); }
+            else glDisable(GL_SCISSOR_TEST);
+        }
+        cur_proj = p;
     }
-    if (p != cur_proj) { glMatrixMode(GL_PROJECTION); glLoadMatrixf(proj[p]); glMatrixMode(GL_MODELVIEW); cur_proj = p; }
 }
 static void emit(const draw_vertex *v, int n, GLenum mode) {
     if (headless) return;

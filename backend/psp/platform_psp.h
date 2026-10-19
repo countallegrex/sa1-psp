@@ -31,6 +31,14 @@ sa1_coro *sa1_plat_coro_supervisor(void);
 sa1_coro *sa1_plat_coro_current(void);
 void sa1_plat_coro_stack(int i, uintptr_t *lo, uintptr_t *hi);
 int sa1_plat_coro_used(int i);
+/* Save states (savestate_psp.c), as platform_desktop.h's: a suspended
+ * context is its saved stack pointer plus the bytes above it. */
+uintptr_t sa1_plat_coro_sp(int i);
+void sa1_plat_coro_reset_all(void);
+void sa1_plat_coro_restore(int i, uintptr_t sp);
+/* The running image's file (argv[0]: the EBOOT, or the PRX under PSPLink),
+ * whose hash a save state carries. */
+void savestate_set_image(const char *path);
 /* Bytes of slot i's stack ever used (painted pattern overwritten). */
 uint32_t sa1_plat_coro_high_water(int i);
 /* Runs fn(arg) on the root slot, from the PSP main thread (the supervisor). */

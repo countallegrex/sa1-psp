@@ -23,6 +23,11 @@
  *                   exception handler keeps the console on and the USB link
  *                   up (ours would replace it and stop at a red screen)
  *   --data DIR      the data root (default data)
+ *   --stage NAME    straight into a level at frame 12: ss (Station Square),
+ *                   ec (Emerald Coast 1), chaos0, or LEVEL[:ACT[:MODE]]
+ *   --poke FRAME:ADDR:VALUE[:SIZE]  write a guest word (as the desktop)
+ *   --save FRAME:FILE, --load FILE  save states (savestate_psp.c): ~30 MB,
+ *                   only for the build and memory layout that saved them
  *
  * Without args.txt the EBOOT plays: the pad drives the game, frames are
  * paced to the vblank.  HOME exits.
@@ -36,6 +41,8 @@
 #include "hle.h"
 #include "../draw.h"
 #include "../desktop/input_tape.h"
+#include "../desktop/savestate.h"
+#include "state.h"
 #include "platform_psp.h"
 
 #include <pspkernel.h>
@@ -86,6 +93,44 @@ static struct { uint32_t frame; const char *path; } shots[PRESS_MAX];
 static int nshots;
 static uint32_t mem_frames[16];
 static int nmem;
+static struct { uint32_t frame, addr, value, size; } pokes[PRESS_MAX];   /* --poke, --stage */
+static int npokes;
+static struct { uint32_t frame; const char *path; } saves[16];   /* --save FRAME:FILE */
+static int nsaves;
+static const char *load_path;
+
+/* --stage: straight into a level, past the title and menus (a test
+ * checkpoint: seconds instead of the tape's minutes on the console).  At
+ * guest frame 12, just after the Sega logo, the current and next level and
+ * act are set and the game mode switched; the game's own mode change then
+ * loads the level as from the menus, with Sonic.  The variables are the M2
+ * report's (section 2): level 0x8C7493BA, act 0x8C7493BC, next level/act
+ * 0x8C7493BE/C0, game mode 0x8C760970 (5 adventure field, 4 action stage). */
+static int stage_arg(const char *spec) {
+    static const struct { const char *name; uint32_t level, act, mode; } named[] = {
+        { "ss", 26, 3, 5 },        /* Station Square, by day (the tape's first visit) */
+        { "ec", 1, 0, 4 },         /* Emerald Coast act 1 */
+        { "chaos0", 15, 0, 4 },
+    };
+    uint32_t level = 0, act = 0, mode = 5;
+    int found = 0;
+    for (unsigned i = 0; i < sizeof named / sizeof named[0]; i++)
+        if (!strcmp(spec, named[i].name)) { level = named[i].level; act = named[i].act; mode = named[i].mode; found = 1; }
+    if (!found) {
+        char *end;
+        level = (uint32_t)strtoul(spec, &end, 0);
+        if (end == spec) return -1;
+        if (*end == ':') act = (uint32_t)strtoul(end + 1, &end, 0);
+        if (*end == ':') mode = (uint32_t)strtoul(end + 1, &end, 0);
+    }
+    static const uint32_t addr[5] = { 0x8C7493BAu, 0x8C7493BCu, 0x8C7493BEu, 0x8C7493C0u, 0x8C760970u };
+    uint32_t val[5] = { level, act, level, act, mode };
+    for (int i = 0; i < 5 && npokes < PRESS_MAX; i++) {
+        pokes[npokes].frame = 12; pokes[npokes].addr = addr[i]; pokes[npokes].value = val[i]; pokes[npokes].size = 2;
+        npokes++;
+    }
+    return 0;
+}
 
 /* ---- memory report (README section 7) ------------------------------------- */
 extern char __executable_start[] __attribute__((weak)), _etext[] __attribute__((weak)),
@@ -212,13 +257,35 @@ static void on_frame(uint32_t frame) {
     if (b != hle_pad_state.buttons) sa1_log("pad: buttons 0x%x", b);
     hle_pad_state.buttons = b;
     for (int i = 0; i < nshots; i++) if (shots[i].frame == frame) kamui_set_screenshot(shots[i].path);
+    for (int i = 0; i < npokes; i++) if (pokes[i].frame == frame) {       /* as the desktop's --poke */
+        if (pokes[i].size == 1) hle_wr8(pokes[i].addr, pokes[i].value);
+        else if (pokes[i].size == 2) hle_wr16(pokes[i].addr, pokes[i].value);
+        else hle_wr32(pokes[i].addr, pokes[i].value);
+        sa1_log("poke: [0x%08x] = 0x%x (%u bytes)", pokes[i].addr, pokes[i].value, pokes[i].size);
+    }
     for (int i = 0; i < nmem; i++) if (mem_frames[i] == frame) { char w[32]; snprintf(w, sizeof w, "frame %u", frame); mem_report(w); }
     input_tape_frame_end(frame);
+    for (int i = 0; i < nsaves; i++) if (saves[i].frame == frame) savestate_save(saves[i].path);
     if (stats_every && frame % (uint32_t)stats_every == 0) { char w[32]; snprintf(w, sizeof w, "frame %u", frame); kamui_report(); draw_gu_report(); mem_report(w); }
     if (frame == 300 && !sync_log) { sa1_log("log: buffered from here (--sync-log keeps writing through)"); plat_log_sync(0); }
     if (frame % 120 == 0) plat_log_flush();
     if (frame_limit && frame >= frame_limit) { sa1_log("frame limit %u reached", frame_limit); report_and_exit(0); }
     if (time_limit_us && sa1_plat_time_us() - t0 >= time_limit_us) { sa1_log("time limit reached"); report_and_exit(0); }
+}
+
+/* Save states (savestate_psp.c, --save/--load): this file's share is the
+ * register file; the header carries the frame and the run's settings. */
+void draw_gu_texture_state(hle_state_io *io);
+static void main_state(hle_state_io *io) { hle_state_blob(io, "main.ctx", &ctx, sizeof ctx); }
+static void state_meta_fill(savestate_meta *m) {
+    m->frame = hle_frame_count();
+    m->flags = (hle_strict ? SAVESTATE_STRICT : 0) | (hle_aspect_wide ? SAVESTATE_WIDE : 0);
+    m->rtc_epoch = hle_rtc_epoch;
+}
+static void state_loaded(const savestate_meta *m) {
+    if (!!(m->flags & SAVESTATE_STRICT) != !!hle_strict)
+        sa1_log("savestate: the state was saved %s --strict and this run is %s; the runs will differ", (m->flags & SAVESTATE_STRICT) ? "with" : "without", hle_strict ? "strict" : "not");
+    input_tape_loaded(m->frame);
 }
 
 static void boot(void *arg) {
@@ -330,6 +397,7 @@ int main(int argc, char **argv) {
         *strrchr(base_dir, '/') = 0;
     }
     chdir(base_dir);
+    if (argc > 0 && argv[0]) savestate_set_image(argv[0]);
     char path[300];
     read_args_file(abs_path(path, sizeof path, "args.txt"));
     for (int i = 0; i < args_c; i++) {
@@ -368,6 +436,21 @@ int main(int argc, char **argv) {
             presses[npresses].buttons = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 16) : 0;
             presses[npresses].hold = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : 2;
             npresses++;
+        } else if (!strcmp(av[i], "--poke") && i + 1 < args_c && npokes < PRESS_MAX) {   /* FRAME:ADDR:VALUE[:SIZE] */
+            char *spec = av[++i], *end;
+            pokes[npokes].frame = (uint32_t)strtoul(spec, &end, 0);
+            pokes[npokes].addr = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 16) : 0;
+            pokes[npokes].value = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : 0;
+            pokes[npokes].size = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : 4;
+            npokes++;
+        } else if (!strcmp(av[i], "--save") && i + 1 < args_c && nsaves < 16) {   /* FRAME:FILE */
+            char *spec = av[++i], *end;
+            saves[nsaves].frame = (uint32_t)strtoul(spec, &end, 0);
+            saves[nsaves].path = *end == ':' ? end + 1 : "frame.state";
+            nsaves++;
+        } else if (!strcmp(av[i], "--load") && i + 1 < args_c) load_path = av[++i];
+        else if (!strcmp(av[i], "--stage") && i + 1 < args_c) {
+            if (stage_arg(av[++i]) != 0) { /* logged below */ }
         } else if (input_tape_arg(args_c, av, &i)) continue;
         else { /* logged once the log is open */ }
     }
@@ -446,8 +529,12 @@ int main(int argc, char **argv) {
     plat_watchdog_start(hle_frame_count, 10);
     mem_report("boot");
     plat_log_flush();
-    sa1_log("step: root coroutine");
-    if (sa1_plat_coro_run_root(boot, NULL) != 0) sa1_log("boot: cannot start the root coroutine");
+    sa1_log("step: root coroutine%s%s", load_path ? ", from the state " : "", load_path ? load_path : "");
+    savestate_add("hle", hle_state_all);
+    savestate_add("main", main_state);
+    savestate_add("textures", draw_gu_texture_state);
+    savestate_set_meta(state_meta_fill, state_loaded);
+    if (savestate_supervise(boot, NULL, load_path) != 0) sa1_log("boot: the run could not start or resume");
     report_and_exit(1);
     return 1;
 }

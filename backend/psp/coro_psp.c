@@ -170,7 +170,7 @@ static sa1_coro *create_at(int i, void (*fn)(void *), void *arg) {
 sa1_coro *sa1_plat_coro_create(void (*fn)(void *arg), void *arg, unsigned stack_bytes) {
     stacks_map();
     (void)stack_bytes;        /* tasks.c asks for the desktop's 1 MB; the slots are what they are */
-    for (int i = 1; i < SA1_CORO_SLOTS; i++)
+    for (int i = 0; i < SA1_CORO_SLOTS; i++)      /* the first one created is the root: slot 0, the big stack */
         if (!slots[i].used) return create_at(i, fn, arg);
     sa1_log("coroutine: all %d slots in use", SA1_CORO_SLOTS);
     return NULL;
@@ -204,6 +204,18 @@ void sa1_plat_coro_stack(int i, uintptr_t *lo, uintptr_t *hi) {
     *lo = slots[i].lo; *hi = slots[i].hi;
 }
 int sa1_plat_coro_used(int i) { return i >= 0 && i < SA1_CORO_SLOTS && slots[i].used; }
+uintptr_t sa1_plat_coro_sp(int i) { return i >= 0 && i < SA1_CORO_SLOTS ? slots[i].sp : 0; }
+void sa1_plat_coro_reset_all(void) {
+    stacks_map();
+    for (int i = 0; i < SA1_CORO_SLOTS; i++) { slots[i].used = 0; slots[i].fn = NULL; slots[i].arg = NULL; slots[i].sp = 0; }
+}
+void sa1_plat_coro_restore(int i, uintptr_t sp) {
+    stacks_map();
+    if (i < 0 || i >= SA1_CORO_SLOTS) return;
+    slots[i].used = 1;
+    slots[i].sp = sp;
+}
+
 uint32_t sa1_plat_coro_high_water(int i) {
     stacks_map();
     if (i < 0 || i >= SA1_CORO_SLOTS) return 0;

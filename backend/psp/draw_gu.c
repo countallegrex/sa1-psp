@@ -369,6 +369,60 @@ void draw_texture_destroy(uint32_t handle) {
     cur_valid = 0;
 }
 
+/* Save states (savestate_psp.c): every live texture as level-0 pixels in
+ * the linear layout draw_texture_create takes, and its CLUT; a load drops
+ * the textures and builds the saved ones under their handles, which guest
+ * RAM refers to (mip levels and mirrors are derived again). */
+#include "state.h"
+typedef struct tex_rec { uint32_t handle, pix_n, clut_n; int32_t w, h, fmt, clut_fmt; } tex_rec;
+static uint32_t src_row_bytes(int w, int bits) { uint32_t r = row_bytes(w, bits); return r ? r : 1; }
+
+void draw_gu_texture_state(hle_state_io *io) {
+    uint32_t count = 0;
+    if (!hle_state_loading(io)) for (int i = 1; i < TEX_MAX; i++) count += texs[i].w && !texs[i].hidden && !texs[i].dying;
+    hle_state_blob(io, "textures", &count, sizeof count);
+    if (hle_state_loading(io)) {
+        if (hle_state_error(io)) return;
+        for (int i = 1; i < TEX_MAX; i++) if (texs[i].mem && !texs[i].hidden) texture_release((uint32_t)i);
+        for (int i = 1; i < TEX_MAX; i++) if (texs[i].mem) texture_release((uint32_t)i);
+        nfree_later = 0; bound_tex = 0; cur_valid = 0;
+        for (uint32_t k = 0; k < count; k++) {
+            tex_rec r;
+            hle_state_blob(io, "tex", &r, sizeof r);
+            uint32_t pn = 0, cn = 0;
+            const void *pix = hle_state_var(io, "tex.pix", NULL, &pn);
+            const void *clut = hle_state_var(io, "tex.clut", NULL, &cn);
+            if (hle_state_error(io)) return;
+            uint16_t *cl = NULL;
+            if (cn) { cl = memalign(16, cn < 32 ? 32 : cn); if (cl) memcpy(cl, clut, cn); }
+            if (!pix || r.handle == 0 || r.handle >= TEX_MAX || texture_build((int)r.handle, r.w, r.h, r.fmt, pix, r.clut_fmt, cl, cl != NULL) != 0) {
+                sa1_log("draw: cannot rebuild texture %u (%dx%d fmt %d) from the state", r.handle, r.w, r.h, r.fmt);
+                continue;
+            }
+            stats.textures_alive++; stats.texture_bytes += texs[r.handle].bytes;
+        }
+        return;
+    }
+    for (int i = 1; i < TEX_MAX; i++) {
+        gtex *t = &texs[i];
+        if (!t->w || t->hidden || t->dying) continue;
+        int bits = fmt_bits(t->fmt);
+        uint32_t rb = row_bytes(t->w, bits) < 16 ? 16 : ((row_bytes(t->w, bits) + 15u) & ~15u), rows = ((uint32_t)t->h + 7u) & ~7u;
+        uint32_t srb = src_row_bytes(t->w, bits);
+        uint8_t *lin = malloc(rb * rows), *packed = malloc((size_t)srb * t->h);
+        if (!lin || !packed) { free(lin); free(packed); sa1_log("draw: no memory to save texture %d", i); continue; }
+        if (gu_debug & 4) memcpy(lin, t->mem + t->off[0], rb * rows); else unswizzle(lin, t->mem + t->off[0], rb, rows);
+        for (int y = 0; y < t->h; y++) memcpy(packed + (size_t)y * srb, lin + (size_t)y * rb, srb);
+        free(lin);
+        tex_rec r = { (uint32_t)i, srb * (uint32_t)t->h, t->clut ? (t->fmt == DRAW_FMT_T4 ? 32u : 512u) : 0u, t->w, t->h, t->fmt, t->clut_fmt };
+        hle_state_blob(io, "tex", &r, sizeof r);
+        uint32_t pn = r.pix_n, cn = r.clut_n;
+        hle_state_var(io, "tex.pix", packed, &pn);
+        hle_state_var(io, "tex.clut", t->clut, &cn);
+        free(packed);
+    }
+}
+
 /* The mirrored variant of slot h (fu, fv as in the TSP flip bits): a
  * texture twice as wide and/or tall holding the image and its mirror. */
 static uint32_t mirror_variant(uint32_t h, int fu, int fv) {
@@ -683,8 +737,21 @@ static void select_proj(const draw_vertex *v, int n) {
         float xmin = v[0].x, xmax = v[0].x;
         for (int i = 1; i < n; i++) { if (v[i].x < xmin) xmin = v[i].x; if (v[i].x > xmax) xmax = v[i].x; }
         p = (xmin <= 0.5f && xmax >= DC_W - 0.5f) ? PROJ_FULL : PROJ_2D;
+    } else if (cur.layer == DRAW_LAYER_3D_43) p = PROJ_2D;
+    if (p != cur_proj) {
+        if (nbatch) gs.flush_proj++;
+        batch_flush();
+        sceGuSetMatrix(GU_PROJECTION, &proj[p]);
+        /* The 2D layer's 4:3 area is the game's whole screen: what it draws
+         * past x 0 or 640 (the title's water wobble) was off a console's
+         * screen, so it is cut at the area's edges, not drawn into the sides.
+         * In 4:3 mode everything is in the area already (begin_frame). */
+        if (aspect_wide) {
+            if (p == PROJ_2D) sceGuScissor(SCR_W / 8, 0, SCR_W * 7 / 8, SCR_H);
+            else sceGuScissor(0, 0, SCR_W, SCR_H);
+        }
+        cur_proj = p;
     }
-    if (p != cur_proj) { if (nbatch) gs.flush_proj++; batch_flush(); sceGuSetMatrix(GU_PROJECTION, &proj[p]); cur_proj = p; }
 }
 
 static inline uint32_t sat_add(uint32_t c, uint32_t o) {
@@ -864,7 +931,7 @@ static void strip_emit(const draw_vertex *v, int n) {
         conv(&batch[nbatch++], &v[0]);
     }
     for (int i = 0; i < n; i++) conv(&batch[nbatch++], &v[i]);
-    if (cur.layer == DRAW_LAYER_3D)
+    if (cur.layer != DRAW_LAYER_2D)
         for (int i = 0; i < n; i++) {
             float z = v[i].w > 1e-6f ? 1.0f / v[i].w : 1e6f;
             if (z < gs.zmin_frame) gs.zmin_frame = z;

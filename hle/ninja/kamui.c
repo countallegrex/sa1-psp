@@ -545,6 +545,9 @@ void sdk_8c63fe48(sh4_ctx *c) {         /* njSetFogTable(table) -> kmSetFogTable
 }
 
 /* ---- the parser: TA parameters in guest RAM -> backend ------------------- */
+/* Game mode 11 (the ADVERTISE overlay: title, main menu, character select)
+ * frames its 3D for a 4:3 screen: drawn in the 4:3 area (draw.h). */
+static int menu_mode;
 typedef struct strip_rec { uint32_t off, count; float depth; } strip_rec;   /* translucent sort */
 static draw_vertex *verts; static uint32_t nverts, verts_cap;
 static strip_rec *strips; static uint32_t nstrips, strips_cap;
@@ -769,7 +772,7 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
             } else { pc.face = 0xFFFFFFFFu; pc.face_off = 0; }
             if (pc.list == want_list) {
                 if (pc.modvol) stat_modvols++;
-                else { state_from_header(&pc.state, pcw, isp, tsp, tcw, pc.list); pc.state.layer = (uint8_t)(in_range2d(p) ? DRAW_LAYER_2D : DRAW_LAYER_3D); if (pc.list < 5) { int k = pc.list == 2 ? 1 : pc.list == 4 ? 2 : 0; stat_polys[k]++; frame_polys[k]++; } }
+                else { state_from_header(&pc.state, pcw, isp, tsp, tcw, pc.list); pc.state.layer = (uint8_t)(in_range2d(p) ? DRAW_LAYER_2D : menu_mode ? DRAW_LAYER_3D_43 : DRAW_LAYER_3D); if (pc.list < 5) { int k = pc.list == 2 ? 1 : pc.list == 4 ? 2 : 0; stat_polys[k]++; frame_polys[k]++; } }
             }
             pc.strip_start = nverts;
             p += hsize;
@@ -782,6 +785,7 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
 }
 
 static void render_lists(void) {
+    menu_mode = hle_rd16(0x8C760970u) == 11;
     uint32_t ends[3];
     for (int i = 0; i < 3; i++) {
         uint32_t base = bufs[i].base & 0x1FFFFFFFu;
