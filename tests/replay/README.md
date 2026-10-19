@@ -19,7 +19,8 @@ that has one.
 | Tape | Route | Frames |
 |---|---|---|
 | `title_menu` | title, Start, new Sonic story, file select (no VMU), Station Square loads and runs | 3000 |
-| `sonic_ec1` | *to be recorded by the maintainer*: title, Sonic, Station Square, Chaos 0 win, Emerald Coast act 1 complete | |
+| `sonic_to_ec1_start` | The maintainer's third run: title, Sonic, Station Square at night, Chaos 0 arrival and fight (won), Station Square by day, Emerald Coast start (stopped before the act's end) | 18402 |
+| `sonic_ec1` | *reserved for the full route*: title, Sonic, Station Square, Chaos 0 win, Emerald Coast act 1 complete | |
 
 ## Recording a tape
 
