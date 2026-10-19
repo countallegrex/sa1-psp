@@ -111,6 +111,9 @@ static uint32_t decode_raw(const uint8_t *p, uint32_t n, uint32_t w, uint32_t h,
     info.data = p; info.data_len = n < w * h * 2 ? n : w * h * 2;
     return decode_info(&info, out_w, out_h, out_fmt, out_bytes);
 }
+/* Load-time split (njLoadTexturePvmMemory's log line): the PowerVR decode
+ * and the backend's texture creation (on the PSP: mip levels and swizzle). */
+static uint64_t decode_us, create_us;
 static uint32_t decode_info(const pvr_info *pinfo, int *out_w, int *out_h, int *out_fmt, uint32_t *out_bytes) {
     const pvr_info info = *pinfo;
     uint32_t w = info.w, h = info.h;
@@ -121,12 +124,15 @@ static uint32_t decode_info(const pvr_info *pinfo, int *out_w, int *out_h, int *
     if (tex_log < 0) tex_log = getenv("SA1_TEX_LOG") != NULL;       /* debug aid: every decode */
     if (tex_log) sa1_log("texture: decode %s %ux%u pixel %d data 0x%x size %u", decode_name, w, h, pixfmt, datafmt, info.data_len + 8);
     int fmt = DRAW_FMT_5650;
+    uint64_t t0 = sa1_plat_time_us();
     if (pvr_decode(&info, palette, img, &fmt) != PVR_OK) {
         sa1_log("texture: data format 0x%x not supported (pixel format %d, %ux%u)", datafmt, pixfmt, w, h);
         free(img);
         return 0;
     }
+    uint64_t t1 = sa1_plat_time_us();
     uint32_t handle = draw_texture_create((int)w, (int)h, fmt, img, 0, NULL);
+    decode_us += t1 - t0; create_us += sa1_plat_time_us() - t1;
     decode_index++; decode_datafmt = datafmt;
     /* classify the alpha channel for the translucency audit (SA1_KAMUI_DUMP) */
     decode_alpha = TEX_ALPHA_NONE; decode_amin = 255;
@@ -377,6 +383,7 @@ void sdk_8c608c82(sh4_ctx *c) {         /* njLoadTexture(texlist) */
  * has them, else by position; nbTexture is set to the archive's count. */
 void sdk_8c608134(sh4_ctx *c) {
     HLE_ENTER(0x8c608134u, "njLoadTexturePvmMemory");
+    uint64_t t_start = sa1_plat_time_us(), dec0 = decode_us, cre0 = create_us;
     uint32_t data = ARG0, tl = ARG1;
     if (!data || !tl || !hle_in_ram(data)) { hle_wr32(G_TEX_ERR, 4); RET(-1); return; }
     const uint8_t *p = hle_ptr(data);
@@ -428,7 +435,9 @@ void sdk_8c608134(sh4_ctx *c) {
         if (e < 0) fail = 1;
         off = chunk_end;
     }
-    sa1_log("njLoadTexturePvm(0x%08x -> 0x%08x names 0x%08x): %u textures (flags 0x%x, first gbix %u)%s, %d live, %u bytes", data, tl, names, count, flags, count ? ents[0].gbix : 0, fail ? " (some failed)" : "", ntex, total_bytes);
+    sa1_log("njLoadTexturePvm(0x%08x -> 0x%08x names 0x%08x): %u textures (flags 0x%x, first gbix %u)%s, %d live, %u bytes; "
+            "%u ms (decode %u, create %u)", data, tl, names, count, flags, count ? ents[0].gbix : 0, fail ? " (some failed)" : "", ntex, total_bytes,
+            (unsigned)((sa1_plat_time_us() - t_start) / 1000u), (unsigned)((decode_us - dec0) / 1000u), (unsigned)((create_us - cre0) / 1000u));
     const char *save_dir = getenv("SA1_PVM_SAVE_DIR");    /* tools/pvm_ram_check.py: the archive as found in guest RAM */
     if (save_dir && off <= avail) {
         static unsigned seq; char path[512], fname[64]; FILE *o;

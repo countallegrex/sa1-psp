@@ -10,6 +10,13 @@
  * status that is already "done"), so nothing overlaps yet; the async call
  * is where a read could later run behind the frame (README section 8, M5).
  *
+ * The pack: SONICADV/ is 2,068 files in one FAT directory, and each open
+ * scans its long-name entries (tens of milliseconds on the console; about
+ * 40 opens when Station Square loads).  When data/SONICADV.PAK is there
+ * (tools/convert_assets.py --pack), every SONICADV/ path is served from it
+ * through one descriptor: its index (name, offset, size, sorted by name) is
+ * read once at the first file request.  Without it, the loose files.
+ *
  * Part of sa1-psp (MIT). */
 #include "platform_psp.h"
 
@@ -20,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 static char data_root[256] = "ms0:/PSP/GAME/SA1PSP/data";
 
@@ -32,6 +40,76 @@ static void full_path(char *out, unsigned n, const char *rel) {
     for (char *p = out; *p; p++) if (*p == '\\') *p = '/';
 }
 
+static struct { uint64_t open_us, read_us, read_bytes; uint32_t opens, reads; } io;
+
+/* ---- the pack (tools/convert_assets.py writes it) ---------------------------
+ * "SA1PAK" 0 1, u32 count, u32 index bytes, then count entries of
+ * { char name[32]; u32 offset; u32 size; } sorted by name (upper case, the
+ * name inside SONICADV/), then the files, each at a 2048-byte boundary. */
+#define PAK_DIR "SONICADV/"
+typedef struct { char name[32]; uint32_t off, size; } pak_ent;
+static pak_ent *pak;
+static uint32_t npak;
+static SceUID pak_fd = -1;
+static int pak_tried;
+
+static void pak_open(void) {
+    pak_tried = 1;
+    char full[300];
+    full_path(full, sizeof full, "SONICADV.PAK");
+    SceUID fd = sceIoOpen(full, PSP_O_RDONLY, 0);
+    if (fd < 0) return;
+    uint8_t hdr[16];
+    uint32_t count = 0, bytes = 0;
+    if (sceIoRead(fd, hdr, 16) == 16 && memcmp(hdr, "SA1PAK\0\1", 8) == 0) {
+        memcpy(&count, hdr + 8, 4); memcpy(&bytes, hdr + 12, 4);
+    }
+    if (count && count < 65536 && bytes == count * sizeof(pak_ent) && (pak = malloc(bytes)) != NULL &&
+        sceIoRead(fd, pak, bytes) == (int)bytes) {
+        npak = count; pak_fd = fd;
+        sa1_log("io: %s: %u files", full, npak);
+        return;
+    }
+    sa1_log("io: %s is not a pack this build reads; using the loose files", full);
+    free(pak); pak = NULL;
+    sceIoClose(fd);
+}
+
+/* The pack entry of a data-root path, or NULL (no pack, outside SONICADV/,
+ * not in it: a file the pack lacks is not looked for loose). */
+static const pak_ent *pak_find(const char *rel) {
+    if (!pak_tried) pak_open();
+    if (!pak || strncasecmp(rel, PAK_DIR, sizeof PAK_DIR - 1) != 0) return NULL;
+    char name[33];                 /* upper case, as the index (sorted by byte value) */
+    snprintf(name, sizeof name, "%s", rel + sizeof PAK_DIR - 1);
+    for (char *q = name; *q; q++) if (*q >= 'a' && *q <= 'z') *q = (char)(*q - 'a' + 'A');
+    uint32_t lo = 0, hi = npak;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        int c = strncmp(name, pak[mid].name, sizeof pak[mid].name);
+        if (c == 0) return &pak[mid];
+        if (c < 0) hi = mid; else lo = mid + 1;
+    }
+    return NULL;
+}
+static int pak_covers(const char *rel) { if (!pak_tried) pak_open(); return pak && strncasecmp(rel, PAK_DIR, sizeof PAK_DIR - 1) == 0; }
+
+/* n bytes at pos of fd, through the async read (see the top). */
+static int read_at(SceUID fd, uint32_t pos, void *dst, uint32_t n) {
+    uint64_t t0 = sa1_plat_time_us();
+    if (sceIoLseek(fd, (SceOff)pos, PSP_SEEK_SET) < 0) return -1;
+    uint32_t done = 0;
+    while (done < n) {
+        if (sceIoReadAsync(fd, (uint8_t *)dst + done, n - done) < 0) return done ? (int)done : -1;
+        SceInt64 got = 0;
+        if (sceIoWaitAsync(fd, &got) < 0 || got < 0) return done ? (int)done : -1;
+        if (got == 0) break;
+        done += (uint32_t)got;
+    }
+    io.read_us += sa1_plat_time_us() - t0; io.reads++; io.read_bytes += done;
+    return (int)done;
+}
+
 /* ---- open-file cache ------------------------------------------------------- */
 #define FD_CACHE 6
 static struct { char path[160]; SceUID fd; uint32_t size, used; } fds[FD_CACHE];
@@ -39,6 +117,8 @@ static uint32_t fd_tick;
 
 void plat_files_close_all(void) {
     for (int i = 0; i < FD_CACHE; i++) if (fds[i].path[0]) { sceIoClose(fds[i].fd); fds[i].path[0] = 0; }
+    if (pak_fd >= 0) { sceIoClose(pak_fd); pak_fd = -1; }
+    free(pak); pak = NULL; npak = 0; pak_tried = 0;
 }
 
 static int fd_get(const char *rel, uint32_t *size) {
@@ -46,10 +126,14 @@ static int fd_get(const char *rel, uint32_t *size) {
         if (fds[i].path[0] && strcmp(fds[i].path, rel) == 0) { fds[i].used = ++fd_tick; if (size) *size = fds[i].size; return i; }
     char full[300];
     full_path(full, sizeof full, rel);
+    uint64_t t0 = sa1_plat_time_us();
     SceUID fd = sceIoOpen(full, PSP_O_RDONLY, 0);
     if (fd < 0) return -1;
     SceOff end = sceIoLseek(fd, 0, PSP_SEEK_END);
     if (end < 0) { sceIoClose(fd); return -1; }
+    uint64_t dt = sa1_plat_time_us() - t0;
+    io.open_us += dt; io.opens++;
+    if (dt >= 20000) sa1_log("io: open %s took %u ms", rel, (unsigned)(dt / 1000u));
     int victim = 0;
     for (int i = 0; i < FD_CACHE; i++) {
         if (!fds[i].path[0]) { victim = i; break; }
@@ -63,25 +147,46 @@ static int fd_get(const char *rel, uint32_t *size) {
 }
 
 int sa1_plat_file_size(const char *path, uint32_t *size) {
+    if (pak_covers(path)) {
+        const pak_ent *e = pak_find(path);
+        if (!e) return -1;
+        if (size) *size = e->size;
+        return 0;
+    }
     return fd_get(path, size) < 0 ? -1 : 0;
 }
 
 int sa1_plat_file_read(const char *path, uint32_t off, void *dst, uint32_t n) {
+    if (pak_covers(path)) {
+        const pak_ent *e = pak_find(path);
+        if (!e || off > e->size) return -1;
+        if (n > e->size - off) n = e->size - off;
+        return read_at(pak_fd, e->off + off, dst, n);
+    }
     int i = fd_get(path, NULL);
     if (i < 0) return -1;
-    if (sceIoLseek32(fds[i].fd, (int)off, PSP_SEEK_SET) < 0) return -1;
-    uint32_t done = 0;
-    while (done < n) {
-        if (sceIoReadAsync(fds[i].fd, (uint8_t *)dst + done, n - done) < 0) return done ? (int)done : -1;
-        SceInt64 got = 0;
-        if (sceIoWaitAsync(fds[i].fd, &got) < 0 || got < 0) return done ? (int)done : -1;
-        if (got == 0) break;
-        done += (uint32_t)got;
-    }
-    return (int)done;
+    return read_at(fds[i].fd, off, dst, n);
+}
+
+void plat_io_report(void) {
+    if (!io.opens && !io.reads) return;
+    sa1_log("io: %u opens %.1f ms (%.1f ms each), %u reads %.1f ms, %u KB (%.0f KB/s)", io.opens, io.open_us / 1000.0,
+            io.opens ? io.open_us / 1000.0 / io.opens : 0.0, io.reads, io.read_us / 1000.0, (unsigned)(io.read_bytes / 1024u),
+            io.read_us ? io.read_bytes / 1024.0 / (io.read_us / 1e6) : 0.0);
+    memset(&io, 0, sizeof io);
 }
 
 int sa1_plat_dir_list(const char *dir, void (*cb)(const char *name, uint32_t size, void *arg), void *arg) {
+    char sub[300];
+    snprintf(sub, sizeof sub, "%s/", dir);
+    if (pak_covers(sub) && strlen(sub) == sizeof PAK_DIR - 1) {
+        for (uint32_t i = 0; i < npak; i++) {
+            char name[33];
+            memcpy(name, pak[i].name, 32); name[32] = 0;
+            cb(name, pak[i].size, arg);
+        }
+        return 0;
+    }
     char full[300];
     full_path(full, sizeof full, dir);
     SceUID d = sceIoDopen(full);

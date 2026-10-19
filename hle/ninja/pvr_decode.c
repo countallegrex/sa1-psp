@@ -43,18 +43,26 @@ static uint16_t to_psp(uint16_t v, int pixfmt) {
 }
 static int out_fmt_of(int pixfmt) { return pixfmt == 0 ? PVR_OUT_5551 : pixfmt == 2 ? PVR_OUT_4444 : PVR_OUT_5650; }
 
-/* Morton order inside a square: index = interleave(y bits, x bits), y in the low bit. */
-static uint32_t twiddle(uint32_t x, uint32_t y) {
-    uint32_t r = 0;
-    for (int b = 0; b < 10; b++) r |= ((y >> b) & 1) << (2 * b) | ((x >> b) & 1) << (2 * b + 1);
-    return r;
+/* Morton order inside a square: index = interleave(y bits, x bits), y in the
+ * low bit.  spread[v] puts v's ten bits on the even positions (a table: the
+ * bit loop per texel was much of the load time on the PSP). */
+static uint32_t spread[1024];
+static void spread_init(void) {
+    if (spread[1]) return;
+    for (uint32_t v = 0; v < 1024; v++) {
+        uint32_t r = 0;
+        for (int b = 0; b < 10; b++) r |= ((v >> b) & 1) << (2 * b);
+        spread[v] = r;
+    }
 }
-/* Rectangles are twiddled in min(w,h) squares along the long side. */
-static uint32_t twiddled_index(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+static inline uint32_t twiddle(uint32_t x, uint32_t y) { return spread[y & 1023] | spread[x & 1023] << 1; }
+/* Rectangles are twiddled in min(w,h) squares along the long side (sizes
+ * are powers of two). */
+static inline uint32_t twiddled_index(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
     uint32_t s = w < h ? w : h;
-    uint32_t bx = x / s, by = y / s;
-    uint32_t block = w >= h ? bx : by;
-    return block * s * s + twiddle(x % s, y % s);
+    int sh = __builtin_ctz(s);
+    uint32_t block = (w >= h ? x : y) >> sh;
+    return (block << (2 * sh)) + twiddle(x & (s - 1), y & (s - 1));
 }
 
 static int log2u(uint32_t v) { int n = 0; while ((1u << n) < v && n < 12) n++; return n; }
@@ -122,6 +130,7 @@ int pvr_decode(const pvr_info *info, const uint32_t *palette, uint16_t *img, int
     uint32_t dn = info->data_len, w = info->w, h = info->h;
     int pixfmt = info->pixfmt, datafmt = info->datafmt;
     int fmt = out_fmt_of(pixfmt);
+    spread_init();
     memset(img, 0, (size_t)w * h * 2);
     switch (datafmt) {
     case 1: case 2: case 0xD: {                        /* twiddled (+mips) */

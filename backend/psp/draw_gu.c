@@ -76,7 +76,7 @@ static int cull_flip;                         /* --cull-flip (main_psp.c): the o
 static struct { uint32_t list_high, dropped, offscreen, mirrors, mirror_fail, downscaled, frames;
                 uint32_t flush_state, flush_proj, flush_offset, last_strips, last_draws, last_states;
                 float zmin_frame, zmin_win, zmin_last; uint32_t znear_verts[4];   /* nearest 3D z; vertices with z < 2, 4, 8, 16 */
-                uint64_t gpu_wait_us, swap_wait_us, frame_us_sum, frame_us_max, last_end; } gs;
+                uint64_t gpu_wait_us, swap_wait_us, replay_us, frame_us_sum, frame_us_max, last_end; } gs;
 
 typedef struct { float u, v; uint32_t color; float x, y, z; } gu_vtx;
 #define VTX_FMT (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
@@ -233,12 +233,44 @@ static uint32_t pack(int fmt, const unsigned c[4]) {
     }
 }
 
+/* The 2x2 box of the 16-bit formats on whole texels: the channels are
+ * split into two masks with a free bit gap above each field, four texels
+ * summed in 32 bits, rounded and shifted back.  unpack/pack per texel cost
+ * some twenty integer divides (~36 cycles each on the Allegrex): the
+ * Station Square load spent most of its texture time here.  5551's alpha
+ * is the sum's top bit: set when two or more of the four are, as the
+ * 8-bit average (>= 128) had it. */
+static void halve16(uint16_t *dst, const uint16_t *src, int w, int nw, int nh, int fmt) {
+    uint32_t m0, m1, r0, r1;
+    switch (fmt) {
+    case DRAW_FMT_5650: m0 = 0xF81Fu; m1 = 0x07E0u; r0 = 0x1002u; r1 = 0x0040u; break;
+    case DRAW_FMT_5551: m0 = 0x7C1Fu; m1 = 0x03E0u; r0 = 0x0802u; r1 = 0x0040u; break;
+    default:            m0 = 0x0F0Fu; m1 = 0xF0F0u; r0 = 0x0202u; r1 = 0x2020u; break;   /* 4444 */
+    }
+    for (int y = 0; y < nh; y++) {
+        const uint16_t *a = src + (size_t)(2 * y) * (size_t)w, *b = a + w;
+        uint16_t *d = dst + (size_t)y * (size_t)nw;
+        for (int x = 0; x < nw; x++, a += 2, b += 2) {
+            uint32_t p0 = a[0], p1 = a[1], p2 = b[0], p3 = b[1];
+            uint32_t s0 = (p0 & m0) + (p1 & m0) + (p2 & m0) + (p3 & m0);
+            uint32_t s1 = (p0 & m1) + (p1 & m1) + (p2 & m1) + (p3 & m1);
+            uint32_t v = (((s0 + r0) >> 2) & m0) | (((s1 + r1) >> 2) & m1);
+            if (fmt == DRAW_FMT_5551 && ((p0 >> 15) + (p1 >> 15) + (p2 >> 15) + (p3 >> 15)) >= 2) v |= 0x8000u;
+            d[x] = (uint16_t)v;
+        }
+    }
+}
+
 /* Half size: a 2x2 box for direct colour, the top-left texel for indices. */
 static uint8_t *halve(const uint8_t *src, int w, int h, int fmt) {
     int bits = fmt_bits(fmt), nw = w > 1 ? w / 2 : 1, nh = h > 1 ? h / 2 : 1;
     uint32_t srb = row_bytes(w, bits), drb = row_bytes(nw, bits);
     uint8_t *dst = calloc(1, (size_t)drb * nh + 4);
     if (!dst) return NULL;
+    if (bits == 16 && w > 1 && h > 1 && !(gu_debug & 16)) {
+        halve16((uint16_t *)dst, (const uint16_t *)src, w, nw, nh, fmt);
+        return dst;
+    }
     int sx = w > 1 ? 2 : 1, sy = h > 1 ? 2 : 1;
     for (int y = 0; y < nh; y++)
         for (int x = 0; x < nw; x++) {
@@ -617,7 +649,9 @@ static void write_shot(void) {
 
 void draw_end_frame(void) {
     if (headless || !list_open) return;
+    uint64_t t_replay = sa1_plat_time_us();
     replay();
+    gs.replay_us += sa1_plat_time_us() - t_replay;
     uint32_t used = (uint32_t)sceGuCheckList();
     if (used > gs.list_high) gs.list_high = used;
     sceGuFinish();
@@ -648,9 +682,10 @@ void draw_end_frame(void) {
 
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
 void draw_gu_report(void) {
-    sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB; "
+    sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, list replay %.2f ms/frame, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB; "
             "%u strips dropped (list full), %u clipped to the GE's guard band",
             gs.frames, gs.frames ? gs.frame_us_sum / 1000.0 / gs.frames : 0.0, gs.frame_us_max / 1000.0,
+            gs.frames ? gs.replay_us / 1000.0 / gs.frames : 0.0,
             gs.frames ? gs.gpu_wait_us / 1000.0 / gs.frames : 0.0, gs.frames ? gs.swap_wait_us / 1000.0 / gs.frames : 0.0,
             gs.list_high / 1024u, gs.dropped, gs.offscreen);
     sa1_log("draw: last frame %u strips -> %u GE draws, %u state changes; batch breaks by state %u, projection %u; "
@@ -660,7 +695,7 @@ void draw_gu_report(void) {
             depth_split, gs.zmin_win < 1e29f ? gs.zmin_win : 0.0f, gs.znear_verts[0], gs.znear_verts[1], gs.znear_verts[2], gs.znear_verts[3]);
     gs.zmin_win = 1e30f; memset(gs.znear_verts, 0, sizeof gs.znear_verts);
     gs.flush_state = gs.flush_proj = gs.flush_offset = 0;
-    gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = gs.swap_wait_us = 0; gs.dropped = gs.offscreen = 0;
+    gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = gs.swap_wait_us = gs.replay_us = 0; gs.dropped = gs.offscreen = 0;
 }
 
 /* ---- state ---------------------------------------------------------------------- */

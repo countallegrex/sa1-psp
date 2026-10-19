@@ -168,8 +168,9 @@ mode 11 at 6.7 s including the tape's 2.4 s hash of `1ST_READ.BIN`.
 
 - Guest RAM 20 MB (`SA1_COMPACT_RAM`) instead of the 34 MB window; the
   out-of-window register accesses land in the null page.
-- Stacks 256 KB / 32 KB instead of 1 MB, painted instead of guarded; no
-  save states on the PSP (`--save`/`--load` are desktop options).
+- Stacks 256 KB / 32 KB instead of 1 MB, painted instead of guarded.
+  Save states (`--save`/`--load`) came to the PSP later, streamed and tied
+  to the build (section 8.1).
 - Rendering: a constant depth offset (the GE has no slope term); mirrored
   repeat through mirrored texture copies (50 in Station Square); textures
   over 512 lose their top level (none on the route); mip levels built on
@@ -190,7 +191,8 @@ mode 11 at 6.7 s including the tape's 2.4 s hash of `1ST_READ.BIN`.
   flushes a hang; hardware faults show in PPSSPP's log or psplink, and
   `tools/psp_addr2line.sh` names the addresses from the unstripped
   `build-psp/sa1psp/sa1psp.elf`.
-- Desktop-only debug options not carried: `--poke`, `--dump`, `--watch`,
+- Desktop-only debug options not carried (`--poke` came later with
+  `--stage`, section 8.1): `--dump`, `--watch`,
   `--goto`, `--texdump`, `--trace-funcs`, `--hwwatch`.
 
 ## 7. Stubbed
@@ -241,12 +243,91 @@ frames in Station Square with a vertex past the GE's 4096-pixel window
 (~130–380 a frame). The maintainer did not report missing ground or walls; a
 side-by-side with PPSSPP at the same frame is open (§9).
 
-PSPLink (pspdev/psplinkusb v3.2.1) and `tools/psp_run.py` (cb8a67f) are
-set up for the next milestone: the EBOOT then runs from `host0:` over USB
-with the data still on the card, its log streams to the PC, and an
-exception leaves the console on with PSPLink's register dump
-(`--no-crash-screen` keeps `sa1exc.prx` out of PSPLink's way). Not yet run
-on the console.
+### 8.1 The console over USB: PSPLink
+
+PSPLink (pspdev/psplinkusb v3.2.1, built in `tools-psplink/` next to the
+repository; the PSP side in `ms0:/PSP/GAME/PSPLINK`, WinUSB bound to "PSP
+Type B" 054C:01C9 with Zadig) and `tools/psp_run.py` run the game from the
+PC without touching the card: usbhostfs_pc serves `build-psp/sa1psp/` as
+`host0:`, the script stages the game and its `args.txt` in
+`host0:/psplink-run/`, resets PSPLink, starts the game, streams its log,
+and names an exception's EPC and RA against the ELF.  The 1 GB of game
+data stays on the card (`--data ms0:/...`); the log, screenshots and save
+states land on the PC.
+
+- ARK-4 refuses `ldstart` of the EBOOT's static ELF (0x80020148), so the
+  build links the game a second time as a relocatable PRX
+  (`sa1psp_prx` target, `sa1psp.prx`, symbols in `sa1psp_prx.elf`; the
+  game logs its load address, `image: main at`, and the script subtracts
+  it) (e0815c8).
+- PSPLink's replies carry no tag: a `ver` resent while the PSP was still
+  connecting was answered late and taken for the next command's reply.
+  The script counts replies against commands and resends `ver` every 15 s
+  only (e0815c8).
+- `--no-crash-screen`: `sa1exc.prx` would take the default exception
+  handler from PSPLink and stop the console in exception context, which
+  takes the USB link down; with PSPLink's handler the thread sleeps and
+  the registers come back over USB.
+- PSPLink can wedge: after a long play session ended with HOME, the PSP
+  still enumerated on USB but took no bulk transfers (usbhostfs_pc `-v`:
+  `Bulk Write returned -7`, a timeout, once a second, even with `-t 8000`).
+  Only restarting PSPLink on the console clears it.
+
+A run takes about 30 s including the reset.  Test checkpoints, so a
+console test reaches its scene in seconds (4754f0d):
+
+- `--stage ss|ec|chaos0|LEVEL[:ACT[:MODE]]` sets the level, act and game
+  mode at guest frame 12 and lets the game load the level itself: Station
+  Square by frame 13 with Sonic facing the camera, Emerald Coast act 1 by
+  frame 26.
+- `--save FRAME:FILE` / `--load FILE` (`backend/psp/savestate_psp.c`): the
+  desktop's design with the chunks streamed (20 MB of guest RAM does not
+  fit beside a 30 MB state in the console's free memory); 25-30 MB, about
+  6 s.  A state holds native stacks, so it loads only into the build that
+  saved it (image hash): re-record after each rebuild, for example
+  `psp_run.py --timeout 1400 -- --replay sonic_ec1.tape --no-pace --frames 7000 --save 6990:c6990.state`
+  (the Chaos 0 arrival, about 11 min).
+- `--screenshot FRAME:FILE.ppm` reads the frame from EDRAM after the GE
+  finishes, before the swap.  Desktop references come from the same tape
+  or `--stage` with `build-desktop`'s `--screenshot`.
+
+### 8.2 Console-only renderer faults
+
+None of these shows in PPSSPP, which compares depth exactly, draws past
+the GE's window and does not model the display's scan-out.
+
+| Build | Seen on the console | Cause | Fix |
+|---|---|---|---|
+| 5d3e4f9 (build 3) | ground and walls missing at the edges of the view | the GE rejects a whole primitive with a vertex outside its 4096-pixel window | strips past a guard rectangle are cut into triangles and clipped on the CPU in screen space, attributes through w (694b9e8) |
+| 5d3e4f9 | character select's text gone ("Select a character", the name box, File/Clear) | the UI quads and their text sit at the same 1/w a unit above the far end of the 16-bit buffer; with depth writes the GE's rounding decided the ties | translucent 2D strips do not write depth (sorted far to near, they still test against the 3D) (694b9e8, kept) |
+| 5d3e4f9 | the title's water wobble ran past the 4:3 art | the menus' 3D drawn with the wide projection | `DRAW_LAYER_3D_43`: the game-mode-11 3D in the 4:3 area, both backends (4754f0d) |
+| 694b9e8 | z-fighting everywhere, HUD and text boxes flickering, Sonic's back through his front | that commit also fitted the depth range to the previous frame's nearest vertex (the mapping changed every frame, nearer geometry collapsed to the front) and turned depth writes off for all translucent strips (the characters are mostly translucent) | both reverted (11dea0d) |
+| 11dea0d | the mono-eye: a white band across Sonic's face at z ~70 | one 16-bit range over z 1..inf steps 0.075 units at z = 70; face and eye-white strips a few hundredths apart lost by rounding; a nearer start of the range clamps the floor in front of the camera instead | two passes split at z = 16: the far pass (16 bits over w 0..1/16, 16x finer), a depth clear, the near pass; strips spanning the split are cut there on the CPU (ca5c25f) |
+| ca5c25f | character select: Sonic doubled, an afterimage as he turns | pspsdk swaps with `PSP_DISPLAY_SETBUF_IMMEDIATE` unless told otherwise, so the display changed buffer mid-scan: at 4-14 fps every swap showed one refresh torn between two frames. EDRAM screenshots are taken before the swap and never showed it | `guSwapBuffersBehaviour(PSP_DISPLAY_SETBUF_NEXTFRAME)`; the frame's clears move to the start of the replay, behind a wait for the vblank after the last swap (e4ebe77; console check pending) |
+
+Left open: the eye texture is darker than on the desktop at a distance (the
+GE picks one mip level per primitive, a coarse one for a small far face;
+`--gu-max-mip 1` shows the eye but the floor shimmers; kept as is until
+the maintainer judges it in motion).
+
+### 8.3 The load stall
+
+Leaving character select for Station Square (and Chaos 0 for Station
+Square) holds one frame for 5.7-6.5 s on the console, the faded-out frame
+on screen, which the maintainer saw as a black-out.  The maintainer's PSPLink run of
+ca5c25f, frame 1246: 6.5 s from the level change to the first frame, of
+which about 4.5 s in the 25 `njLoadTexturePvm` calls (`ADVSS03.PRS`, 264
+textures, 1.6 s; `OBJ_SS.PRS`, 177 textures, 0.7 s) and about 55 ms per
+file open even for files of a few hundred bytes (40-odd files: the
+`SETSS`/`CAMSS` sets, `SL_`/`PL_` and the PVMs).  The same load in PPSSPP
+split the texture time into the PowerVR decode (a third) and the
+backend's mip levels and swizzle (two thirds); the box filter unpacked
+and repacked every texel with some twenty integer divides, the decode
+computed each twiddled index with two divisions and a bit loop.  With a
+packed-field box filter and a twiddle table the PPSSPP texture time of
+that load fell from 3.2 s to 0.6 s.  The log now prints each PVM's time
+split (decode, create), and `--stats` the file opens and reads; the
+console numbers are pending (PSPLink was down when this was written).
 
 ## 9. Open items for M5
 

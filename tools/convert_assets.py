@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage 6 of the launcher (launcher/README.md): write the Memory Stick folder.
 
-    convert_assets.py --data DUMP/data --out FOLDER [--eboot EBOOT.PBP]
+    convert_assets.py --data DUMP/data --out FOLDER [--eboot EBOOT.PBP] [--pack]
                       [--args "OPTION ..."] [--tape NAME]... [--dry-run]
 
 FOLDER is the game's folder on the card, e.g. E:/PSP/GAME/SA1PSP or
@@ -9,7 +9,14 @@ PPSSPP's memstick/PSP/GAME/SA1PSP.  It receives
 
   data/1ST_READ.BIN       the game executable (the recompiled code's data
                           and the image hle_init boots from)
-  data/SONICADV/...       the disc's game tree, unchanged
+  data/SONICADV/...       the disc's game tree, unchanged; or with --pack
+  data/SONICADV.PAK       the same files in one file with a sorted index:
+                          SONICADV/ holds 2,068 files in one FAT directory
+                          and every open on the PSP scans its long-name
+                          entries, tens of milliseconds a file; the PSP
+                          build reads the pack when it is there
+                          (backend/psp/platform_psp.c).  A loose SONICADV/
+                          left beside it is no longer read and can go.
   EBOOT.PBP               with --eboot (stage 7's packaging, for now by hand)
   args.txt                with --args: the EBOOT's command line
                           (backend/psp/main_psp.c); --args "" removes it
@@ -32,6 +39,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import struct
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,6 +68,56 @@ def copy_if_changed(src: str, dst: str, dry: bool, stats: dict) -> None:
     shutil.copy2(src, dst)
 
 
+PAK_MAGIC = b"SA1PAK\0\1"
+PAK_NAME = 32          # bytes per name in the index
+PAK_ALIGN = 2048
+
+
+def write_pack(tree: str, dst: str, dry: bool, stats: dict) -> None:
+    """tree's files (no subfolders) as backend/psp/platform_psp.c reads them:
+    magic, count, index bytes, {name[32], offset, size} sorted by the upper-case
+    name's bytes, then each file at a 2048-byte boundary.  Rewritten only
+    when a source file is newer than the pack or the file set changed."""
+    names = sorted(os.listdir(tree), key=lambda n: n.upper().encode("ascii"))
+    if any(os.path.isdir(os.path.join(tree, n)) for n in names):
+        sys.exit(f"convert_assets: {tree} has subfolders; the pack holds one level")
+    for n in names:
+        if len(n.encode("ascii")) > PAK_NAME:
+            sys.exit(f"convert_assets: {n}: name longer than {PAK_NAME} bytes")
+    sizes = [os.path.getsize(os.path.join(tree, n)) for n in names]
+    index_bytes = len(names) * (PAK_NAME + 8)
+    off = -(-(16 + index_bytes) // PAK_ALIGN) * PAK_ALIGN
+    offsets = []
+    for s in sizes:
+        offsets.append(off)
+        off += -(-s // PAK_ALIGN) * PAK_ALIGN
+    newest = max(os.stat(os.path.join(tree, n)).st_mtime for n in names)
+    try:
+        st = os.stat(dst)
+        if st.st_size == off and st.st_mtime >= newest - 2:
+            stats["skipped"] += len(names)
+            return
+    except FileNotFoundError:
+        pass
+    stats["copied"] += len(names)
+    stats["bytes"] += sum(sizes)
+    if dry:
+        print(f"pack {len(names)} files of {tree} -> {dst} ({off / 1e6:.1f} MB)")
+        return
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = dst + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(PAK_MAGIC + struct.pack("<II", len(names), index_bytes))
+        for n, o, s in zip(names, offsets, sizes):
+            f.write(n.upper().encode("ascii").ljust(PAK_NAME, b"\0") + struct.pack("<II", o, s))
+        for n, o in zip(names, offsets):
+            f.write(b"\0" * (o - f.tell()))
+            with open(os.path.join(tree, n), "rb") as src:
+                shutil.copyfileobj(src, f, 1 << 20)
+        f.write(b"\0" * (off - f.tell()))
+    os.replace(tmp, dst)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--data", required=True, help="the dump's data folder (holds 1ST_READ.BIN and SONICADV/)")
@@ -67,6 +125,7 @@ def main() -> int:
     ap.add_argument("--eboot", help="EBOOT.PBP to put in the folder")
     ap.add_argument("--args", help="write args.txt with these options (empty: remove it)")
     ap.add_argument("--tape", action="append", default=[], help="copy tests/replay/NAME.tape and NAME.check")
+    ap.add_argument("--pack", action="store_true", help="SONICADV/ as data/SONICADV.PAK instead of loose files")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
@@ -82,10 +141,15 @@ def main() -> int:
     stats = {"copied": 0, "skipped": 0, "bytes": 0}
     data_out = os.path.join(a.out, "data")
     copy_if_changed(bin_src, os.path.join(data_out, "1ST_READ.BIN"), a.dry_run, stats)
-    for root, _dirs, files in os.walk(tree_src):
-        rel = os.path.relpath(root, a.data)
-        for name in sorted(files):
-            copy_if_changed(os.path.join(root, name), os.path.join(data_out, rel, name), a.dry_run, stats)
+    if a.pack:
+        write_pack(tree_src, os.path.join(data_out, "SONICADV.PAK"), a.dry_run, stats)
+        if os.path.isdir(os.path.join(data_out, "SONICADV")):
+            print(f"convert_assets: {os.path.join(data_out, 'SONICADV')} is no longer read (the pack is); it can be deleted")
+    else:
+        for root, _dirs, files in os.walk(tree_src):
+            rel = os.path.relpath(root, a.data)
+            for name in sorted(files):
+                copy_if_changed(os.path.join(root, name), os.path.join(data_out, rel, name), a.dry_run, stats)
     if a.eboot:
         copy_if_changed(a.eboot, os.path.join(a.out, "EBOOT.PBP"), a.dry_run, stats)
     for name in a.tape:
