@@ -444,13 +444,13 @@ void draw_set_fog(uint32_t color_argb, float z_near, float z_far) {
     if (!headless && list_open) apply_fog();
 }
 
-static int nbatch;
+static int nbatch, nobatch;
 static float tex_su = -1.0f, tex_sv = -1.0f;
 static void batch_flush(void);
 
 void draw_begin_frame(uint32_t clear_argb) {
     stats.draw_calls = stats.triangles = stats.strips = stats.state_changes = 0;
-    cur_valid = 0; cur_proj = -1; bound_tex = 0; nbatch = 0;
+    cur_valid = 0; cur_proj = -1; bound_tex = 0; nbatch = 0; nobatch = 0;
     if (headless) return;
     tex_su = tex_sv = -1.0f;        /* re-sent with the first texture */
     /* the buffer we are about to draw is on screen until the swap's vblank */
@@ -526,9 +526,9 @@ void draw_gu_report(void) {
             "%u strips dropped (list full), %u off the GE's guard band",
             gs.frames, gs.frames ? gs.frame_us_sum / 1000.0 / gs.frames : 0.0, gs.frame_us_max / 1000.0,
             gs.frames ? gs.gpu_wait_us / 1000.0 / gs.frames : 0.0, gs.list_high / 1024u, gs.dropped, gs.offscreen);
-    sa1_log("draw: last frame %u strips -> %u GE draws, %u state changes; batch breaks by state %u, projection %u, offset colour %u; "
+    sa1_log("draw: last frame %u strips -> %u GE draws, %u state changes; batch breaks by state %u, projection %u; "
             "%u mirrors (%u too big), %u textures downscaled", gs.last_strips, gs.last_draws, gs.last_states,
-            gs.flush_state, gs.flush_proj, gs.flush_offset, gs.mirrors, gs.mirror_fail, gs.downscaled);
+            gs.flush_state, gs.flush_proj, gs.mirrors, gs.mirror_fail, gs.downscaled);
     gs.flush_state = gs.flush_proj = gs.flush_offset = 0;
     gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = 0; gs.dropped = gs.offscreen = 0;
 }
@@ -586,7 +586,9 @@ static void bind_texture(const draw_state *s) {
     }
 }
 
-static void apply_state(const draw_state *s) {
+/* Blend, depth compare and write, alpha test and the texture enable: what
+ * the offset-colour pass changes and puts back. */
+static void apply_blend_depth(const draw_state *s) {
     if (s->blend_src == DRAW_BLEND_ONE && s->blend_dst == DRAW_BLEND_ZERO) sceGuDisable(GU_BLEND);
     else {
         int sf, df; unsigned sfix, dfix;
@@ -597,6 +599,14 @@ static void apply_state(const draw_state *s) {
     }
     sceGuDepthFunc(depth_func(s->depth_func));
     sceGuDepthMask(s->depth_write ? GU_FALSE : GU_TRUE);     /* GU_TRUE masks (disables) the write */
+    if (s->alpha_test) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GEQUAL, 0x80, 0xFF); }
+    else sceGuDisable(GU_ALPHA_TEST);
+    if (s->texture && s->texture < TEX_MAX && texs[s->texture].mem) sceGuEnable(GU_TEXTURE_2D);
+    else sceGuDisable(GU_TEXTURE_2D);
+}
+
+static void apply_state(const draw_state *s) {
+    apply_blend_depth(s);
     if (s->cull == DRAW_CULL_NEGATIVE || s->cull == DRAW_CULL_POSITIVE) {
         /* draw_gl.c: POSITIVE = GL front face CW in GL's y-up window space,
          * which is counter-clockwise in the GE's y-down screen space. */
@@ -604,10 +614,7 @@ static void apply_state(const draw_state *s) {
         sceGuEnable(GU_CULL_FACE);
         sceGuFrontFace(pos ? GU_CCW : GU_CW);
     } else sceGuDisable(GU_CULL_FACE);
-    if (s->alpha_test) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GEQUAL, 0x80, 0xFF); }
-    else sceGuDisable(GU_ALPHA_TEST);
-    if (s->texture && s->texture < TEX_MAX && texs[s->texture].mem) { sceGuEnable(GU_TEXTURE_2D); bind_texture(s); }
-    else sceGuDisable(GU_TEXTURE_2D);
+    if (s->texture && s->texture < TEX_MAX && texs[s->texture].mem) bind_texture(s);
     sceGuDepthOffset(s->translucent ? 4 : 0);
     if (s->fog == DRAW_FOG_TABLE || s->fog == DRAW_FOG_TABLE2) sceGuEnable(GU_FOG); else sceGuDisable(GU_FOG);
     sceGuShadeModel(s->gouraud ? GU_SMOOTH : GU_FLAT);
@@ -656,13 +663,36 @@ static inline void conv(gu_vtx *o, const draw_vertex *v) {
     o->color = a << 24 | (c & 0xFF00u) | ((c >> 16) & 255u) | ((c & 255u) << 16);
 }
 
+/* The offset (specular) colour of textured strips: a second, additive,
+ * untextured draw at equal depth (draw_gl.c's emit_offset).  Strips of one
+ * state run collect their offset vertices in a batch of their own, drawn
+ * after the run's main batch; within a run that orders highlights after
+ * all the run's surfaces instead of after each, which the depth test makes
+ * the same picture for opaque runs. */
+typedef struct { uint32_t color; float x, y, z; } gu_ovtx;
+#define OVTX_FMT (GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
+static gu_ovtx obatch[BATCH_MAX];
+
 static void batch_flush(void) {
-    if (!nbatch) return;
-    gu_vtx *p = sceGuGetMemory((int)(nbatch * sizeof *p));
-    memcpy(p, batch, nbatch * sizeof *p);
-    sceGuDrawArray(GU_TRIANGLE_STRIP, VTX_FMT, nbatch, 0, p);
-    stats.draw_calls++;
-    nbatch = 0;
+    if (nbatch) {
+        gu_vtx *p = sceGuGetMemory((int)(nbatch * sizeof *p));
+        memcpy(p, batch, nbatch * sizeof *p);
+        sceGuDrawArray(GU_TRIANGLE_STRIP, VTX_FMT, nbatch, 0, p);
+        stats.draw_calls++;
+        nbatch = 0;
+    }
+    if (nobatch) {
+        gu_ovtx *p = sceGuGetMemory((int)(nobatch * sizeof *p));
+        memcpy(p, obatch, nobatch * sizeof *p);
+        sceGuDisable(GU_TEXTURE_2D);
+        sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
+        sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
+        sceGuDisable(GU_ALPHA_TEST);
+        sceGuDrawArray(GU_TRIANGLE_STRIP, OVTX_FMT, nobatch, 0, p);
+        stats.draw_calls++;
+        nobatch = 0;
+        apply_blend_depth(&cur);      /* the texture stays bound; only its enable changed */
+    }
 }
 
 /* The GE drops a primitive with a vertex outside its 4096-pixel window
@@ -683,29 +713,17 @@ static int list_full(void) {
     return 1;
 }
 
-static void offset_pass(const draw_vertex *v, int n) {
-    int any = 0;
-    for (int i = 0; i < n && !any; i++) if (v[i].ocolor & 0x00FFFFFFu) any = 1;
-    if (!any) return;
-    gu_vtx *p = sceGuGetMemory((int)(n * sizeof *p));
-    for (int i = 0; i < n; i++) {
-        uint32_t o = v[i].ocolor;
-        unsigned a = (cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA) ? (v[i].color >> 24) & 255 : 255;
-        unsigned r = ((o >> 16) & 255) * a / 255, g = ((o >> 8) & 255) * a / 255, b = (o & 255) * a / 255;
-        float w = v[i].w > 1e-6f ? v[i].w : 1e-6f, z = 1.0f / w;
-        if (z < 1.0f) z = 1.0f;
-        p[i].u = p[i].v = 0.0f;
-        p[i].x = v[i].x * z; p[i].y = v[i].y * z; p[i].z = -z;
-        p[i].color = 0xFF000000u | b << 16 | g << 8 | r;
-    }
-    sceGuDisable(GU_TEXTURE_2D);
-    sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
-    sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
-    sceGuDisable(GU_ALPHA_TEST);
-    sceGuDrawArray(GU_TRIANGLE_STRIP, VTX_FMT, n, 0, p);
-    stats.draw_calls++;
-    bound_tex = 0;
-    apply_state(&cur);
+/* The offset vertex: the colour scaled by the vertex alpha under
+ * source-alpha blending (the PowerVR adds it before the blend), in full for
+ * an additive strip. */
+static inline void conv_offset(gu_ovtx *o, const draw_vertex *v) {
+    uint32_t c = v->ocolor;
+    unsigned a = (cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA) ? (v->color >> 24) & 255 : 255;
+    unsigned r = ((c >> 16) & 255) * a / 255, g = ((c >> 8) & 255) * a / 255, b = (c & 255) * a / 255;
+    float w = v->w > 1e-6f ? v->w : 1e-6f, z = 1.0f / w;
+    if (z < 1.0f) z = 1.0f;
+    o->x = v->x * z; o->y = v->y * z; o->z = -z;
+    o->color = 0xFF000000u | b << 16 | g << 8 | r;
 }
 
 void draw_strip(const draw_vertex *v, int n) {
@@ -715,21 +733,27 @@ void draw_strip(const draw_vertex *v, int n) {
     select_proj(v, n);
     int has_offset = 0;
     if (cur.texture) for (int i = 0; i < n && !has_offset; i++) if (v[i].ocolor & 0x00FFFFFFu) has_offset = 1;
-    if (has_offset) { if (nbatch) gs.flush_offset++; batch_flush(); }
-    int need = n + (nbatch ? 3 : 0);
-    if (nbatch + need > BATCH_MAX) batch_flush();
-    int start = nbatch;
+    if (nbatch + n + 3 > BATCH_MAX || (has_offset && nobatch + n + 3 > BATCH_MAX)) batch_flush();
     if (nbatch) {                     /* degenerate joint; keep the next strip's winding parity */
         gu_vtx last = batch[nbatch - 1];
+        int odd = nbatch & 1;
         batch[nbatch++] = last;
-        if (start & 1) batch[nbatch++] = last;
+        if (odd) batch[nbatch++] = last;
         conv(&batch[nbatch++], &v[0]);
     }
     int first = nbatch;
     for (int i = 0; i < n; i++) conv(&batch[nbatch++], &v[i]);
     if (offscreen(&batch[first], n, cur_proj)) gs.offscreen++;
-    (void)start;
-    if (has_offset) { batch_flush(); offset_pass(v, n); }
+    if (has_offset) {
+        if (nobatch) {
+            gu_ovtx last = obatch[nobatch - 1];
+            int odd = nobatch & 1;
+            obatch[nobatch++] = last;
+            if (odd) obatch[nobatch++] = last;
+            conv_offset(&obatch[nobatch++], &v[0]);
+        }
+        for (int i = 0; i < n; i++) conv_offset(&obatch[nobatch++], &v[i]);
+    }
 }
 
 void draw_line_strip(const draw_vertex *v, int n) {
