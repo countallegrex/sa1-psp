@@ -8,6 +8,8 @@
 void hle_bios_init(void);     /* hle/bios/syscalls.c */
 void hle_shinobi_init(void);  /* hle/shinobi/sys.c */
 void hle_movie_init(void);    /* hle/overlay/movie.c */
+void hle_settings_load(void); /* hle/settings.c */
+#include "sound/snd_host.h"
 
 void (*hle_frame_hook)(uint32_t frame);
 int hle_strict;
@@ -34,6 +36,9 @@ void hle_init(void) {
     hle_bios_init();
     hle_shinobi_init();
     hle_movie_init();
+    hle_settings_load();
+    if (snd_voice_lang_cli >= -1) snd_voice_lang = snd_voice_lang_cli;
+    snd_host_init();
 }
 
 /* Save states: every module's state, in one fixed order (the inventory in
@@ -53,4 +58,7 @@ void hle_state_all(hle_state_io *io) {
     hle_overlay_state(io);
     kamui_state(io);
     texture_state(io);
+    snd_host_state(io);
+    snd_sd_state(io);
+    snd_adxt_state(io);
 }

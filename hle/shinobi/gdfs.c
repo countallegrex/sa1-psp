@@ -234,13 +234,8 @@ void sdk_8c60175e(sh4_ctx *c) {
     err_func = ARG0; err_arg = ARG1;
 }
 
-/* Byte position / size queries the CRI ADX layer makes about files by name
- * (0x8C65C25C start sector, 0x8C65C27A size in sectors, 0x8C65C2A8 size in
- * bytes).  -1 makes the ADX partition loader give up cleanly (no audio
- * this milestone). */
-void sdk_8c65c25c(sh4_ctx *c) { HLE_ENTER(0x8c65c25cu, "ADXF file start (off)"); RET(-1); }
-void sdk_8c65c27a(sh4_ctx *c) { HLE_ENTER(0x8c65c27au, "ADXF file sectors (off)"); RET(-1); }
-void sdk_8c65c2a8(sh4_ctx *c) { HLE_ENTER(0x8c65c2a8u, "ADXF file bytes (off)"); RET(-1); }
+/* The CRI ADX layer's file queries (0x8C65C25C start sector, 0x8C65C27A
+ * sectors, 0x8C65C2A8 bytes) are in hle/sound/adxt.c. */
 
 void shinobi_gdfs_state(hle_state_io *io) {
     hle_state_blob(io, "gdfs.files", files, sizeof files);

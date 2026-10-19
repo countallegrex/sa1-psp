@@ -1,0 +1,25 @@
+# watch.txt plus the sound manager's words (M3): for tools/flycast captures
+# and --watch-trace runs that compare voice-line timing with the console.
+# Guest addresses the replay tests watch (US v1.005).  Each was confirmed
+# by watching it change in a strict desktop run (tests/replay/README.md,
+# "Watched addresses").
+#
+# ADDR      SIZE  NAME        ROLE       TOLERANCE
+#   SIZE: 1, 2, 4 unsigned; s1, s2, s4 signed; f float32.
+#   ROLE: milestone = tools/tape_expect.py emits "reached this value by
+#   frame N" rows from its changes (primary); exact = sampled at fixed
+#   frames, within TOLERANCE (secondary); trace = traced, never checked.
+8c760970    2     game_mode   milestone
+8c7493ba    2     level       milestone
+8c7493bc    2     act         milestone
+8c7a64e4    4     game_frame  trace
+8c752be4    s2    rings       exact      0
+8c752be0    s1    lives       exact      0
+8c6bad10    f     player_x    exact      4.0
+8c6bad14    f     player_y    exact      4.0
+8c6bad18    f     player_z    exact      4.0
+# Sound (M3, hle/sound/adxt.c): the game's ADX manager words.  Traced only.
+8c5fbaa0    s4    voice_req   trace
+8c5fbaa4    4     voice_stat  trace
+8c5fbaa8    s4    music_req   trace
+8c5fbaac    4     music_stat  trace

@@ -8,6 +8,14 @@
  *                            screenshot there and logs the textures bound in that frame)
  *          [--aspect wide|4:3] [--no-pad] [--goto FRAME:X:Z[:RADIUS]]...
  *          [--save FRAME:FILE]... [--load FILE] [--quick FILE]
+ *          [--wav FILE] [--voice en|ja|game] [--no-audio]
+ *
+ * Sound (M3, hle/sound/): the audio core renders 735 samples per guest
+ * frame whether or not a device is open, so a run behaves the same headless
+ * or windowed; the window opens an SDL audio device unless --no-audio.
+ * --wav records everything rendered (headless runs too); --voice picks the
+ * voice language over sa1psp.ini in the data root (default: the game's
+ * choice, English on this disc).
  *
  * --save writes a save state (guest RAM, the HLE's state, the task
  * coroutines' stacks: docs/savestate.md) at guest frame FRAME, where --dump
@@ -55,6 +63,7 @@
 #include "input_tape.h"
 #include "platform_desktop.h"
 #include "savestate.h"
+#include "../../hle/sound/snd_host.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +84,10 @@ uint32_t hle_task_running(void);      /* hle/game/tasks.c */
 void plat_watchdog_start(uint32_t (*frame)(void), unsigned seconds);
 void plat_hw_watch(uint32_t guest_addr, int len);
 static const char *trace_path;
+static int no_audio;                  /* --no-audio: the audio core runs, nothing is played */
+static const char *wav_path;          /* --wav FILE: everything the core renders, as a WAV */
+extern int audio_sdl_enabled;         /* audio_sdl.c */
+int hle_parse_voice(const char *v);   /* hle/settings.c */
 
 static FILE *log_file;
 #define PRESS_MAX 64
@@ -226,6 +239,7 @@ static void report_and_exit(int code) {
     code = input_tape_finish(code, NULL);
     sa1_log("exit: %u frames, %.3f s", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6);
     kamui_report();
+    snd_host_report();
     stack_report();
     sa1_seam_report(getenv("SA1_REPORT_TOP") ? atoi(getenv("SA1_REPORT_TOP")) : 30);
     draw_shutdown();
@@ -451,6 +465,13 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--trace-funcs") && i + 1 < argc) trace_path = argv[++i];
         else if (!strcmp(argv[i], "--headless")) headless = 1;
         else if (!strcmp(argv[i], "--no-pad")) no_pad = 1;
+        else if (!strcmp(argv[i], "--no-audio")) no_audio = 1;
+        else if (!strcmp(argv[i], "--wav") && i + 1 < argc) wav_path = argv[++i];
+        else if (!strcmp(argv[i], "--voice") && i + 1 < argc) {
+            int v = hle_parse_voice(argv[++i]);
+            if (v < -1) { fprintf(stderr, "--voice: en, ja or game\n"); return 2; }
+            snd_voice_lang_cli = v;
+        }
         else if (!strcmp(argv[i], "--texdump") && i + 1 < argc) { texdump_dir = argv[++i]; texture_set_dump_dir(texdump_dir, 0); }
         else if (!strcmp(argv[i], "--mark") && i + 1 < argc && nmarks < SHOT_MAX) mark_frames[nmarks++] = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--aspect") && i + 1 < argc) { const char *a = argv[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; }
@@ -542,6 +563,9 @@ int main(int argc, char **argv) {
     if (load_path && input_tape_recording()) { fprintf(stderr, "--record cannot start from a loaded state (a tape starts at frame 1)\n"); return 2; }
     if (!frame_limit) frame_limit = input_tape_frames();
     plat_set_data_root(root);
+    if (headless || no_audio) audio_sdl_enabled = 0;
+    if (input_tape_sound_timing() >= 0) snd_guest_timing = input_tape_sound_timing();
+    if (wav_path) snd_host_set_wav(wav_path);
     hle_init();
     if (draw_init(scale, headless) != 0 && !headless) { sa1_log("no window; running headless"); headless = 1; }
     draw_set_aspect(hle_aspect_wide);

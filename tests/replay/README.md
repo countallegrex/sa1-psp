@@ -128,6 +128,7 @@ Every source of host dependence, and what strict mode does about it:
 | Renderer | `hle/ninja/`, `draw_gl.c` | writes only guest-deterministic values (buffer pointers, list state) back to guest RAM | verified: windowed and headless dumps are identical |
 | Guest RAM at boot | `main.c` | `calloc`: zero | the same |
 | Frame pacing (vsync, `SA1_NOVSYNC`) | `draw_gl.c` | wall-clock only | the same: frames are counted, never timed |
+| Sound (M3) | `hle/sound/` | the audio core renders 735 samples per guest frame; what the guest sees of a player (playing, ended, time) is computed from a clock of guest frames and the stream's header, not from the device or the core | the same; and the tape's `sound-timing` line (below) says whether the players take their streams' length (`real`) or report stopped at once (`none`, how the game saw sound before M3) |
 
 Things that still depend on the host and do not affect guest state: the
 log's timestamps, `--seconds`, and the spin watchdog (10 s of host time
@@ -144,6 +145,7 @@ sa1psp-tape 1
 title-sha256 45bc5d3câ€¦          # SHA-256 of 1ST_READ.BIN; replay refuses another title
 epoch 946684800                 # RTC start, Unix seconds
 tool sa1psp input_tape 1
+sound-timing real               # M3 and later; absent = none
 # FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]
 1 0 0 0 0 0 499
 500 8 0 0 0 0 4
@@ -161,6 +163,18 @@ runs first in each), and the pad of frame F is what the game's pad server
 samples during F. Frames no record covers are a neutral pad. `end N` is the
 last frame recorded; a replay stops there unless `--frames` says
 otherwise. `#` starts a comment.
+
+`sound-timing` records what the guest saw of sound playback when the
+tape was made. Before M3 there was no ADX player, so every voice line
+ended the moment it started; with real playback a cutscene waits for its
+line (`docs/formats/sound.md` §2.2), which moves everything after it.
+Replaying a pre-M3 tape with real timing desyncs it (the Chaos 0 fight of
+`sonic_ec1` drifts from tape frame 7200), so a tape without the line
+replays as `none`: the players are still created and still heard (BGM,
+voices, effects all render), but they report "stopped" and no time to the
+game, as before. `--record` writes `real` (or what `--sound-timing` says),
+and `--sound-timing real|none` overrides a tape's line. All the tapes in
+this directory predate M3.
 
 ## Check format (`.check`)
 

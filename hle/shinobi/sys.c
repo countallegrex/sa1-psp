@@ -7,6 +7,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "shinobi.h"
+#include "../sound/snd_host.h"
 #include "../state.h"
 
 static uint32_t frame_count;
@@ -46,6 +47,7 @@ void shinobi_frame(sh4_ctx *c) {
 #ifdef SA1_RAMDUMP
     ram_dump(frame_count);
 #endif
+    snd_host_frame();                  /* 735 samples of sound per guest frame (hle/sound) */
     if (hle_frame_hook) hle_frame_hook(frame_count);
     shinobi_run_vblank(c);
     shinobi_run_vblank_callbacks(c);

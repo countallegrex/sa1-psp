@@ -24,3 +24,6 @@ int input_tape_finish(int code, const char *why);
 void input_tape_loaded(uint32_t frame);
 /* 1 when --record is active (a tape cannot start from a loaded state). */
 int input_tape_recording(void);
+/* The sound timing the run must give the guest: 1 real, 0 none (a tape
+ * recorded before M3), -1 when neither a tape nor --sound-timing says. */
+int input_tape_sound_timing(void);

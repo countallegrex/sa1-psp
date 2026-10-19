@@ -55,3 +55,6 @@ void hle_bios_state(hle_state_io *io);          /* hle/bios/syscalls.c */
 void hle_overlay_state(hle_state_io *io);       /* hle/overlay/overlay_loader.c: installed tables */
 void kamui_state(hle_state_io *io);             /* hle/ninja/kamui.c */
 void texture_state(hle_state_io *io);           /* hle/ninja/texture.c */
+void snd_host_state(hle_state_io *io);          /* hle/sound/snd_host.c: core, sound RAM, stream feeders */
+void snd_sd_state(hle_state_io *io);            /* hle/sound/sd.c */
+void snd_adxt_state(hle_state_io *io);          /* hle/sound/adxt.c */
