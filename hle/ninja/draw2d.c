@@ -9,7 +9,10 @@
  *   Sprites (0x8C63F838): NJS_SPRITE {p[3], sx, sy, ang, texlist, tanim},
  *   NJS_TEXANIM {sx, sy, cx, cy, u1, v1, u2, v2, texid, attr} (16-bit; uv in
  *   1/256), attr: 1 rotate, 2 constant material, 4 flip u, 8 flip v,
- *   0x20 translucent.  Vertex type 7 (textured, intensity 1.0).
+ *   0x10 scale (njDrawSprite3D only: a billboard whose world-unit corners
+ *   scale with the point's distance; without it the sprite is a quad in
+ *   the current matrix's x/y plane, each corner projected on its own), 0x20
+ *   translucent.  Vertex type 7 (textured, intensity 1.0).
  *   njDrawPolygon (0x8C63EC58): NJS_POLYGON_VTX {x, y, z, col}, type 0.
  *   njDrawTexture (0x8C63ED08): NJS_TEXTURE_VTX {x, y, z, u, v, col}, type 3.
  *   njDrawPolygon2D (0x8C63EBC8): NJS_POINT2COL {p, col, tex, num}, attr
@@ -28,6 +31,7 @@
 
 #include <math.h>
 
+int kamui_ptr_trace(void);
 #define FARG(i) (c->fr[4 + (i)])
 #define PCW_VTX 0xE0000000u
 #define PCW_VTX_END 0xF0000000u
@@ -67,29 +71,72 @@ static void draw_sprite(sh4_ctx *c, uint32_t sp, uint32_t n, uint32_t attr, floa
     if (attr & 8) { float t = v1; v1 = v2; v2 = t; }
     float sx = hle_rdf(sp + 12), sy = hle_rdf(sp + 16);
     float px = hle_rdf(sp), py = hle_rdf(sp + 4), z;
-    float scale = 1.0f;
-    if (is3d) {
-        /* place the sprite's point through XMTRX, then project */
-        float p[3] = {px, py, hle_rdf(sp + 8)}, q[3];
-        for (int i = 0; i < 3; i++) q[i] = c->xf[i] * p[0] + c->xf[4 + i] * p[1] + c->xf[8 + i] * p[2] + c->xf[12 + i];
-        float dist = hle_rdf(NJ_G_DIST), depth = q[2];
-        if (depth < hle_rdf(NJ_G_CLIPN)) return;
-        scale = dist / depth;
-        px = hle_rdf(NJ_G_CX) + q[0] * scale;
-        py = hle_rdf(NJ_G_CY) + q[1] * scale * hle_rdf(NJ_G_AY);
-        z = 1.0f / depth;
-    } else z = pri_to_z(pri);
+    /* the corners relative to the sprite's point, in its own units (the SDK
+     * bodies 0x8C63F038 / 0x8C63F2D4): left/top = -c * s, right/bottom = (size - c) * s */
+    float ex0 = -acx * sx, ey0 = -acy * sy, ex1 = (asx - acx) * sx, ey1 = (asy - acy) * sy;
+    float rs = 0.0f, rc = 1.0f;
+    if (attr & 1) { float a = (float)(hle_rd32(sp + 20) & 0xFFFF) * (float)(6.283185307179586 / 65536.0); rs = sinf(a); rc = cosf(a); }
     if (tlist) hle_wr32(NJ_CUR_TEXLIST, tlist);
     uint32_t mat = (attr & 2) ? NJ_G_CONST_MAT : 0;
+    if (kamui_ptr_trace())       /* SA1_KAMUI_DUMP: every sprite of the frame */
+        sa1_log("njDrawSprite%s(0x%08x, %u, attr 0x%x): p (%.1f, %.1f, %.1f) s (%.3f, %.3f) anim %gx%g c (%g, %g) uv (%g, %g)-(%g, %g) texid %u tlist 0x%08x",
+                is3d ? "3D" : "2D", sp, n, attr, px, py, is3d ? hle_rdf(sp + 8) : pri, sx, sy, asx, asy, acx, acy, u1, v1, u2, v2, texid, tlist);
+    float dist = hle_rdf(NJ_G_DIST), ax = hle_rdf(NJ_G_AX), ay = hle_rdf(NJ_G_AY), cx = hle_rdf(NJ_G_CX), cy = hle_rdf(NJ_G_CY);
+    float clipn = hle_rdf(NJ_G_CLIPN), clipf = hle_rdf(NJ_G_CLIPF);
+    if (is3d && !(attr & 0x10)) {
+        /* Without NJD_SPRITE_SCALE (SDK body 0x8C63F2D4; the dispatcher at
+         * 0x8C63EFE4 takes this path when bit 0x10 is clear): not a billboard.
+         * The quad lies in the x/y plane of the current matrix, so the matrix's
+         * scale and rotation apply: each corner is an object-space point (p + e,
+         * rotated about p by ang) transformed and projected on its own.  The
+         * ring sparkle (attr 0x29, a 32x32 quad the game scales down) and the
+         * rain splashes on the ground (attr 0x22) draw this way.  The SDK draws
+         * it unless all four corners are beyond the far clip or all four nearer
+         * than the near clip; corners behind the near plane are skipped here (a
+         * quad that straddles it cannot be projected). */
+        float exs[4] = {ex0, ex0, ex1, ex1}, eys[4] = {ey0, ey1, ey0, ey1};
+        float us[4] = {u1, u1, u2, u2}, vs[4] = {v1, v2, v1, v2};
+        float qx[4], qy[4], qz[4];
+        float pz = hle_rdf(sp + 8);
+        int nfar = 0;
+        for (int i = 0; i < 4; i++) {
+            float ox = exs[i] * rc - eys[i] * rs, oy = exs[i] * rs + eys[i] * rc;
+            float p[3] = {px + ox, py + oy, pz};
+            qx[i] = c->xf[0] * p[0] + c->xf[4] * p[1] + c->xf[8] * p[2] + c->xf[12];
+            qy[i] = c->xf[1] * p[0] + c->xf[5] * p[1] + c->xf[9] * p[2] + c->xf[13];
+            qz[i] = c->xf[2] * p[0] + c->xf[6] * p[1] + c->xf[10] * p[2] + c->xf[14];
+            if (qz[i] <= clipn) return;
+            if (qz[i] > clipf) nfar++;
+        }
+        if (nfar == 4) return;
+        int list = kamui_draw_begin(c, (attr & 0x20) ? KM_ATTR_TRANS_INT : KM_ATTR_OPAQUE_INT, mat, tlist ? KM_TEX_NUM : KM_TEX_NONE, texid);
+        for (int i = 0; i < 4; i++) {
+            float iz = 1.0f / qz[i];
+            put_vertex(list, i == 3 ? PCW_VTX_END : PCW_VTX, cx + qx[i] * dist * ax * iz, cy + qy[i] * dist * ay * iz, iz, us[i], vs[i], sh4_f2u(1.0f), sh4_f2u(1.0f));
+        }
+        kamui_draw_end(c);
+        return;
+    }
+    float scale = 1.0f;
+    if (is3d) {
+        /* NJD_SPRITE_SCALE set (0x8C63F038): a billboard.  The sprite's point
+         * goes through XMTRX and is projected; the corners are in world units
+         * scaled by the distance only (the rain streaks, attr 0x32). */
+        float p[3] = {px, py, hle_rdf(sp + 8)}, q[3];
+        for (int i = 0; i < 3; i++) q[i] = c->xf[i] * p[0] + c->xf[4 + i] * p[1] + c->xf[8 + i] * p[2] + c->xf[12 + i];
+        float depth = q[2];
+        if (depth <= clipn || depth > clipf) return;
+        scale = dist / depth;
+        px = cx + q[0] * scale * ax;
+        py = cy + q[1] * scale * ay;
+        z = 1.0f / depth;
+    } else z = pri_to_z(pri);
     int list = kamui_draw_begin(c, (attr & 0x20) ? KM_ATTR_TRANS_INT : KM_ATTR_OPAQUE_INT, mat, tlist ? KM_TEX_NUM : KM_TEX_NONE, texid);
-    float x0 = px - acx * sx * scale, y0 = py - acy * sy * scale;
-    float x1 = x0 + asx * sx * scale, y1 = y0 + asy * sy * scale;
+    float x0 = px + ex0 * scale, y0 = py + ey0 * scale;
+    float x1 = px + ex1 * scale, y1 = py + ey1 * scale;
     float rot[4];
     const float *r = NULL;
-    if (attr & 1) {
-        float a = (float)(hle_rd32(sp + 20) & 0xFFFF) * (float)(6.283185307179586 / 65536.0);
-        rot[0] = px; rot[1] = py; rot[2] = sinf(a); rot[3] = cosf(a); r = rot;
-    }
+    if (attr & 1) { rot[0] = px; rot[1] = py; rot[2] = rs; rot[3] = rc; r = rot; }
     sprite_quad(list, x0, y0, x1, y1, z, u1, v1, u2, v2, r);
     kamui_draw_end(c);
 }

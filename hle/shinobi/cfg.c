@@ -79,6 +79,18 @@ void sdk_8c604500(sh4_ctx *c) {
     uint32_t d = ARG0, s = ARG1, n = ARG2;
     for (uint32_t i = 0; i < n; i++) hle_wr8(d + i, hle_rd8(s + i));
 }
+/* 0x8C6044E0: the same family's longword copy (dst, src, n longwords; the
+ * halfword one is at 0x8C6044F0).  It was a seam stub returning 0; the
+ * Chaos 0 boss copies its body's vertices into a heap buffer with it at
+ * init (ovl B_CHAOS0 0x8C9034C0), and the buffer kept the allocator's
+ * all-ones fill, which the game's clipper turned into the cyan prism of
+ * the maintainer's shots 10 and 11 (docs/m2-render-report.md section 10). */
+void sdk_8c6044e0(sh4_ctx *c) {
+    HLE_ENTER(0x8c6044e0u, "memcpy32 (SDK)");
+    uint32_t d = ARG0, s = ARG1, n = ARG2, v = 0;
+    for (uint32_t i = 0; i < n; i++) { v = hle_rd32(s + 4 * i); hle_wr32(d + 4 * i, v); }
+    RET(v);
+}
 
 void shinobi_cfg_state(hle_state_io *io) {
     hle_state_blob(io, "bu.complete", &bu_complete_cb, sizeof bu_complete_cb);

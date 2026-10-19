@@ -238,7 +238,7 @@ int texture_select_gindex(uint32_t gbix) {
 /* "<index> <fmt> <flags> <w>x<h>" of a live texture handle (the mark key). */
 int texture_describe(uint32_t handle, char *buf, unsigned n) {
     for (uint32_t i = 0; i < memlist_count; i++) if (slots[i].used && slots[i].handle == handle) {
-        snprintf(buf, n, "%04u %s %s %ux%u", slots[i].index, pixfmt_name(slots[i].pixfmt), datafmt_name(slots[i].datafmt), slots[i].w, slots[i].h);
+        snprintf(buf, n, "%04u %s %s %ux%u h%u", slots[i].index, pixfmt_name(slots[i].pixfmt), datafmt_name(slots[i].datafmt), slots[i].w, slots[i].h, handle);
         return 1;
     }
     snprintf(buf, n, "handle %u?", handle);

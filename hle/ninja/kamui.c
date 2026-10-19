@@ -95,7 +95,13 @@ static char mark_path[512];               /* the mark key: screenshot + bound-te
 static int mark_active;
 static uint32_t mark_tex[512], mark_ntex;
 static uint32_t dump_frame;        /* SA1_KAMUI_DUMP=<frame>: log every header, pointer handoff and writer call of that frame */
-static int ptr_trace(void) { return dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2; }
+static int dump_read;              /* the variable is read on first use: a --load run never passes through kamui_init */
+static void dump_setup(void) {
+    if (dump_read) return;
+    dump_read = 1;
+    if (getenv("SA1_KAMUI_DUMP")) dump_frame = (uint32_t)strtoul(getenv("SA1_KAMUI_DUMP"), NULL, 0);
+}
+static int ptr_trace(void) { dump_setup(); return dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2; }
 int kamui_ptr_trace(void) { return ptr_trace(); }
 static int frame_rendered;
 static uint32_t stat_frames, stat_polys[3], stat_strips[3], stat_modvols, stat_overflow, stat_sprites, stat_fogmode[4];
@@ -224,7 +230,7 @@ static void buffers_alloc(void) {
 #define SH_STATIC   0x8C88FB34u
 #define DESC_STATIC 0x8C88FC40u
 void kamui_init(void) {
-    if (getenv("SA1_KAMUI_DUMP")) dump_frame = (uint32_t)strtoul(getenv("SA1_KAMUI_DUMP"), NULL, 0);
+    dump_setup();
     sh_addr = SH_STATIC;
     desc_addr = DESC_STATIC;
     for (uint32_t i = 0; i < SH_SIZE; i += 4) sh_wr(i, 0);
@@ -616,9 +622,15 @@ static void flush_strip(parse_ctx *pc, int sorted) {
 }
 
 typedef struct sort_key { float d; uint32_t i; } sort_key;
+/* Smaller 1/w = farther first.  Equal depth keeps the order the strips were
+ * written in (qsort is not stable): the event scripts draw the subtitle's
+ * black band and the text quad at the same 2D depth, and with the order
+ * left to qsort it changed from frame to frame, the half-alpha band then
+ * darkening the text every other frame (section 10 of the M2 report). */
 static int cmp_key(const void *a, const void *b) {
-    float da = ((const sort_key *)a)->d, db = ((const sort_key *)b)->d;
-    return da < db ? -1 : da > db ? 1 : 0;     /* smaller 1/w = farther first */
+    const sort_key *ka = a, *kb = b;
+    if (ka->d != kb->d) return ka->d < kb->d ? -1 : 1;
+    return ka->i < kb->i ? -1 : ka->i > kb->i ? 1 : 0;
 }
 
 /* Parse one buffer region.  Polygons of list types 0 and 4 draw at once
@@ -687,11 +699,23 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
         if (in_strip) { flush_strip(&pc, sorted); in_strip = 0; }
         if (type == 4 || type == 5) {
             uint32_t isp = hle_rd32(p + 4), tsp = hle_rd32(p + 8), tcw = hle_rd32(p + 12);
-            if (dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2 && want_list == 0 && !sorted) {
-                /* count the vertices that follow */
+            if (ptr_trace() && want_list == 0 && !sorted) {
+                /* count the vertices that follow, with their screen extent and 1/w range */
                 uint32_t q = p + 32, nv = 0;
-                while (q + 32 <= end && (hle_rd32(q) >> 29) == 7) { nv++; q += 32; }
-                sa1_log("hdr list %u at 0x%08x: pcw %08x isp %08x tsp %08x tcw %08x verts %u", (pcw >> 24) & 7, p, pcw, isp, tsp, tcw, nv);
+                float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, w0 = 1e9f, w1 = -1e9f;
+                uint32_t vs = (type == 5) ? 64 : ((((pcw >> 3) & 1) && ((pcw >> 4) & 3) == 1) || (((pcw >> 6) & 1) && ((pcw >> 3) & 1))) ? 64 : 32;
+                while (q + vs <= end && (hle_rd32(q) >> 29) == 7) {
+                    float x = hle_rdf(q + 4), y = hle_rdf(q + 8), w = hle_rdf(q + 12);
+                    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (w < w0) w0 = w; if (w > w1) w1 = w;
+                    nv++; q += vs;
+                }
+                sa1_log("hdr list %u at 0x%08x: pcw %08x isp %08x tsp %08x tcw %08x verts %u x %.0f..%.0f y %.0f..%.0f 1/w %.5f..%.5f col %08x",
+                        (pcw >> 24) & 7, p, pcw, isp, tsp, tcw, nv, x0, x1, y0, y1, w0, w1, nv ? hle_rd32(p + 32 + 24) : 0);
+                if (getenv("SA1_KAMUI_DUMP_VERTS") && nv && nv <= 64 && (w1 >= 1.0f || x1 > 2000.0f || x0 < -2000.0f || y0 < -2000.0f || y1 > 2000.0f)) {
+                    uint32_t r = p + 32;      /* the odd strips: every vertex */
+                    for (uint32_t k = 0; k < nv; k++, r += vs)
+                        sa1_log("    v%u (%.1f, %.1f) 1/w %.5f uv %08x %08x col %08x", k, hle_rdf(r + 4), hle_rdf(r + 8), hle_rdf(r + 12), hle_rd32(r + 16), hle_rd32(r + 20), hle_rd32(r + 24));
+                }
             }
             pc.list = (int)((pcw >> 24) & 7);
             pc.sprite = (type == 5);
@@ -771,13 +795,13 @@ void sdk_8c642440(sh4_ctx *c) {
     HLE_ENTER(0x8c642440u, "kmRender");
     (void)c;
     if (!bufs[0].base) return;
-    if (dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2)
+    if (ptr_trace())
         sa1_log("kamui: kmRender (frame %u) op 0x%08x tr 0x%08x pt 0x%08x", hle_frame_count(), kamui_buffer_ptr(0), kamui_buffer_ptr(1), kamui_buffer_ptr(2));
     render_lists();
 }
 void sdk_8c641f00(sh4_ctx *c) {
     HLE_ENTER(0x8c641f00u, "kmFlip");
-    if (dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2)
+    if (ptr_trace())
         sa1_log("kamui: kmFlip (frame %u, rendered %d) tr 0x%08x", hle_frame_count(), frame_rendered, kamui_buffer_ptr(1));
     if (frame_rendered) {
         if (screenshot_path) {
@@ -796,7 +820,7 @@ void sdk_8c641f00(sh4_ctx *c) {
 void sdk_8c6433e0(sh4_ctx *c) {         /* no-draw frame: keep the picture, drop the lists */
     HLE_ENTER(0x8c6433e0u, "kmSkipFrame");
     (void)c;
-    if (dump_frame && hle_frame_count() >= dump_frame && hle_frame_count() < dump_frame + 2)
+    if (ptr_trace())
         sa1_log("kamui: kmSkipFrame (frame %u) tr 0x%08x", hle_frame_count(), kamui_buffer_ptr(1));
     buffers_reset();
 }

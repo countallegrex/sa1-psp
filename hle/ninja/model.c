@@ -167,6 +167,7 @@ static int begin_material(sh4_ctx *c, uint32_t flags, uint32_t texid, int textur
 static tv_t tvs[MAX_VERTS];
 static sv_t svs[MAX_VERTS];
 
+int kamui_ptr_trace(void);
 static void draw_basic_model(sh4_ctx *c, uint32_t model) {
     env_t e; env_setup(c, &e);
     uint32_t points = hle_rd32(model), normals = hle_rd32(model + 4), np = hle_rd32(model + 8);
@@ -201,6 +202,13 @@ static void draw_basic_model(sh4_ctx *c, uint32_t model) {
         int textured = vuv != 0;
         int ignore_light = (flags & FLAG_IGN_LIGHT) != 0;
         if (mdbg()) sa1_log("  meshset %u: type %u mat %u nmesh %u flags 0x%08x texid %u uv %d col %d", s, type, matid, nmesh, flags, texid, vuv != 0, vcol != 0);
+        if (kamui_ptr_trace()) {   /* SA1_KAMUI_DUMP: which model wrote which strips, and its worst vertex */
+            uint32_t worst = 0; float far = 0.0f; int bad = 0;
+            for (uint32_t i = 0; i < np; i++) if (tvs[i].ok) { float d = fabsf(tvs[i].sx - 320.0f) + fabsf(tvs[i].sy - 240.0f); if (d > far) { far = d; worst = i; } }
+            { uint32_t p2 = meshes; for (uint32_t mi = 0; mi < nmesh && mi < 4096; mi++) { int cnt = (type == 3 || type == 2) ? (int)(hle_rd16(p2) & 0x7FFF) : type == 0 ? 3 : 4; if (type == 3 || type == 2) p2 += 2; for (int q = 0; q < cnt; q++) if (hle_rd16(p2 + 2u * (uint32_t)q) >= np) bad++; p2 += 2u * (uint32_t)cnt; } }
+            sa1_log("model: 0x%08x meshset %u type %u nmesh %u np %u points 0x%08x flags 0x%08x tex %u -> list %s at 0x%08x; worst vertex %u at (%.0f, %.0f) 1/w %.5f; %d indices >= np",
+                    model, s, type, nmesh, np, points, flags, texid, (flags & FLAG_USE_ALPHA) ? "tr" : "op", kamui_buffer_ptr((flags & FLAG_USE_ALPHA) ? 1 : 0), worst, tvs[worst].sx, tvs[worst].sy, tvs[worst].w, bad);
+        }
         int list = begin_material(c, flags, texid, textured);
         uint32_t p = meshes, k = 0;    /* k: running index into the per-mesh-vertex arrays */
         for (uint32_t mi = 0; mi < nmesh && mi < 4096; mi++) {
@@ -438,4 +446,15 @@ void sdk_8c610cf8(sh4_ctx *c) {
     hle_wrf(b + 44, hle_rdf(NJ_G_CX)); hle_wrf(b + 48, hle_rdf(NJ_G_CY));
 }
 void sdk_8c610d30(sh4_ctx *c) { HLE_ENTER(0x8c610d30u, "njSetDrawParams2"); hle_wrf(0x8C8901F8u + 12, -FARG(0)); hle_wrf(0x8C8901F8u + 32, FARG(1)); }
+/* 0x8C60D1F2 / 0x8C60D1F8 (one store each, from their disassembly): the
+ * vertex buffer the game's shape-motion interpolation writes into
+ * (0x8C89002C; the game passes its static 0x8C782984 at boot and the
+ * walker 0x8C0403C0 lerps every vertex into it, then points the model at
+ * it) and the per-node draw callback (0x8C890074) the object walkers
+ * 0x8C040784 / 0x8C040880 call for every node (the game registers
+ * 0x8C0D215C at frame 692: it turns particular nodes of the player model).
+ * Both were seam stubs returning 0: the Emerald Coast dolphins then lerped
+ * through a NULL buffer (docs/m2-render-report.md section 10). */
+void sdk_8c60d1f2(sh4_ctx *c) { HLE_ENTER(0x8c60d1f2u, "njSetVertexBuffer"); hle_wr32(0x8C89002Cu, ARG0); }
+void sdk_8c60d1f8(sh4_ctx *c) { HLE_ENTER(0x8c60d1f8u, "njSetDrawCallback"); hle_wr32(0x8C890074u, ARG0); }
 void sdk_8c610d3e(sh4_ctx *c) { HLE_ENTER(0x8c610d3eu, "njSetDrawVector"); hle_wrf(0x8C6735ACu, FARG(0)); hle_wrf(0x8C6735B0u, FARG(1)); hle_wrf(0x8C6735B4u, FARG(2)); }
