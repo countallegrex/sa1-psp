@@ -76,7 +76,7 @@ static int cull_flip;                         /* --cull-flip (main_psp.c): the o
 static struct { uint32_t list_high, dropped, offscreen, mirrors, mirror_fail, downscaled, frames;
                 uint32_t flush_state, flush_proj, flush_offset, last_strips, last_draws, last_states;
                 float zmin_frame, zmin_win, zmin_last; uint32_t znear_verts[4];   /* nearest 3D z; vertices with z < 2, 4, 8, 16 */
-                uint64_t gpu_wait_us, frame_us_sum, frame_us_max, last_end; } gs;
+                uint64_t gpu_wait_us, swap_wait_us, frame_us_sum, frame_us_max, last_end; } gs;
 
 typedef struct { float u, v; uint32_t color; float x, y, z; } gu_vtx;
 #define VTX_FMT (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
@@ -499,6 +499,13 @@ int draw_init(int scale, int want_headless) {
     list = (uint32_t *)((uintptr_t)list_mem | 0x40000000u);
     sa1_log("draw: sceGuInit (list at %p)", (void *)list);
     sceGuInit();
+    /* pspsdk swaps with PSP_DISPLAY_SETBUF_IMMEDIATE unless told otherwise:
+     * the display then changes buffer mid-scan, and at the console's
+     * 4-14 fps every swap showed one refresh torn between two frames (a
+     * turning Sonic doubled at character select, the maintainer's run of ca5c25f).
+     * At the next vblank instead; the frame after waits for that vblank
+     * before it touches the buffer (frame_clear). */
+    guSwapBuffersBehaviour(PSP_DISPLAY_SETBUF_NEXTFRAME);
     sceGuStart(GU_DIRECT, list);
     sceGuDrawBuffer(GU_PSM_5650, (void *)0, BUF_W);
     sceGuDispBuffer(SCR_W, SCR_H, (void *)FB_BYTES, BUF_W);
@@ -549,6 +556,7 @@ void draw_set_fog(uint32_t color_argb, float z_near, float z_far) {
 }
 
 static float tex_su = -1.0f, tex_sv = -1.0f;
+static uint32_t frame_clear_argb;
 static void rec_reset(void);
 static void replay(void);
 
@@ -558,11 +566,22 @@ void draw_begin_frame(uint32_t clear_argb) {
     rec_reset();
     if (headless) return;
     tex_su = tex_sv = -1.0f;        /* re-sent with the first texture */
-    /* the buffer we are about to draw is on screen until the swap's vblank */
-    if (swap_pending && sceDisplayGetVcount() == swap_vcount) sceDisplayWaitVblankStart();
-    swap_pending = 0;
-    sceGuStart(GU_DIRECT, list);
+    frame_clear_argb = clear_argb;
+    sceGuStart(GU_DIRECT, list);   /* the GE runs the list as it grows: nothing touches the buffer before frame_clear */
     list_open = 1;
+    apply_fog();
+}
+
+/* The first thing replay() draws.  The buffer is the one on screen until
+ * the vblank after the last swap (NEXTFRAME); a frame of the game takes
+ * longer than a refresh, so the wait is almost never taken. */
+static void frame_clear(void) {
+    if (swap_pending && sceDisplayGetVcount() == swap_vcount) {
+        uint64_t t = sa1_plat_time_us();
+        sceDisplayWaitVblankStart();
+        gs.swap_wait_us += sa1_plat_time_us() - t;
+    }
+    swap_pending = 0;
     sceGuDepthOffset(0);
     sceGuDepthMask(GU_FALSE);
     if (!aspect_wide) {             /* 4:3: black pillars, the game's colour and all drawing in the middle */
@@ -570,14 +589,13 @@ void draw_begin_frame(uint32_t clear_argb) {
         sceGuClearColor(0xFF000000u); sceGuClearDepth(0);
         sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
         sceGuScissor(SCR_W / 8, 0, SCR_W * 7 / 8, SCR_H);
-        sceGuClearColor(abgr(clear_argb) | 0xFF000000u);
+        sceGuClearColor(abgr(frame_clear_argb) | 0xFF000000u);
         sceGuClear(GU_COLOR_BUFFER_BIT);
     } else {
         sceGuScissor(0, 0, SCR_W, SCR_H);
-        sceGuClearColor(abgr(clear_argb) | 0xFF000000u); sceGuClearDepth(0);
+        sceGuClearColor(abgr(frame_clear_argb) | 0xFF000000u); sceGuClearDepth(0);
         sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
     }
-    apply_fog();
 }
 
 static void write_shot(void) {
@@ -630,10 +648,11 @@ void draw_end_frame(void) {
 
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
 void draw_gu_report(void) {
-    sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, GE wait %.2f ms/frame; list high water %u KB; "
+    sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB; "
             "%u strips dropped (list full), %u clipped to the GE's guard band",
             gs.frames, gs.frames ? gs.frame_us_sum / 1000.0 / gs.frames : 0.0, gs.frame_us_max / 1000.0,
-            gs.frames ? gs.gpu_wait_us / 1000.0 / gs.frames : 0.0, gs.list_high / 1024u, gs.dropped, gs.offscreen);
+            gs.frames ? gs.gpu_wait_us / 1000.0 / gs.frames : 0.0, gs.frames ? gs.swap_wait_us / 1000.0 / gs.frames : 0.0,
+            gs.list_high / 1024u, gs.dropped, gs.offscreen);
     sa1_log("draw: last frame %u strips -> %u GE draws, %u state changes; batch breaks by state %u, projection %u; "
             "%u mirrors (%u too big), %u textures downscaled", gs.last_strips, gs.last_draws, gs.last_states,
             gs.flush_state, gs.flush_proj, gs.mirrors, gs.mirror_fail, gs.downscaled);
@@ -641,7 +660,7 @@ void draw_gu_report(void) {
             depth_split, gs.zmin_win < 1e29f ? gs.zmin_win : 0.0f, gs.znear_verts[0], gs.znear_verts[1], gs.znear_verts[2], gs.znear_verts[3]);
     gs.zmin_win = 1e30f; memset(gs.znear_verts, 0, sizeof gs.znear_verts);
     gs.flush_state = gs.flush_proj = gs.flush_offset = 0;
-    gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = 0; gs.dropped = gs.offscreen = 0;
+    gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = gs.swap_wait_us = 0; gs.dropped = gs.offscreen = 0;
 }
 
 /* ---- state ---------------------------------------------------------------------- */
@@ -833,6 +852,7 @@ static void set_proj(int pass, int p) {
 /* Draws what the frame recorded: the far pass, a depth clear, the near pass. */
 static void replay(void) {
     batch_flush();
+    frame_clear();
     for (int pass = 0; pass < PASSES; pass++) {
         if (!nitems[pass]) continue;
         if (pass == PASS_NEAR && nitems[PASS_FAR]) {
