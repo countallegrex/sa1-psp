@@ -21,7 +21,7 @@ that has one.
 | `title_menu` | title, Start, new Sonic story, file select (no VMU), Station Square loads and runs | 3000 |
 | `sonic_to_ec1_start` | The maintainer's third run: title, Sonic, Station Square at night, Chaos 0 arrival and fight (won), Station Square by day, Emerald Coast start (stopped before the act's end) | 18402 |
 | `ec_scripted` | the scripted route into Emerald Coast: the M1 presses, then the stick held from frame 5450 (collects three rings at 5524-5544). Needs the stage pokes, which a tape does not carry: `tools/replay_test.py` ROUTE_POKES on the desktop, `--poke-ec` in the oracle tools; no check file, so `replay_test.py` skips it | 6600 |
-| `sonic_ec1` | *reserved for the full route*: title, Sonic, Station Square, Chaos 0 win, Emerald Coast act 1 complete | |
+| `sonic_ec1` | The maintainer's fifth run, the full M2 route: title, Sonic, Station Square at night (1673), Chaos 0 arrival and fight, won (4515; the result screen at 11993), Station Square by day (14967), Emerald Coast (17488) through both parts of act 1 (the second at 22991) to the goal (the result screen at 32535), back to Station Square (33150). The check file's milestones are those frames; rings, lives and position every 600 frames | 36478 |
 
 ## Recording a tape
 
