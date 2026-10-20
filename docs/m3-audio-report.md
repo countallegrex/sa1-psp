@@ -3,7 +3,7 @@
 Exit test (README §8): BGM and jump/ring sounds in Emerald Coast on
 desktop; with M3 also the voice-language switch (README §8 roadmap).
 
-Status: **draft. Audio core done and pushed (68ca26e); the desktop exit-test evidence (§6) and the cutscene item (§5) are done; the console comparison montage is pending, so M3 is not ticked yet.** Everything below was measured on the US v1.005
+Status: **passed (2026-10-19).** The exit test (§6) holds on desktop and against console captures; M3 is ticked in README §8. Everything below was measured on the US v1.005
 dump with `build-release/backend/desktop/sa1psp.exe` (clang 23, Release;
 recompiled game code `-O1`) unless it says Debug, on 2026-10-19.
 
@@ -186,11 +186,41 @@ Emerald Coast `ECOAST1.ADX` from 17517, -12.2 dBFS), all 39 voice lines
 (-8 to -20 dBFS), 306 ring notes (bank 0 program 7; median 8.4 dB under
 the rest of the mix) and 59 jump notes (bank 0 program 17; 11.1 dB under).
 
-Console comparison (pending): console captures from library states exist
-(`..\private\m3\console\`: Chaos 0 cutscene, night cutscene, Emerald
-Coast, Station Square; console music about -12 to -13 dBFS, close to
-ours). Still to do: the 10-second waveform/spectrogram montage and the
-balance of effects and voices against music.
+Console comparison. Console references are Flycast 2.7 captures of the
+AICA mix (a local patch writes every output sample to a WAV with a
+vblank/game-frame map; tape-driven with the Lua oracle, or from library
+save states; `..\private\m3\console\`). Our side is the same tape on the
+Release build, aligned by game frame. Montages (waveform and spectrogram,
+ours above the console, 10 s each), in `..\private\m3\montage\` (not
+committed: game audio):
+
+| Montage | Slice (aligned game frames) | Verdict |
+|---|---|---|
+| `ec_rings_10s.png` | Emerald Coast 2730-3030, the three ring pickups at 2759-2770 | Same music and ring pickups at the same time (ring within 3-6 ms); mix -11.2 dBFS ours, -11.3 console |
+| `title_menu_10s.png` | menus 430-730, menu effect at 448 | Effect sample-coherent with the console (cancels to -45.6 dB after a gain fit); the console title runs 0.4 s slower over 10 s (its lag frames) |
+| `chaos0_10s.png` | Chaos 0 cutscene 2675-2975, `--sound-timing real` | Same lines, music and effects; voices within 0.5 dB of the console's level |
+
+Levels, by fitting our stems to the console WAVs (least squares after
+alignment by cross-correlation), before calibration:
+
+| | Ours against the console |
+|---|---|
+| Music (three areas) | 0.56-0.58 dB louder |
+| Voice lines (7) | 0.1 dB louder |
+| Ring (16-bit PCM tone) | 0.6-0.8 dB quieter |
+| Menu effect, Chaos 0 ambience, Emerald Coast effects (ADPCM tones) | 4.2-4.9 dB quieter |
+
+Spectral envelopes agree (menu effect 0.9999, voices 0.996, ambience
+0.99), so the ADPCM decode (low nibble first) is right; the ADPCM level
+gap has the same decode step as Flycast's and an open cause (§8). The
+core now applies the measured trims (`snd_core.c`: music -0.6 dB, effects
++0.7 dB, ADPCM tones +4.2 dB more); the route still passes its check with
+them. Timing against the console's game-frame map: rings -6 to -3 ms,
+menu effects +46 ms, music 79-142 ms late on the console (its stream
+start-up), voice lines as in §5.
+
+Exit test: BGM in Station Square and Emerald Coast, ring and jump sounds
+in Emerald Coast, voice lines, both voice languages: **passed**.
 
 ## 7. Latency and CPU cost
 
@@ -216,7 +246,11 @@ off` in `sa1psp.ini` removes the cost without changing the game.
 
 ## 8. Open items
 
-- The console montage and level balance (§6).
+- ADPCM tones play 4.2-4.9 dB quieter than on the console with the same
+  decode step as Flycast's: calibrated by a fixed trim, cause open
+  (output scaling of ADPCM in the AICA, or something per program).
+- The console's per-line stream start-up (a few frames, §5) and music
+  start-up (80-140 ms) are not emulated.
 - DSP reverb (`SFPB`/`SFOB`) not rendered; sequence banks not played (none
   on the route); envelope rate table approximate; the console's few
   frames of per-line read latency not emulated (§5).

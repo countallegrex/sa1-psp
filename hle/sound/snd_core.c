@@ -22,6 +22,15 @@
 #define ATT_MAX 1023
 #define ATT_DB(db) ((int32_t)((db) / 0.09375 + 0.5))
 
+/* Console calibration (docs/m3-audio-report.md section 6: our stems
+ * fitted against Flycast captures of the same game frames): music 0.6 dB
+ * lower, effects 0.7 dB higher, and ADPCM tones a further 4.2 dB higher
+ * (three ADPCM effects measured 4.2-4.9 dB low against 0.7 dB for a PCM
+ * one; the decode is the same, the cause is open).  Voices matched. */
+#define TRIM_MUSIC_ATT ATT_DB(0.6)
+#define TRIM_FX_GAIN ATT_DB(0.7)
+#define TRIM_ADPCM_GAIN ATT_DB(4.2)
+
 enum { EG_OFF = 0, EG_ATTACK, EG_DECAY1, EG_DECAY2, EG_RELEASE };
 enum { FMT_PCM16 = 0, FMT_PCM8 = 1, FMT_ADPCM = 2 };
 
@@ -264,6 +273,7 @@ static void note_on(snd_core *k, int port, int c, int key, int vel) {
         uint32_t vtab = ram32(k, sp[l].bank_base + 0x18);
         int32_t velc = vtab && vtab < 0x10000 ? (int32_t)ram8(k, sp[l].bank_base + vtab + (uint32_t)(vel & 127)) : vel;
         att += vol_att[velc & 127];
+        att -= TRIM_FX_GAIN + (v->fmt == FMT_ADPCM ? TRIM_ADPCM_GAIN : 0);
         v->att_static = att;
         int32_t base = (int32_t)ram8(k, p + 38), fine = (int8_t)ram8(k, p + 39);
         v->base_cents = (key - base) * 100 + fine;
@@ -410,7 +420,7 @@ static int stream_fetch(snd_core *k, int si, int32_t *out) {
 static void stream_render(snd_core *k, int si, int32_t *acc, uint32_t n) {
     stream *s = &k->st[si];
     if (!s->on) return;
-    int32_t g = gain_q15[clamp_att(s->att)];
+    int32_t g = gain_q15[clamp_att(s->att + (si == 0 ? TRIM_MUSIC_ATT : 0))];
     uint32_t nc = s->info.channels;
     for (uint32_t i = 0; i < n; i++) {
         while (s->frac >= 0x10000u) {

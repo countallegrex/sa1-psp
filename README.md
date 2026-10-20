@@ -320,8 +320,17 @@ Each one has a single exit test. Do not start the next before the test passes.
       scripted pad reaches Emerald Coast only by forcing the stage variables
       (`--poke`), so "completed with a controller" waits for a human run;
       what it needs is in the report.*
-- [ ] **M3 Desktop audio.** ADX streaming plus pre-rendered SFX. Exit: BGM
+- [x] **M3 Desktop audio.** ADX streaming plus pre-rendered SFX. Exit: BGM
       and jump/ring sounds in Emerald Coast.
+      *Passed 2026-10-19 (`docs/m3-audio-report.md`). ADX music and voice
+      lines stream through a portable audio core (`hle/sound/`) built so it
+      can move to the Media Engine; effects are not pre-rendered after all:
+      the game drives them as MIDI and the core plays them from the sound
+      banks' own tone data. The maintainer's full route plays with BGM, rings,
+      jumps and voices and still passes its check; levels are calibrated
+      against Flycast captures; the voice language is a setting
+      (`--voice`, `sa1psp.ini`). With real voice playback the Chaos 0
+      cutscene is 3-6 game frames from the console instead of 58-61.*
 - [x] **M4 PSP boot.** Same tree built with pspsdk: 16 MB guest array,
       sceGu Ninja backend, sceCtrl, sceIo from `ms0:/`. Run in PPSSPP first.
       Exit: title screen on PPSSPP, then on hardware.
