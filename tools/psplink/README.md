@@ -76,7 +76,8 @@ tools/psplink/build.sh ../tools-psplink/patched ../tools-psplink/m5c ../tools-ps
   usbhostfs.prx differs from the card's PSPLINK) and `psplinkusb-windows/`
   (usbhostfs_pc.exe plus cygwin1.dll, cygusb-1.0.dll, cyggcc_s-seh-1.dll).
 - usbhostfs.prx builds byte-identical from the patches: sha256 4bb2c586c6bd5a64...
-- psp_run.py picks the host with `--tools DIR` (or SA1_PSP_PSPLINK_TOOLS).
+- psp_run.py picks the host with `--tools DIR` (or SA1_PSP_PSPLINK_TOOLS); by default the patched
+  `tools-psplink/m5c/psplinkusb-windows`, else the stock `tools-psplink/pc-windows/psplinkusb-windows`.
 
 ## Deploy and test (not done yet)
 

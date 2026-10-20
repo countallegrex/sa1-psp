@@ -87,8 +87,10 @@ meanwhile takes it over (usbhostfs_pc keeps one client per channel) and the
 run fails.  Close pspsh first, open it again afterwards.
 
 One-time setup: PSPLink v3.2.1 (pspdev/psplinkusb, built in tools-psplink/
-next to the repository) in ms0:/PSP/GAME/PSPLINK; the Windows usbhostfs_pc
-(Cygwin build from the same commit) in tools-psplink/pc-windows/; and the
+next to the repository) in ms0:/PSP/GAME/PSPLINK, or the patched PSPLINK2
+(tools/psplink/README.md); the Windows usbhostfs_pc (Cygwin build): the
+patched one in tools-psplink/m5c/ by default, the stock one in
+tools-psplink/pc-windows/ when that is missing; and the
 WinUSB driver bound to the PSP in PSPLink mode (USB 054C:01C9, "PSP Type B")
 with Zadig, once, as administrator.  USB mode (054C:01C8) is not touched.
 
@@ -119,7 +121,9 @@ HOST = "127.0.0.1"
 BASE_PORT = 10000                       # usbhostfs_pc -b: shell, gdb, stdout, stderr = +0..+3
 STAGE = "psplink-run"                   # under host0:, the EBOOT's folder for the run
 CARD_DATA = "ms0:/PSP/GAME/SA1PSP/data"
-DEFAULT_TOOLS = os.path.join(os.path.dirname(REPO), "tools-psplink", "pc-windows", "psplinkusb-windows")
+# The patched host (tools/psplink/, built by its build.sh) first, the stock one as the fallback.
+DEFAULT_TOOLS = os.path.join(os.path.dirname(REPO), "tools-psplink", "m5c", "psplinkusb-windows")
+STOCK_TOOLS = os.path.join(os.path.dirname(REPO), "tools-psplink", "pc-windows", "psplinkusb-windows")
 
 # pspsh/psplink shell framing (psplink/shellcmd.h): a frame is 0xFF ... 0xFE;
 # its first byte < 0x80 is text, else a command code.
@@ -169,7 +173,7 @@ def write_args(path: str, game_args: list[str]) -> list[str]:
 
 def find_tool(name: str, tools: str | None) -> str | None:
     exe = name + (".exe" if os.name == "nt" else "")
-    dirs = [tools, os.environ.get("SA1_PSP_PSPLINK_TOOLS"), DEFAULT_TOOLS]
+    dirs = [tools, os.environ.get("SA1_PSP_PSPLINK_TOOLS"), DEFAULT_TOOLS, STOCK_TOOLS]
     if os.environ.get("PSPDEV"):
         dirs.append(os.path.join(os.environ["PSPDEV"], "bin"))
     for d in dirs:
@@ -637,7 +641,8 @@ def main() -> int:
     ap.add_argument("--from", dest="src", help="run the PRX (and name addresses with the ELF) of this build folder "
                     "instead of --build's: a second checkout's build-psp/sa1psp, staged into the served folder")
     ap.add_argument("--build", default=os.path.join(REPO, "build-psp", "sa1psp"), help="the folder with EBOOT.PBP and sa1psp.elf; host0:")
-    ap.add_argument("--tools", help="folder with usbhostfs_pc (default tools-psplink/pc-windows/psplinkusb-windows next to the repo)")
+    ap.add_argument("--tools", help="folder with usbhostfs_pc (default the patched tools-psplink/m5c/psplinkusb-windows next to the repo, "
+                                    "else the stock tools-psplink/pc-windows/psplinkusb-windows)")
     ap.add_argument("--out", help="the run's console log (default BUILD/psplink-run/psp_run.log)")
     ap.add_argument("--linger", type=float, default=3, help="seconds to keep reading after the exit line (the exit reports)")
     ap.add_argument("--wsl-distro", default="Ubuntu", help="WSL distribution with pspdev, for addr2line")
