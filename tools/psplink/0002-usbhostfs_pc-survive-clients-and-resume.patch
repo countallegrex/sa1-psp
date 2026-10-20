@@ -1,0 +1,223 @@
+diff --git a/usbhostfs_pc/main.c b/usbhostfs_pc/main.c
+index c37d942..a73f8d5 100644
+--- a/usbhostfs_pc/main.c
++++ b/usbhostfs_pc/main.c
+@@ -48,6 +48,15 @@
+ 
+ #include "psp_fileio.h"
+ 
++#ifndef MSG_NOSIGNAL
++#define MSG_NOSIGNAL 0
++#endif
++
++/* usbhdr is opened and closed by the main thread and written by async_thread */
++static pthread_mutex_t g_usbmtx = PTHREAD_MUTEX_INITIALIZER;
++/* g_clientsocks[] are closed by async_thread and written by the main thread */
++static pthread_mutex_t g_sockmtx = PTHREAD_MUTEX_INITIALIZER;
++
+ #define MAX_FILES 256
+ #define MAX_DIRS  256
+ #define MAX_TOKENS 256
+@@ -228,7 +237,7 @@ int euid_usb_bulk_read(libusb_device_handle *dev, int ep, char *bytes, int size,
+ 
+ 	V_PRINTF(2, "Bulk Read dev %p, ep 0x%x, bytes %p, size %d, timeout %d\n",
+ 			dev, ep, bytes, size, timeout);
+-	int ret = libusb_bulk_transfer(usbhdr, ep, (unsigned char*)bytes, size, &rdbytes, timeout);
++	int ret = libusb_bulk_transfer(dev, ep, (unsigned char*)bytes, size, &rdbytes, timeout);
+ 	if (!ret)
+ 		ret = rdbytes;
+ 
+@@ -2196,6 +2205,29 @@ void do_hostfs(struct HostFsCmd *cmd, int readlen)
+ }
+ 
+ 
++/* Send to a client socket.  A client that went away must not take the host with it: no
++   SIGPIPE, and the socket cannot be closed (and its number reused) while we write. */
++static void client_send(unsigned int chan, const void *data, int len)
++{
++	int sent = 0;
++
++	pthread_mutex_lock(&g_sockmtx);
++	while((sent < len) && (g_clientsocks[chan] >= 0))
++	{
++		int ret = send(g_clientsocks[chan], (const char *) data + sent, len - sent, MSG_NOSIGNAL);
++		if(ret <= 0)
++		{
++			if((ret < 0) && (errno == EINTR))
++			{
++				continue;
++			}
++			break;
++		}
++		sent += ret;
++	}
++	pthread_mutex_unlock(&g_sockmtx);
++}
++
+ void do_async(struct AsyncCommand *cmd, int readlen)
+ {
+ 	uint8_t *data;
+@@ -2210,7 +2242,7 @@ void do_async(struct AsyncCommand *cmd, int readlen)
+ 		unsigned int chan = LE32(cmd->channel);
+ 		if((chan < MAX_ASYNC_CHANNELS) && (g_clientsocks[chan] >= 0))
+ 		{
+-			write(g_clientsocks[chan], data, readlen - sizeof(struct AsyncCommand));
++			client_send(chan, data, readlen - sizeof(struct AsyncCommand));
+ 			if((chan == ASYNC_GDB) && (g_gdbdebug))
+ 			{
+ 				print_gdbdebug(0, data, readlen - sizeof(struct AsyncCommand));
+@@ -2250,11 +2282,57 @@ void do_bulk(struct BulkCommand *cmd, int readlen)
+ 	{
+ 		if((chan < MAX_ASYNC_CHANNELS) && (g_clientsocks[chan] >= 0))
+ 		{
+-			fixed_write(g_clientsocks[chan], block, len);
++			client_send(chan, block, len);
+ 		}
+ 	}
+ }
+ 
++/* Send the hello magic.  Returns 1 when the PSP is ours to serve. */
++static int hostfs_handshake(libusb_device_handle *h)
++{
++	uint32_t magic = LE32(HOSTFS_MAGIC);
++	int i;
++	int ret;
++
++	ret = euid_usb_bulk_write(h, 0x2, (char *) &magic, sizeof(magic), 1000);
++	if(ret == sizeof(magic))
++	{
++		return 1;
++	}
++	if(ret != LIBUSB_ERROR_TIMEOUT)
++	{
++		return 0;
++	}
++
++	/* The PSP did not take the hello: it is past its attach handshake because the previous
++	   host died while connected (killed with the cable in, so no detach, and on Windows the
++	   PSP cannot be made to re-enumerate).  Announce ourselves on the async endpoint, which a
++	   connected PSP always reads: a patched usbhostfs.prx drops the old session and waits
++	   for the hello again; a stock one ignores 4 bytes there. */
++	fprintf(stderr, "PSP did not take the hello: announcing on the async endpoint\n");
++	pthread_mutex_lock(&g_usbmtx);
++	euid_usb_bulk_write(h, 0x3, (char *) &magic, sizeof(magic), 1000);
++	pthread_mutex_unlock(&g_usbmtx);
++	for(i = 0; i < 3; i++)
++	{
++		ret = euid_usb_bulk_write(h, 0x2, (char *) &magic, sizeof(magic), 1000);
++		if(ret == sizeof(magic))
++		{
++			return 1;
++		}
++		if(ret != LIBUSB_ERROR_TIMEOUT)
++		{
++			return 0;
++		}
++	}
++
++	/* A stock usbhostfs.prx: serve its previous session as it stands.  Draining the bulk in
++	   endpoint frees a PSP thread stuck sending stdout, and its next commands work as they
++	   did with the old host. */
++	fprintf(stderr, "Resuming the PSP's previous session\n");
++	return 1;
++}
++
+ int start_hostfs(void)
+ {
+ 	uint32_t data[512/sizeof(uint32_t)];
+@@ -2262,17 +2340,18 @@ int start_hostfs(void)
+ 
+ 	while(1)
+ 	{
++		libusb_device_handle *h;
++
+ 		init_hostfs();
+ 
+-		usbhdr = wait_for_device();
++		h = wait_for_device();
++		pthread_mutex_lock(&g_usbmtx);
++		usbhdr = h;
++		pthread_mutex_unlock(&g_usbmtx);
+ 
+ 		if(usbhdr)
+ 		{
+-			uint32_t magic;
+-
+-			magic = LE32(HOSTFS_MAGIC);
+-
+-			if(euid_usb_bulk_write(usbhdr, 0x2, (char *) &magic, sizeof(magic), 1000) == sizeof(magic))
++			if(hostfs_handshake(usbhdr))
+ 			{
+ 				while(1)
+ 				{
+@@ -2334,8 +2413,10 @@ int start_hostfs(void)
+ 				}
+ 			}
+ 
++			pthread_mutex_lock(&g_usbmtx);
+ 			close_device(usbhdr);
+ 			usbhdr = NULL;
++			pthread_mutex_unlock(&g_usbmtx);
+ 		}
+ 
+ 		close_hostfs();
+@@ -3040,6 +3121,7 @@ void *async_thread(void *arg)
+ 				{
+ 					if(FD_ISSET(g_servsocks[i], &read_set))
+ 					{
++						pthread_mutex_lock(&g_sockmtx);
+ 						if(g_clientsocks[i] >= 0)
+ 						{
+ 							FD_CLR(g_clientsocks[i], &read_save);
+@@ -3047,6 +3129,7 @@ void *async_thread(void *arg)
+ 						}
+ 						size = sizeof(client);
+ 						g_clientsocks[i] = accept(g_servsocks[i], (struct sockaddr *) &client, &size);
++						pthread_mutex_unlock(&g_sockmtx);
+ 						if(g_clientsocks[i] >= 0)
+ 						{
+ 							printf("Accepting async connection (%d) from %s\n", i, inet_ntoa(client.sin_addr));
+@@ -3101,11 +3184,13 @@ void *async_thread(void *arg)
+ 								}
+ 							}
+ 
++							pthread_mutex_lock(&g_usbmtx);
+ 							if(usbhdr)
+ 							{
+ 								cmd->channel = LE32(i);
+-								euid_usb_bulk_write(usbhdr, 0x3, buf, readbytes+sizeof(struct AsyncCommand), 10000);
++								euid_usb_bulk_write(usbhdr, 0x3, buf, readbytes+sizeof(struct AsyncCommand), 2000);
+ 							}
++							pthread_mutex_unlock(&g_usbmtx);
+ 						}
+ 						else
+ 						{
+@@ -3114,8 +3199,10 @@ void *async_thread(void *arg)
+ 							{
+ 								dup2(2, 1);
+ 							}
++							pthread_mutex_lock(&g_sockmtx);
+ 							close(g_clientsocks[i]);
+ 							g_clientsocks[i] = -1;
++							pthread_mutex_unlock(&g_sockmtx);
+ 							printf("Closing async connection (%d)\n", i);
+ 						}
+ 					}
+@@ -3131,6 +3218,8 @@ int main(int argc, char **argv)
+ {
+ 	int i;
+ 
++	/* line-buffered, so a log redirected to a file is complete up to a crash */
++	setvbuf(stdout, NULL, _IOLBF, 0);
+ 	printf("USBHostFS (c) TyRaNiD 2k6\n");
+ 	printf("Built %s %s\n", __DATE__, __TIME__);
+ 
+@@ -3145,6 +3234,8 @@ int main(int argc, char **argv)
+ 
+ 		signal(SIGINT, signal_handler);
+ 		signal(SIGTERM, signal_handler);
++		/* a client closing its socket while we write to it must not kill the host */
++		signal(SIGPIPE, SIG_IGN);
+ 
+ 		if(g_daemon)
+ 		{

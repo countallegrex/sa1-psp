@@ -1,0 +1,442 @@
+diff --git a/usbhostfs/main.c b/usbhostfs/main.c
+index 3caf1a6..332e469 100644
+--- a/usbhostfs/main.c
++++ b/usbhostfs/main.c
+@@ -31,6 +31,7 @@ enum UsbEvents
+ 	USB_EVENT_DETACH = 2,
+ 	USB_EVENT_ASYNC  = 4,
+ 	USB_EVENT_CONNECT = 8,
++	USB_EVENT_LOST = 16,     /* the host stopped answering, or a new host announced itself */
+ 	USB_EVENT_ALL = 0xFFFFFFFF
+ };
+ 
+@@ -59,6 +60,24 @@ static struct UsbdDeviceReq g_bulkout_req;
+ static struct UsbdDeviceReq g_async_req;
+ /* Indicates we have a connection to the PC */
+ static int g_connected = 0;
++
++/* Waiting for a host's hello on the bulk out endpoint: after an attach, after the host
++   stopped answering, or after a new host announced itself on the async endpoint. */
++static int g_wantmagic = 0;
++
++/* The async request is queued on the bus (cleared by its completion callback) */
++static volatile int g_async_armed = 0;
++
++/* A live host reads the bulk in endpoint all the time and answers a command as soon as it
++   has done the file operation.  A transfer that takes longer means the host is gone (killed
++   with the cable still in, so there is no detach): cancel it and drop the link, instead of
++   blocking the caller, and every other caller behind g_mainsema, forever. */
++#define USB_BULKIN_TIMEOUT  (5*1000*1000)
++#define USB_BULKOUT_TIMEOUT (20*1000*1000)
++#define USB_SEMA_TIMEOUT    (2*USB_BULKOUT_TIMEOUT)
++/* How long one wait for a hello lasts before the USB thread checks its events again */
++#define USB_MAGIC_POLL      (500*1000)
++
+ /* Buffers for async data */
+ static struct AsyncEndpoint *g_async_chan[MAX_ASYNC_CHANNELS];
+ 
+@@ -298,6 +317,7 @@ int async_req_done(struct UsbdDeviceReq *req, int arg2, int arg3)
+ 	DEBUG_PRINTF("async_req_done:\n");
+ 	DEBUG_PRINTF("size %08X, unkc %08X, recvsize %08X\n", req->size, req->unkc, req->recvsize);
+ 	DEBUG_PRINTF("retcode %08X, unk1c %08X, arg %p\n", req->retcode, req->unk1c, req->arg);
++	g_async_armed = 0;
+ 	sceKernelSetEventFlag(g_mainevent, USB_EVENT_ASYNC);
+ 	return 0;
+ }
+@@ -344,16 +364,53 @@ int set_bulkout_req(void *data, int size)
+ 	return sceUsbbdReqRecv(&g_bulkout_req);
+ }
+ 
++/* The host is gone: stop claiming a connection, so callers fail at once instead of queueing
++   on g_mainsema, and let the USB thread wait for the next host's hello. */
++static void link_lost(void)
++{
++	if(g_connected)
++	{
++		MODPRINTF("USB host stopped answering: link dropped\n");
++	}
++	g_connected = 0;
++	sceKernelClearEventFlag(g_mainevent, ~USB_EVENT_CONNECT);
++	sceKernelSetEventFlag(g_mainevent, USB_EVENT_LOST);
++}
++
++/* Wait for a bulk transfer to complete.  timeout 0 waits forever.  On a timeout the request
++   is cancelled (its buffer is ours again once the cancel completes) and, if lost is set, the
++   link is dropped. */
++static int wait_xfer(struct UsbdDeviceReq *req, u32 bit, SceUInt timeout, int lost)
++{
++	u32 result;
++	SceUInt t = timeout;
++	int ret;
++
++	ret = sceKernelWaitEventFlag(g_transevent, bit, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &result, timeout ? &t : NULL);
++	if(ret == (int) SCE_KERNEL_ERROR_WAIT_TIMEOUT)
++	{
++		t = 200*1000;
++		sceUsbbdReqCancelAll(req->endp);
++		/* the cancelled request completes through its callback */
++		sceKernelWaitEventFlag(g_transevent, bit, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &result, &t);
++		if(lost)
++		{
++			link_lost();
++		}
++	}
++
++	return ret;
++}
++
+ /* Read/Write buffer */
+ unsigned char tx_buf[64*1024] __attribute__((aligned(64)));
+ 
+ /* Read a block of data from the USB bus */
+-int read_data(void *data, int size)
++static int read_data_ex(void *data, int size, SceUInt timeout, int lost)
+ {
+ 	int nextsize = 0;
+ 	int readlen = 0;
+ 	int ret;
+-	u32 result;
+ 
+ 	while(readlen < size)
+ 	{
+@@ -363,7 +420,7 @@ int read_data(void *data, int size)
+ 			return -1;
+ 		}
+ 
+-		ret = sceKernelWaitEventFlag(g_transevent, USB_TRANSEVENT_BULKOUT_DONE, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &result, NULL);
++		ret = wait_xfer(&g_bulkout_req, USB_TRANSEVENT_BULKOUT_DONE, timeout, lost);
+ 		if(ret == 0)
+ 		{
+ 			if((g_bulkout_req.retcode == 0) && (g_bulkout_req.recvsize > 0))
+@@ -380,7 +437,10 @@ int read_data(void *data, int size)
+ 		}
+ 		else
+ 		{
+-			MODPRINTF("Error waiting for BULKOUT %08X\n", ret);
++			if(lost)
++			{
++				MODPRINTF("Error waiting for BULKOUT %08X\n", ret);
++			}
+ 			return -1;
+ 		}
+ 	}
+@@ -388,12 +448,16 @@ int read_data(void *data, int size)
+ 	return readlen;
+ }
+ 
++int read_data(void *data, int size)
++{
++	return read_data_ex(data, size, USB_BULKOUT_TIMEOUT, 1);
++}
++
+ int write_data(const void *data, int size)
+ {
+ 	int nextsize = 0;
+ 	int writelen = 0;
+ 	int ret;
+-	u32 result;
+ 
+ 	if((u32) data & 63)
+ 	{
+@@ -402,8 +466,7 @@ int write_data(const void *data, int size)
+ 			nextsize = (size - writelen) > sizeof(tx_buf) ? sizeof(tx_buf) : (size - writelen);
+ 			memcpy(tx_buf, data, nextsize);
+ 			set_bulkin_req(tx_buf, nextsize);
+-			/* TODO: Add a timeout to the event flag wait */
+-			ret = sceKernelWaitEventFlag(g_transevent, USB_TRANSEVENT_BULKIN_DONE, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &result, NULL);
++			ret = wait_xfer(&g_bulkin_req, USB_TRANSEVENT_BULKIN_DONE, USB_BULKIN_TIMEOUT, 1);
+ 			if(ret == 0)
+ 			{
+ 				if((g_bulkin_req.retcode == 0) && (g_bulkin_req.recvsize > 0))
+@@ -430,8 +493,7 @@ int write_data(const void *data, int size)
+ 		{
+ 			nextsize = (size - writelen) > sizeof(tx_buf) ? sizeof(tx_buf) : (size - writelen);
+ 			set_bulkin_req((char *) data, nextsize);
+-			/* TODO: Add a timeout to the event flag wait */
+-			ret = sceKernelWaitEventFlag(g_transevent, USB_TRANSEVENT_BULKIN_DONE, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &result, NULL);
++			ret = wait_xfer(&g_bulkin_req, USB_TRANSEVENT_BULKIN_DONE, USB_BULKIN_TIMEOUT, 1);
+ 			if(ret == 0)
+ 			{
+ 				if((g_bulkin_req.retcode == 0) && (g_bulkin_req.recvsize > 0))
+@@ -459,7 +521,6 @@ int write_data(const void *data, int size)
+ int write_data_large(const void *data, int size)
+ {
+ 	int ret;
+-	u32 result;
+ 
+ 	if((u32) data & 63)
+ 	{
+@@ -467,7 +528,7 @@ int write_data_large(const void *data, int size)
+ 	}
+ 
+ 	set_bulkin_req((char *) data, size);
+-	ret = sceKernelWaitEventFlag(g_transevent, USB_TRANSEVENT_BULKIN_DONE, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &result, NULL);
++	ret = wait_xfer(&g_bulkin_req, USB_TRANSEVENT_BULKIN_DONE, USB_BULKIN_TIMEOUT, 1);
+ 	if(ret == 0)
+ 	{
+ 		if((g_bulkin_req.retcode == 0) && (g_bulkin_req.recvsize > 0))
+@@ -488,8 +549,36 @@ int write_data_large(const void *data, int size)
+ 	return size;
+ }
+ 
++/* Take the bus.  Unless force is set (the hello), give up once the link is down: a caller
++   that queued behind a transfer that then timed out must not talk to the next host. */
++static int lock_bus(int force)
++{
++	SceUInt t = USB_SEMA_TIMEOUT;
++	int err;
++
++	if(!force && !g_connected)
++	{
++		return -1;
++	}
++
++	err = sceKernelWaitSema(g_mainsema, 1, &t);
++	if(err < 0)
++	{
++		MODPRINTF("Error waiting on xchg semaphore %08X\n", err);
++		return err;
++	}
++
++	if(!force && !g_connected)
++	{
++		(void) sceKernelSignalSema(g_mainsema, 1);
++		return -1;
++	}
++
++	return 0;
++}
++
+ /* Exchange a HOSTFS command with the PC host */
+-int command_xchg(void *outcmd, int outcmdlen, void *incmd, int incmdlen, const void *outdata, 
++static int command_xchg_ex(int force, void *outcmd, int outcmdlen, void *incmd, int incmdlen, const void *outdata,
+ 		int outlen, void *indata, int inlen)
+ {
+ 	struct HostFsCmd *cmd;
+@@ -497,11 +586,8 @@ int command_xchg(void *outcmd, int outcmdlen, void *incmd, int incmdlen, const v
+ 	int ret = 0;
+ 	int err = 0;
+ 
+-	/* TODO: Set timeout on semaphore */
+-	err = sceKernelWaitSema(g_mainsema, 1, NULL);
+-	if(err < 0)
++	if(lock_bus(force) < 0)
+ 	{
+-		MODPRINTF("Error waiting on xchg semaphore %08X\n", err);
+ 		return 0;
+ 	}
+ 
+@@ -569,6 +655,12 @@ int command_xchg(void *outcmd, int outcmdlen, void *incmd, int incmdlen, const v
+ 	return ret;
+ }
+ 
++int command_xchg(void *outcmd, int outcmdlen, void *incmd, int incmdlen, const void *outdata,
++		int outlen, void *indata, int inlen)
++{
++	return command_xchg_ex(0, outcmd, outcmdlen, incmd, incmdlen, outdata, outlen, indata, inlen);
++}
++
+ int usbLockBus(void)
+ {
+ 	int k1;
+@@ -599,11 +691,8 @@ int send_async(void *data, int len)
+ 	int ret = 0;
+ 	int err = 0;
+ 
+-	/* TODO: Set timeout on semaphore */
+-	err = sceKernelWaitSema(g_mainsema, 1, NULL);
+-	if(err < 0)
++	if(lock_bus(0) < 0)
+ 	{
+-		MODPRINTF("Error waiting on xchg semaphore %08X\n", err);
+ 		return 0;
+ 	}
+ 
+@@ -638,7 +727,8 @@ int send_hello_cmd(void)
+ 	cmd.cmd.magic = HOSTFS_MAGIC;
+ 	cmd.cmd.command = HOSTFS_CMD_HELLO;
+ 
+-	return command_xchg(&cmd, sizeof(cmd), &resp, sizeof(resp), NULL, 0, NULL, 0);
++	/* sent while the link is still down */
++	return command_xchg_ex(1, &cmd, sizeof(cmd), &resp, sizeof(resp), NULL, 0, NULL, 0);
+ }
+ 
+ /* Setup a async request */
+@@ -667,7 +757,14 @@ int set_ayncreq(void *data, int size)
+ 	g_async_req.size = size;
+ 	g_async_req.func = async_req_done;
+ 	sceKernelClearEventFlag(g_mainevent, ~USB_EVENT_ASYNC);
+-	return sceUsbbdReqRecv(&g_async_req);
++	g_async_armed = 1;
++	if(sceUsbbdReqRecv(&g_async_req) < 0)
++	{
++		g_async_armed = 0;
++		return -1;
++	}
++
++	return 0;
+ }
+ 
+ /* Call to ensure we are connected to the USB host */
+@@ -933,11 +1030,8 @@ int usbWriteBulkData(int chan, const void *data, int len)
+ 		cmd.channel = chan;
+ 		cmd.size = len;
+ 
+-		/* TODO: Set timeout on semaphore */
+-		err = sceKernelWaitSema(g_mainsema, 1, NULL);
+-		if(err < 0)
++		if(lock_bus(0) < 0)
+ 		{
+-			MODPRINTF("Error waiting on xchg semaphore %08X\n", err);
+ 			break;
+ 		}
+ 
+@@ -993,17 +1087,71 @@ int usbWaitForConnect(void)
+ 	return 0;
+ }
+ 
+-/* USB thread to handle attach/detach */
++/* (Re)queue the async request for the new session.  One left queued from the previous
++   session (a host that died, no detach) is cancelled first: a request is queued once. */
++static void rearm_async(void)
++{
++	if(g_async_armed)
++	{
++		sceUsbbdReqCancelAll(&endp[3]);
++		sceKernelDelayThread(10*1000);
++	}
++	set_ayncreq(async_data, sizeof(async_data));
++}
++
++/* Wait a moment for a host's hello on the bulk out endpoint, and answer it.  Polled, so
++   the USB thread keeps serving detach and async events while no host is there. */
++static void try_handshake(void)
++{
++	uint32_t magic;
++	SceUInt t = USB_MAGIC_POLL;
++	int ret;
++
++	/* a caller whose transfer just timed out may still hold the bus */
++	if(sceKernelWaitSema(g_mainsema, 1, &t) < 0)
++	{
++		return;
++	}
++	ret = read_data_ex(&magic, sizeof(magic), USB_MAGIC_POLL, 0);
++	(void) sceKernelSignalSema(g_mainsema, 1);
++
++	if((ret == sizeof(magic)) && (magic == HOSTFS_MAGIC))
++	{
++		if(send_hello_cmd())
++		{
++			rearm_async();
++			g_wantmagic = 0;
++			g_connected = 1;
++			sceKernelSetEventFlag(g_mainevent, USB_EVENT_CONNECT);
++			MODPRINTF("USB host connected\n");
++		}
++	}
++}
++
++/* USB thread to handle attach/detach, and hosts that come and go without one */
+ int usb_thread(SceSize size, void *argp)
+ {
+ 	int ret;
+ 	u32 result;
++	const u32 events = USB_EVENT_ATTACH | USB_EVENT_DETACH | USB_EVENT_ASYNC | USB_EVENT_LOST;
+ 
+ 	DEBUG_PRINTF("USB Thread Started\n");
+ 	while(1)
+ 	{
+-		ret = sceKernelWaitEventFlag(g_mainevent, USB_EVENT_ATTACH | USB_EVENT_DETACH | USB_EVENT_ASYNC
+-				, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &result, NULL);
++		result = 0;
++		if(g_wantmagic)
++		{
++			ret = sceKernelPollEventFlag(g_mainevent, events, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &result);
++			if(ret < 0)
++			{
++				result = 0;
++				ret = 0;
++			}
++		}
++		else
++		{
++			ret = sceKernelWaitEventFlag(g_mainevent, events, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &result, NULL);
++		}
+ 		if(ret < 0)
+ 		{
+ 			DEBUG_PRINTF("Error waiting on event flag %08X\n", ret);
+@@ -1015,36 +1163,50 @@ int usb_thread(SceSize size, void *argp)
+ 			DEBUG_PRINTF("Async Request Done %d %d\n", g_async_req.retcode, g_async_req.recvsize);
+ 			if((g_async_req.retcode == 0) && (g_async_req.recvsize > 0))
+ 			{
+-				fill_async(async_data, g_async_req.recvsize);
++				if((g_async_req.recvsize == sizeof(uint32_t)) && (*(uint32_t *) async_data == HOSTFS_MAGIC))
++				{
++					/* A new host announced itself while we still had a session: the old host
++					   died without a detach.  Start over and wait for its hello. */
++					result |= USB_EVENT_LOST;
++				}
++				else
++				{
++					fill_async(async_data, g_async_req.recvsize);
++				}
+ 				set_ayncreq(async_data, sizeof(async_data));
+ 			}
+ 		}
+ 
++		if(result & USB_EVENT_LOST)
++		{
++			if(g_connected)
++			{
++				MODPRINTF("New USB host: reconnecting\n");
++			}
++			g_connected = 0;
++			sceKernelClearEventFlag(g_mainevent, ~USB_EVENT_CONNECT);
++			g_wantmagic = 1;
++		}
++
+ 		if(result & USB_EVENT_DETACH)
+ 		{
+ 			g_connected = 0;
++			g_wantmagic = 0;
+ 			sceKernelClearEventFlag(g_mainevent, ~USB_EVENT_CONNECT);
+ 			DEBUG_PRINTF("USB Detach occurred\n");
+ 		}
+ 
+ 		if(result & USB_EVENT_ATTACH)
+ 		{
+-			uint32_t magic;
+ 			g_connected = 0;
++			g_wantmagic = 1;
+ 			sceKernelClearEventFlag(g_mainevent, ~USB_EVENT_CONNECT);
+ 			DEBUG_PRINTF("USB Attach occurred\n");
+-			if(read_data(&magic, sizeof(magic)) == sizeof(magic))
+-			{
+-				if(magic == HOSTFS_MAGIC)
+-				{
+-					if(send_hello_cmd())
+-					{
+-						set_ayncreq(async_data, sizeof(async_data));
+-						g_connected = 1;
+-						sceKernelSetEventFlag(g_mainevent, USB_EVENT_CONNECT);
+-					}
+-				}
+-			}
++		}
++
++		if(g_wantmagic)
++		{
++			try_handshake();
+ 		}
+ 	}
+ 
+@@ -1169,7 +1331,7 @@ int stop_func(int size, void *p)
+ 	if(g_transevent >= 0)
+ 	{
+ 		sceKernelDeleteEventFlag(g_transevent);
+-		g_mainevent = -1;
++		g_transevent = -1;
+ 	}
+ 
+ 	if(g_asyncevent >= 0)
