@@ -81,6 +81,15 @@ if(SA1_GAME_SRCS)
   # -Os for the game code: README section 7 budgets its size (3.66 MB at M1).
   set(SA1_PSP_GAME_OPT "-Os" CACHE STRING "Optimisation level for the recompiled game code on the PSP")
   add_library(sa1_game_psp OBJECT ${SA1_GAME_SRCS} ${SA1_RECOMP_OUT}/emitter/game_table.c ${SA1_OVERLAY_SRCS})
+  # The chunks that hold the console profile's hottest game functions
+  # (tools/psp_prof.py --pcs) at -O2: there the guest-address helper sa1_off
+  # is inlined, where -Os calls it out of line at every access (12 % of the
+  # frame in Station Square, 2026-10-19).  game_005 holds the game's TA
+  # writers (fn_8c037294, fn_8c037990, ...), game_003 the next ones.
+  set(SA1_PSP_HOT_CHUNKS "game_003;game_005" CACHE STRING "Game chunks compiled at -O2 on the PSP")
+  foreach(chunk ${SA1_PSP_HOT_CHUNKS})
+    set_source_files_properties(${SA1_RECOMP_OUT}/emitter/${chunk}.c PROPERTIES COMPILE_OPTIONS "-O2")
+  endforeach()
   # The runtime header first: the emitter leaves a copy of sh4_rt.h next to
   # its output, which must not shadow the one in the tree.
   target_include_directories(sa1_game_psp BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime)
