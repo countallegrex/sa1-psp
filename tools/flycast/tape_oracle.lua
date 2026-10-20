@@ -31,6 +31,13 @@
 --                     table and the trace continue as if the run had never
 --                     stopped.  (Flycast's Dreamcast.AutoLoadState setting
 --                     does not take effect from the command line.)
+--   SA1_ORACLE_AUDIO_MAP  optional: write a line per vblank, "vblank
+--                     game_frame aligned_desktop_g samples" (aligned -1 when
+--                     unaligned), samples being the stereo samples the AICA
+--                     mixer has produced so far (flycast.emulator.audioSamples,
+--                     a local Flycast patch that also writes them to the WAV
+--                     named by SA1_WAV; -1 on a Flycast without it), to place
+--                     the console's audio against desktop game frames.
 --
 -- The pad is chosen by the game's own frame counter (the game_frame watch),
 -- not by vblank: every vblank, read the counter G and present the pad the
@@ -66,6 +73,14 @@ local last_ag = -1
 function sa1_oracle_aligned_g() return last_ag end   -- for wrapper scripts (screenshots at a desktop game frame)
 local NEUTRAL = {0, 0, 0, 0, 0}
 local saves, save_pending, poked = {}, nil, false
+local AUDIO_MAP = env("SA1_ORACLE_AUDIO_MAP")
+local amap = nil
+local audio_samples = flycast.emulator and flycast.emulator.audioSamples
+local function samples_now()
+  if not audio_samples then return -1 end
+  local ok, n = pcall(audio_samples)
+  return ok and tonumber(n) or -1
+end
 
 local function load()
   for line in io.lines(GPAD) do
@@ -102,6 +117,7 @@ local function load()
     print(string.format("tape_oracle: resumed at vblank %d, offset %d, next sync %d, mode %s", vblank, offset, next_sync, tostring(last_mode)))
   end
   out = assert(io.open(OUT, "w"))
+  if AUDIO_MAP and AUDIO_MAP ~= "" then amap = assert(io.open(AUDIO_MAP, "w")) end
   local names = {"frame"}
   for _, w in ipairs(watches) do names[#names + 1] = w.name end
   names[#names + 1] = "oracle_g"
@@ -127,6 +143,7 @@ local function finish(why)
   if done then return end
   done = true
   out:close()
+  if amap then amap:close() end
   print("tape_oracle: " .. why .. " after " .. vblank .. " vblanks")
   flycast.emulator.exit()
 end
@@ -170,7 +187,8 @@ local function on_vblank()
   for i, w in ipairs(watches) do row[i + 1] = value(w) end
   row[#row + 1] = tostring(ag)
   out:write(table.concat(row, "\t"), "\n")
-  if vblank % 600 == 0 then out:flush() end
+  if amap then amap:write(string.format("%d %d %d %d\n", vblank, g, ag, samples_now())) end
+  if vblank % 600 == 0 then out:flush(); if amap then amap:flush() end end
   if not save_pending then
     for _, s in ipairs(saves) do
       if not s.done and ag >= s.g then s.done = true; save_pending = s; break end
@@ -210,6 +228,6 @@ else
   flycast_callbacks = {
     vblank = on_vblank,
     overlay = on_overlay,
-    terminate = function() if not done then done = true; out:close() end end,
+    terminate = function() if not done then done = true; out:close(); if amap then amap:close() end end end,
   }
 end
