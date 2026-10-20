@@ -178,7 +178,7 @@ def find_tool(name: str, tools: str | None) -> str | None:
         dirs.append(os.path.join(os.environ["PSPDEV"], "bin"))
     for d in dirs:
         if d and os.path.isfile(os.path.join(d, exe)):
-            return os.path.join(d, exe)
+            return os.path.abspath(os.path.join(d, exe))    # the WMI-started host runs in another cwd
     return shutil.which(name)
 
 
