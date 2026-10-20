@@ -917,14 +917,22 @@ static inline uint32_t sat_add(uint32_t c, uint32_t o) {
 /* Vertex colour by the shading rules (draw.h; the texture function is set
  * in bind_texture): alpha forced to 1 without use_alpha, and for DECAL with
  * the texture alpha ignored (REPLACE + GU_TCC_RGB takes the vertex's). */
-static inline void conv(gu_vtx *o, const draw_vertex *v) {
+/* The GE's z of a vertex: 1/w, clamped to the nearest the passes draw. */
+static inline float vtx_z(const draw_vertex *v) {
     float w = v->w > 1e-6f ? v->w : 1e-6f, z = 1.0f / w;
-    if (z < depth_zn) z = depth_zn;
+    return z < depth_zn ? depth_zn : z;
+}
+/* conv's mode for the current state (CONV_*), taken once per strip. */
+enum { CONV_ALPHA = 1, CONV_ADD_OFFSET = 2 };
+static inline int conv_mode(void) {
+    int alpha = cur.use_alpha && !(cur.texture && cur.shade == DRAW_SHADE_DECAL && cur.ignore_tex_alpha);
+    return (alpha ? CONV_ALPHA : 0) | (cur.texture ? 0 : CONV_ADD_OFFSET);
+}
+static inline void conv(gu_vtx *o, const draw_vertex *v, float z, int mode) {
     o->u = v->u; o->v = v->v;
     o->x = v->x * z; o->y = v->y * z; o->z = -z;
-    uint32_t c = v->color, a = cur.use_alpha ? c >> 24 : 255u;
-    if (!cur.texture) c = sat_add(c, v->ocolor);
-    else if (cur.shade == DRAW_SHADE_DECAL && cur.ignore_tex_alpha) a = 255u;
+    uint32_t c = v->color, a = (mode & CONV_ALPHA) ? c >> 24 : 255u;
+    if (mode & CONV_ADD_OFFSET) c = sat_add(c, v->ocolor);
     o->color = a << 24 | (c & 0xFF00u) | ((c >> 16) & 255u) | ((c & 255u) << 16);
 }
 
@@ -939,12 +947,11 @@ static int list_full(void) {
  * recorded run beside the run's own vertices and drawn after them.  The
  * colour is scaled by the vertex alpha under source-alpha blending (the
  * PowerVR adds it before the blend), in full for an additive strip. */
-static inline void conv_offset(gu_ovtx *o, const draw_vertex *v) {
+static inline unsigned mul255(unsigned c, unsigned a) { unsigned t = c * a + 128; return (t + (t >> 8)) >> 8; }   /* c * a / 255, rounded */
+static inline void conv_offset(gu_ovtx *o, const draw_vertex *v, float z, int scale) {
     uint32_t c = v->ocolor;
-    unsigned a = (cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA) ? (v->color >> 24) & 255 : 255;
-    unsigned r = ((c >> 16) & 255) * a / 255, g = ((c >> 8) & 255) * a / 255, b = (c & 255) * a / 255;
-    float w = v->w > 1e-6f ? v->w : 1e-6f, z = 1.0f / w;
-    if (z < depth_zn) z = depth_zn;
+    unsigned r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+    if (scale) { unsigned a = (v->color >> 24) & 255; r = mul255(r, a); g = mul255(g, a); b = mul255(b, a); }
     o->x = v->x * z; o->y = v->y * z; o->z = -z;
     o->color = 0xFF000000u | b << 16 | g << 8 | r;
 }
@@ -972,11 +979,12 @@ static int in_guard(const draw_vertex *v, int n) {
     return 1;
 }
 
-static uint32_t lerp_color(uint32_t a, float wa, uint32_t b, float wb, float t, float w) {
+static uint32_t lerp_color(uint32_t a, float wa, uint32_t b, float wb, float t, float iw) {
+    if (a == b) return a;
     uint32_t out = 0;
     for (int sh = 0; sh < 32; sh += 8) {
         float ca = (float)((a >> sh) & 255) * wa, cb = (float)((b >> sh) & 255) * wb;
-        float c = (ca + (cb - ca) * t) / w;
+        float c = (ca + (cb - ca) * t) * iw;
         int ci = (int)(c + 0.5f);
         out |= (uint32_t)(ci < 0 ? 0 : ci > 255 ? 255 : ci) << sh;
     }
@@ -988,11 +996,11 @@ static draw_vertex lerp_vertex(const draw_vertex *a, const draw_vertex *b, float
     o.x = a->x + (b->x - a->x) * t;
     o.y = a->y + (b->y - a->y) * t;
     o.w = a->w + (b->w - a->w) * t;
-    float w = o.w > 1e-9f ? o.w : 1e-9f;
-    o.u = (a->u * a->w + (b->u * b->w - a->u * a->w) * t) / w;
-    o.v = (a->v * a->w + (b->v * b->w - a->v * a->w) * t) / w;
-    o.color = lerp_color(a->color, a->w, b->color, b->w, t, w);
-    o.ocolor = lerp_color(a->ocolor, a->w, b->ocolor, b->w, t, w);
+    float iw = 1.0f / (o.w > 1e-9f ? o.w : 1e-9f);
+    o.u = (a->u * a->w + (b->u * b->w - a->u * a->w) * t) * iw;
+    o.v = (a->v * a->w + (b->v * b->w - a->v * a->w) * t) * iw;
+    o.color = lerp_color(a->color, a->w, b->color, b->w, t, iw);
+    o.ocolor = lerp_color(a->ocolor, a->w, b->ocolor, b->w, t, iw);
     return o;
 }
 
@@ -1110,31 +1118,47 @@ static void strip_emit(int pass, const draw_vertex *v, int n) {
     int has_offset = 0;
     if (cur.texture) for (int i = 0; i < n && !has_offset; i++) if (v[i].ocolor & 0x00FFFFFFu) has_offset = 1;
     if (nbatch[pass] + n + 3 > BATCH_MAX || (has_offset && nobatch[pass] + n + 3 > BATCH_MAX)) batch_flush_pass(pass);
-    gu_vtx *b = batch[pass];
-    if (nbatch[pass]) {               /* degenerate joint; keep the next strip's winding parity */
-        gu_vtx last = b[nbatch[pass] - 1];
-        int odd = nbatch[pass] & 1;
-        b[nbatch[pass]++] = last;
-        if (odd) b[nbatch[pass]++] = last;
-        conv(&b[nbatch[pass]++], &v[0]);
+    /* Locals, not the globals: the build has -fno-strict-aliasing, so every
+     * store into the batch would otherwise reload them. */
+    gu_vtx *b = batch[pass] + nbatch[pass];
+    gu_ovtx *o = obatch[pass] + nobatch[pass];
+    int nb = nbatch[pass], no = nobatch[pass];
+    int scale = cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA, mode = conv_mode();
+    float z0 = vtx_z(&v[0]);
+    if (nb) {                         /* degenerate joint; keep the next strip's winding parity */
+        gu_vtx last = b[-1];
+        *b++ = last;
+        if (nb & 1) *b++ = last;
+        conv(b++, &v[0], z0, mode);
     }
-    for (int i = 0; i < n; i++) conv(&b[nbatch[pass]++], &v[i]);
-    if (cur.layer != DRAW_LAYER_2D)
-        for (int i = 0; i < n; i++) {
-            float z = v[i].w > 1e-6f ? 1.0f / v[i].w : 1e6f;
-            if (z < gs.zmin_frame) gs.zmin_frame = z;
-            for (int k = 0; k < 4; k++) if (z < (float)(2 << k)) gs.znear_verts[k]++;
+    if (has_offset && no) {
+        gu_ovtx last = o[-1];
+        *o++ = last;
+        if (no & 1) *o++ = last;
+        conv_offset(o++, &v[0], z0, scale);
+    }
+    float wmax = 0.0f;
+    unsigned near16 = 0;
+    for (int i = 0; i < n; i++) {
+        float z = i ? vtx_z(&v[i]) : z0, w = v[i].w;
+        conv(b++, &v[i], z, mode);
+        if (has_offset) conv_offset(o++, &v[i], z, scale);
+        if (w > wmax) wmax = w;
+        near16 += w > 0.0625f;
+    }
+    nbatch[pass] = (int)(b - batch[pass]);
+    nobatch[pass] = (int)(o - obatch[pass]);
+    /* the depth statistics (--stats): nearest z, and the vertices nearer than z 2, 4, 8, 16 (w > 1/2 ...) */
+    if (cur.layer != DRAW_LAYER_2D && wmax > 0.0f) {
+        float zmin = 1.0f / wmax;
+        if (zmin < gs.zmin_frame) gs.zmin_frame = zmin;
+        if (near16) {
+            gs.znear_verts[3] += near16;
+            for (int i = 0; i < n; i++) {
+                float w = v[i].w;
+                gs.znear_verts[0] += w > 0.5f; gs.znear_verts[1] += w > 0.25f; gs.znear_verts[2] += w > 0.125f;
+            }
         }
-    if (has_offset) {
-        gu_ovtx *o = obatch[pass];
-        if (nobatch[pass]) {
-            gu_ovtx last = o[nobatch[pass] - 1];
-            int odd = nobatch[pass] & 1;
-            o[nobatch[pass]++] = last;
-            if (odd) o[nobatch[pass]++] = last;
-            conv_offset(&o[nobatch[pass]++], &v[0]);
-        }
-        for (int i = 0; i < n; i++) conv_offset(&o[nobatch[pass]++], &v[i]);
     }
 }
 
@@ -1147,7 +1171,8 @@ void draw_line_strip(const draw_vertex *v, int n) {
     batch_flush_pass(pass);
     if (nitems[pass] == ITEM_MAX) { gs.dropped++; return; }
     gu_vtx *p = sceGuGetMemory((int)(n * sizeof *p));
-    for (int i = 0; i < n; i++) conv(&p[i], &v[i]);
+    int mode = conv_mode();
+    for (int i = 0; i < n; i++) conv(&p[i], &v[i], vtx_z(&v[i]), mode);
     gu_item *it = &items[pass][nitems[pass]++];
     it->state = (uint16_t)(nrstates - 1); it->proj = (uint8_t)cur_proj; it->prim = GU_LINE_STRIP;
     it->n = (uint16_t)n; it->on = 0; it->v = p; it->ov = NULL;

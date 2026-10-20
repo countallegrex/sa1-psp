@@ -69,6 +69,18 @@ def nm(elf: str, distro: str) -> list[tuple[int, int, str, str]]:
     return syms
 
 
+def addr2line(elf: str, distro: str, addrs: list[int]) -> dict[int, str]:
+    """file:line (basename) of each link address."""
+    hexes = ["0x%x" % ad for ad in addrs]
+    if os.name == "nt":
+        cmd = ["wsl.exe", "-d", distro, "--exec", os.environ.get("SA1_PSP_WSL_PSPDEV", "/opt/pspdev") + "/bin/psp-addr2line",
+               "-e", wsl_path(elf)] + hexes
+    else:
+        cmd = ["psp-addr2line", "-e", elf] + hexes
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    return {ad: os.path.basename(ln.split(" (")[0]) for ad, ln in zip(addrs, r.stdout.splitlines())}
+
+
 class Symbols:
     def __init__(self, syms):
         self.syms = syms
@@ -112,6 +124,8 @@ def main() -> int:
     ap.add_argument("--top", type=int, default=40)
     ap.add_argument("--wsl-distro", default="Ubuntu")
     ap.add_argument("--out", help="also write the report here")
+    ap.add_argument("--lines", action="append", default=[], metavar="FUNC",
+                    help="also break FUNC's samples down by source line (psp-addr2line); repeatable")
     a = ap.parse_args()
 
     main_at = None
@@ -129,8 +143,10 @@ def main() -> int:
         print("psp_prof: no symbol 'main' in the ELF", file=sys.stderr)
         return 1
     delta = main_at - link_main
+    text_end = max(s[0] + s[1] for s in syms.syms) + 0x1000    # the PRX's code (and its stubs); past it: the kernel, other modules
 
     run, wait_by, ra_of = collections.Counter(), collections.Counter(), collections.defaultdict(collections.Counter)
+    at_of = collections.defaultdict(collections.Counter)
     srcs = {}
     n = outside = 0
     t0 = t1 = None
@@ -162,13 +178,15 @@ def main() -> int:
             s = syms.find(real - delta)
             wait_by[s[2] if s else "0x%08x" % real] += 1
             continue
-        s = syms.find(epc - delta)
+        s = syms.find(epc - delta) if 0 <= epc - delta < text_end else None
         if not s:
             outside += 1
-            run["(outside the PRX: kernel, pspsdk modules) 0x%08x" % (epc & 0xFFFFF000)] += 1
+            run["(outside the PRX: kernel, pspsdk modules) 0x%08x" % (epc & 0xFFFF0000)] += 1
             continue
         run[s[2]] += 1
         srcs[s[2]] = s[3]
+        if s[2] in a.lines:
+            at_of[s[2]][epc - delta] += 1
         if ra:
             c = syms.find(ra - delta)
             ra_of[s[2]][c[2] if c else "0x%08x" % ra] += 1
@@ -208,6 +226,20 @@ def main() -> int:
         shown += 1
         if shown == 15:
             break
+    for fn in a.lines:
+        addrs = at_of.get(fn)
+        if not addrs:
+            p(f"{fn}: no samples")
+            continue
+        names = addr2line(a.elf, a.wsl_distro, sorted(addrs))
+        by_line = collections.Counter()
+        for ad, k in addrs.items():
+            by_line[names.get(ad, "0x%08x" % ad)] += k
+        tot = sum(addrs.values())
+        p(f"{fn}, {tot} samples, by source line:")
+        for ln, k in by_line.most_common(25):
+            p(f"  {100.0 * k / tot:6.2f} %  {k:6d}  {ln}")
+        p()
     text = "\n".join(out)
     print(text)
     if a.out:
