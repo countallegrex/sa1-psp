@@ -835,6 +835,21 @@ static uint8_t vpool[VPOOL_BYTES] __attribute__((aligned(64)));
 static uint32_t vpool_top;
 static gu_vtx *batch[PASSES], *vend[PASSES];
 static gu_ovtx *obatch[PASSES], *oend[PASSES];
+/* Each stream's first cache line not yet claimed: everything the frame wrote
+ * in its chunk lies below it.  A store to a line not in the data cache first
+ * reads the whole line from RAM; the pool is written front to back and every
+ * byte read back is written first, so each new line is claimed instead with
+ * cache op 0x18, Create Dirty Exclusive (no fill; PPSSPP ignores it: "for
+ * avoiding a cacheline fill before writing to it"). */
+static uint8_t *vline[PASSES], *oline[PASSES];
+
+static inline uint8_t *claim_lines(uint8_t *line, const void *end) {
+    while (line < (const uint8_t *)end) {
+        __asm__ volatile("cache 0x18, 0(%0)" : : "r"(line) : "memory");
+        line += 64;
+    }
+    return line;
+}
 static int nbatch[PASSES], nobatch[PASSES];
 
 static void *pool_chunk(uint32_t bytes) {
@@ -851,6 +866,7 @@ static void rec_reset(void) {
     for (int p = 0; p < PASSES; p++) {
         nitems[p] = nbatch[p] = nobatch[p] = 0;
         batch[p] = vend[p] = NULL;
+        vline[p] = oline[p] = NULL;
         obatch[p] = oend[p] = NULL;
     }
 }
@@ -1154,8 +1170,8 @@ static void strip_emit(int pass, const draw_vertex *v, int n) {
     int need_o = has_offset && (!oend[pass] || obatch[pass] + nobatch[pass] + n + 3 > oend[pass]);
     if (need_v || need_o) {           /* a new chunk: the open runs end here (a run lies in one chunk) */
         batch_flush_pass(pass);
-        if (need_v) { batch[pass] = pool_chunk(BATCH_MAX * sizeof(gu_vtx)); vend[pass] = batch[pass] ? batch[pass] + BATCH_MAX : NULL; }
-        if (need_o) { obatch[pass] = pool_chunk(BATCH_MAX * sizeof(gu_ovtx)); oend[pass] = obatch[pass] ? obatch[pass] + BATCH_MAX : NULL; }
+        if (need_v) { batch[pass] = pool_chunk(BATCH_MAX * sizeof(gu_vtx)); vend[pass] = batch[pass] ? batch[pass] + BATCH_MAX : NULL; vline[pass] = (uint8_t *)batch[pass]; }
+        if (need_o) { obatch[pass] = pool_chunk(BATCH_MAX * sizeof(gu_ovtx)); oend[pass] = obatch[pass] ? obatch[pass] + BATCH_MAX : NULL; oline[pass] = (uint8_t *)obatch[pass]; }
         if (!batch[pass] || (has_offset && !obatch[pass])) {
             gs.dropped++; gs.pool_full++;   /* the pool is spent: as with a full list */
             return;
@@ -1166,15 +1182,18 @@ static void strip_emit(int pass, const draw_vertex *v, int n) {
     gu_vtx *b = batch[pass] + nbatch[pass];
     gu_ovtx *o = obatch[pass] + nobatch[pass];
     int nb = nbatch[pass], no = nobatch[pass];
+    uint8_t *vl = vline[pass], *ol = oline[pass];
     int scale = cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA, mode = conv_mode();
     float z0 = vtx_z(&v[0]);
     if (nb) {                         /* degenerate joint; keep the next strip's winding parity */
+        vl = claim_lines(vl, b + 3);
         gu_vtx last = b[-1];
         *b++ = last;
         if (nb & 1) *b++ = last;
         conv(b++, &v[0], z0, mode);
     }
     if (has_offset && no) {
+        ol = claim_lines(ol, o + 3);
         gu_ovtx last = o[-1];
         *o++ = last;
         if (no & 1) *o++ = last;
@@ -1184,13 +1203,15 @@ static void strip_emit(int pass, const draw_vertex *v, int n) {
     unsigned near16 = 0;
     for (int i = 0; i < n; i++) {
         float z = i ? vtx_z(&v[i]) : z0, w = v[i].w;
+        vl = claim_lines(vl, b + 1);
         conv(b++, &v[i], z, mode);
-        if (has_offset) conv_offset(o++, &v[i], z, scale);
+        if (has_offset) { ol = claim_lines(ol, o + 1); conv_offset(o++, &v[i], z, scale); }
         if (w > wmax) wmax = w;
         near16 += w > 0.0625f;
     }
     nbatch[pass] = (int)(b - batch[pass]);
     nobatch[pass] = (int)(o - obatch[pass]);
+    vline[pass] = vl; oline[pass] = ol;
     /* the depth statistics (--stats): nearest z, and the vertices nearer than z 2, 4, 8, 16 (w > 1/2 ...) */
     if (cur.layer != DRAW_LAYER_2D && wmax > 0.0f) {
         float zmin = 1.0f / wmax;
