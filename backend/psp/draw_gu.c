@@ -57,7 +57,7 @@
 #define SCR_H 272
 #define BUF_W 512
 #define FB_BYTES (BUF_W * SCR_H * 2)          /* 0x44000 */
-#define LIST_BYTES (2u << 20)
+#define LIST_BYTES (640u << 10)               /* commands only: the vertices are in vpool */
 #define LIST_SLACK (64u << 10)                /* stop adding strips this close to the end */
 
 static uint32_t list_mem[LIST_BYTES / 4] __attribute__((aligned(64)));
@@ -73,7 +73,7 @@ static const char *shot_path;
 static int cull_flip;                         /* --cull-flip (main_psp.c): the other winding convention */
 
 /* Counters for the report beyond draw_stats. */
-static struct { uint32_t list_high, dropped, offscreen, mirrors, mirror_fail, downscaled, frames;
+static struct { uint32_t list_high, pool_high, pool_full, dropped, offscreen, mirrors, mirror_fail, downscaled, frames;
                 uint32_t flush_state, flush_proj, flush_offset, last_strips, last_draws, last_states;
                 float zmin_frame, zmin_win, zmin_last; uint32_t znear_verts[4];   /* nearest 3D z; vertices with z < 2, 4, 8, 16 */
                 uint64_t gpu_wait_us, swap_wait_us, replay_us, frame_us_sum, frame_us_max, last_end; } gs;
@@ -652,6 +652,7 @@ static void write_shot(void) {
 void draw_end_frame(void) {
     if (headless || !list_open) return;
     uint64_t t_replay = sa1_plat_time_us();
+    sceKernelDcacheWritebackAll();    /* the arena's vertices into RAM before the GE reads them */
     replay();
     gs.replay_us += sa1_plat_time_us() - t_replay;
     uint32_t used = (uint32_t)sceGuCheckList();
@@ -684,12 +685,12 @@ void draw_end_frame(void) {
 
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
 void draw_gu_report(void) {
-    sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, list replay %.2f ms/frame, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB; "
+    sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, list replay %.2f ms/frame, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB, vertices %u KB (%u strips over); "
             "%u strips dropped (list full), %u clipped to the GE's guard band",
             gs.frames, gs.frames ? gs.frame_us_sum / 1000.0 / gs.frames : 0.0, gs.frame_us_max / 1000.0,
             gs.frames ? gs.replay_us / 1000.0 / gs.frames : 0.0,
             gs.frames ? gs.gpu_wait_us / 1000.0 / gs.frames : 0.0, gs.frames ? gs.swap_wait_us / 1000.0 / gs.frames : 0.0,
-            gs.list_high / 1024u, gs.dropped, gs.offscreen);
+            gs.list_high / 1024u, gs.pool_high / 1024u, gs.pool_full, gs.dropped, gs.offscreen);
     sa1_log("draw: last frame %u strips -> %u GE draws, %u state changes; batch breaks by state %u, projection %u; "
             "%u mirrors (%u too big), %u textures downscaled", gs.last_strips, gs.last_draws, gs.last_states,
             gs.flush_state, gs.flush_proj, gs.mirrors, gs.mirror_fail, gs.downscaled);
@@ -816,13 +817,42 @@ static draw_state rstates[STATE_MAX];
 static int nrstates;
 static gu_item items[PASSES][ITEM_MAX];
 static int nitems[PASSES];
-static gu_vtx batch[PASSES][BATCH_MAX];
-static gu_ovtx obatch[PASSES][BATCH_MAX];
+/* The frame's vertices, written once where the GE reads them.  They used to
+ * be converted into a static batch and copied into the display list at each
+ * flush: two passes over memory far larger than the 16 KB data cache, the
+ * second through the list's uncached alias (memcpy was 3.6 % of the frame).
+ * Now a run grows in place inside a chunk of a cached pool (batch[pass] is
+ * where the open run starts, vend[pass] its chunk's end) and a flush only
+ * records where it starts.  The four streams (vertices and offset vertices,
+ * far and near pass) take chunks from one pool as they need them: their
+ * shares differ from scene to scene (the far pass took 760 KB of vertices
+ * and over 256 KB of offset vertices late in title_menu.tape, the near pass
+ * 20 KB).  draw_end_frame writes the cache back before replay() hands the
+ * runs to the GE, and the frame ends with sceGuSync, so the pool restarts at
+ * every frame. */
+#define VPOOL_BYTES (1792u << 10)
+static uint8_t vpool[VPOOL_BYTES] __attribute__((aligned(64)));
+static uint32_t vpool_top;
+static gu_vtx *batch[PASSES], *vend[PASSES];
+static gu_ovtx *obatch[PASSES], *oend[PASSES];
 static int nbatch[PASSES], nobatch[PASSES];
+
+static void *pool_chunk(uint32_t bytes) {
+    if (vpool_top + bytes > VPOOL_BYTES) return NULL;
+    void *c = vpool + vpool_top;
+    vpool_top += bytes;
+    return c;
+}
 
 static void rec_reset(void) {
     nrstates = 0;
-    for (int p = 0; p < PASSES; p++) nitems[p] = nbatch[p] = nobatch[p] = 0;
+    if (vpool_top > gs.pool_high) gs.pool_high = vpool_top;
+    vpool_top = 0;
+    for (int p = 0; p < PASSES; p++) {
+        nitems[p] = nbatch[p] = nobatch[p] = 0;
+        batch[p] = vend[p] = NULL;
+        obatch[p] = oend[p] = NULL;
+    }
 }
 
 static int rec_state(const draw_state *s) {
@@ -837,12 +867,12 @@ static void batch_flush_pass(int pass) {
     gu_item *it = &items[pass][nitems[pass]++];
     it->state = (uint16_t)(nrstates - 1); it->proj = (uint8_t)cur_proj; it->prim = GU_TRIANGLE_STRIP;
     it->n = (uint16_t)nbatch[pass]; it->on = (uint16_t)nobatch[pass];
-    it->v = sceGuGetMemory((int)(nbatch[pass] * sizeof(gu_vtx)));
-    memcpy(it->v, batch[pass], nbatch[pass] * sizeof(gu_vtx));
+    it->v = batch[pass];
+    batch[pass] += nbatch[pass];
     it->ov = NULL;
     if (nobatch[pass]) {
-        it->ov = sceGuGetMemory((int)(nobatch[pass] * sizeof(gu_ovtx)));
-        memcpy(it->ov, obatch[pass], nobatch[pass] * sizeof(gu_ovtx));
+        it->ov = obatch[pass];
+        obatch[pass] += nobatch[pass];
     }
     nbatch[pass] = nobatch[pass] = 0;
 }
@@ -1120,6 +1150,17 @@ static void strip_emit(int pass, const draw_vertex *v, int n) {
     int has_offset = 0;
     if (cur.texture) for (int i = 0; i < n && !has_offset; i++) if (v[i].ocolor & 0x00FFFFFFu) has_offset = 1;
     if (nbatch[pass] + n + 3 > BATCH_MAX || (has_offset && nobatch[pass] + n + 3 > BATCH_MAX)) batch_flush_pass(pass);
+    int need_v = !vend[pass] || batch[pass] + nbatch[pass] + n + 3 > vend[pass];
+    int need_o = has_offset && (!oend[pass] || obatch[pass] + nobatch[pass] + n + 3 > oend[pass]);
+    if (need_v || need_o) {           /* a new chunk: the open runs end here (a run lies in one chunk) */
+        batch_flush_pass(pass);
+        if (need_v) { batch[pass] = pool_chunk(BATCH_MAX * sizeof(gu_vtx)); vend[pass] = batch[pass] ? batch[pass] + BATCH_MAX : NULL; }
+        if (need_o) { obatch[pass] = pool_chunk(BATCH_MAX * sizeof(gu_ovtx)); oend[pass] = obatch[pass] ? obatch[pass] + BATCH_MAX : NULL; }
+        if (!batch[pass] || (has_offset && !obatch[pass])) {
+            gs.dropped++; gs.pool_full++;   /* the pool is spent: as with a full list */
+            return;
+        }
+    }
     /* Locals, not the globals: the build has -fno-strict-aliasing, so every
      * store into the batch would otherwise reload them. */
     gu_vtx *b = batch[pass] + nbatch[pass];
