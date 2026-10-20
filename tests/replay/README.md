@@ -246,7 +246,17 @@ desktop build also skips whole phases the console plays, so the alignment
 is re-anchored at each game-mode change both runs share
 (`tools/tape_diff.py gpad` writes the desktop's mode changes as `sync`
 lines; the Lua script matches Flycast's mode changes to them and writes the
-aligned game frame as an `oracle_g` column). In a mode the desktop never
+aligned game frame as an `oracle_g` column). The anchor is the first count
+after the last one seen in the old mode: the counter can step by two
+between two vblanks at a mode change (the Emerald Coast entry does on the
+console), and anchoring on the count the vblank shows put the console one
+game frame early. Flycast latches the pad a vblank after the script sets
+it, so each vblank presents the desktop's pad of the next vblank (`gpad`
+writes each game frame's first-vblank pad as `first` lines). With both, the
+scripted route's Sonic matches the console bit for bit into Emerald Coast.
+Library states saved before this rule carry the old offset: rebuild a
+tape's library (`oracle_states.py build`) before trusting `--from-state`
+past a shifted anchor. In a mode the desktop never
 entered the pad is neutral, with Start tapped every 60 vblanks after 120
 (console-only prompts). `tools/tape_diff.py diff` compares the watched
 values at the last vblank of each aligned game frame, within the watch

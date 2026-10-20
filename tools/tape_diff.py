@@ -83,23 +83,29 @@ def offsets(rows):
 def cmd_gpad(a):
     tape = tape_io.read(a.tape)
     _, rows = read_tsv(a.trace)
-    pads = {}
+    pads, firsts = {}, {}
     for r in rows:                 # the last vblank of a game frame wins: that is when the game samples
-        pads[int(r[COUNTER])] = tape.pad(int(r["frame"]))
+        g = int(r[COUNTER])
+        pads[g] = tape.pad(int(r["frame"]))
+        firsts.setdefault(g, pads[g])   # and the first one (tape_oracle.lua presents it a vblank early)
     if not pads:
         sys.exit("%s: empty trace" % a.trace)
     lines = ["# game-frame pads from %s and %s (tools/tape_diff.py gpad)" % (os.path.basename(a.tape), os.path.basename(a.trace)),
              "# sync MODE GAME_FRAME: the desktop run entered game mode MODE at GAME_FRAME",
-             "# GAME_FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG"]
-    mode = None
+             "# GAME_FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG: the pad at the game frame's last vblank",
+             "# first GAME_FRAME BUTTONS ...: the pad at its first vblank"]
+    mode, prev = None, None
     for r in rows:
         if MODE in r and r[MODE] != mode:
             mode = r[MODE]
-            lines.append("sync %d %d" % (mode, r[COUNTER]))
+            g = int(r[COUNTER])    # the first count after the last one seen in the old mode (tape_oracle.lua)
+            lines.append("sync %d %d" % (mode, prev + 1 if prev is not None and g > prev + 1 else g))
+        prev = int(r[COUNTER])
     last = (0, 0, 0, 0, 0)
     for g in range(min(pads), max(pads) + 1):
         last = pads.get(g, last)   # a lag frame skips a count: keep the pad
         lines.append("%d %x %d %d %d %d" % ((g,) + last))
+        lines.append("first %d %x %d %d %d %d" % ((g,) + firsts.get(g, last)))
     text = "\n".join(lines) + "\n"
     if a.out:
         with open(a.out, "w", encoding="utf-8", newline="\n") as f:

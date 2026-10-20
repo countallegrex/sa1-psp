@@ -44,13 +44,21 @@
 -- desktop run presented in game frame G - offset.  Flycast's own GD-ROM
 -- timing then does not shift the input.  The offset is re-anchored at each
 -- game-mode change the desktop run also had ("sync" lines): the desktop
--- skips phases the console plays (boot screens, the intro movie).  In a mode
+-- skips phases the console plays (boot screens, the intro movie).  The
+-- anchor is the first game frame after the last one seen in the old mode:
+-- where the counter steps by more than one between two vblanks (a short
+-- loop pass, often the mode change itself), the change happened in the
+-- first unseen count, not in the one the vblank shows.  In a mode
 -- the desktop never entered the row is marked unaligned (oracle_g = -1) and
 -- the pad is neutral, except that after 120 vblanks Start is tapped every 60:
 -- such a mode can be a console-only prompt (game mode 13 at boot waits for
 -- a button; the desktop build never shows it).  Buttons go to kcode (active low, same bits as
 -- the tape), the stick and triggers to Flycast's 16-bit axes (tape value
 -- times 256: the controller byte is then the tape value plus 128).
+-- Flycast latches the pad one vblank after this script sets it, so each
+-- vblank presents what the desktop had at the next one: in the first vblank
+-- of game frame G the pad of G's last vblank ("G ..." lines), in a later
+-- vblank the pad of G+1's first vblank ("first G+1 ..." lines).
 --
 -- Part of sa1-psp (MIT).
 
@@ -63,13 +71,15 @@ local STATE_OUT = env("SA1_ORACLE_STATE_OUT")
 local LOAD_SLOT = tonumber(env("SA1_ORACLE_LOAD_SLOT") or "") or -1
 local loaded = LOAD_SLOT < 0          -- vblanks before the state is in are not the run
 
-local pads, first_g, last_g = {}, nil, -1
+local pads, firsts, first_g, last_g = {}, {}, nil, -1
+local cur_g, phase = nil, 0   -- the counter and the vblanks since it changed
 local watches, counter, modew = {}, nil, nil
 local syncs, next_sync, offset, aligned, last_mode, unaligned_since = {}, 1, 0, true, nil, 0
 local START_TAP = {8, 0, 0, 0, 0}
 local LOOKAHEAD = 4          -- desktop mode changes the console may skip before a match
 local out, vblank, done = nil, 0, false
 local last_ag = -1
+local prev_g = nil           -- the counter at the previous vblank (the sync anchor)
 function sa1_oracle_aligned_g() return last_ag end   -- for wrapper scripts (screenshots at a desktop game frame)
 local NEUTRAL = {0, 0, 0, 0, 0}
 local saves, save_pending, poked = {}, nil, false
@@ -86,6 +96,8 @@ local function load()
   for line in io.lines(GPAD) do
     local sm, sg = line:match("^sync%s+(%d+)%s+(%d+)")
     if sm then syncs[#syncs + 1] = {mode = tonumber(sm), g = tonumber(sg)} end
+    local fg, fb, fx, fy, flt, frt = line:match("^first%s+(%d+)%s+(%x+)%s+(%-?%d+)%s+(%-?%d+)%s+(%d+)%s+(%d+)")
+    if fg then firsts[tonumber(fg)] = {tonumber(fb, 16), tonumber(fx), tonumber(fy), tonumber(flt), tonumber(frt)} end
     local g, b, x, y, lt, rt = line:match("^(%d+)%s+(%x+)%s+(%-?%d+)%s+(%-?%d+)%s+(%d+)%s+(%d+)")
     if g then
       g = tonumber(g)
@@ -165,16 +177,23 @@ local function on_vblank()
       if syncs[k].mode == mode then found = k; break end
     end
     if found then
-      offset, aligned, next_sync = g - syncs[found].g, true, found + 1
-      print(string.format("tape_oracle: vblank %d, game mode %d at game frame %d = desktop %d", vblank, mode, g, syncs[found].g))
+      local at = (prev_g and g > prev_g + 1) and prev_g + 1 or g
+      offset, aligned, next_sync = at - syncs[found].g, true, found + 1
+      print(string.format("tape_oracle: vblank %d, game mode %d at game frame %d = desktop %d", vblank, mode, at, syncs[found].g))
     else
       aligned = next_sync > 1 and syncs[next_sync - 1].mode == mode
       unaligned_since = vblank
     end
   end
+  prev_g = g
   local ag = aligned and g - offset or -1
   last_ag = ag
-  local p = aligned and pads[ag] or NEUTRAL
+  if g == cur_g then phase = phase + 1 else cur_g, phase = g, 0 end
+  local p = NEUTRAL
+  if aligned then
+    if phase == 0 then p = pads[ag] or NEUTRAL
+    else p = firsts[ag + 1] or pads[ag + 1] or pads[ag] or NEUTRAL end
+  end
   local waited = vblank - unaligned_since
   if not aligned and waited >= 120 and waited % 60 < 2 then p = START_TAP end
   input.releaseButtons(1, 0xFFFF)
