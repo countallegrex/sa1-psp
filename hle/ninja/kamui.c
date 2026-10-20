@@ -718,6 +718,18 @@ static void parse_list(int want, int sorted) {
             if (runs[b][k].list == want) parse_region(runs[b][k].lo, runs[b][k].hi, want, sorted);
 }
 
+/* The TA buffers are a few hundred KB the game wrote this frame, read once,
+ * front to back: on the PSP, ask for the line TA_AHEAD bytes on while this one
+ * is parsed (cache op 0x1E, Fill).  Bytes past the region are still guest RAM
+ * (ta_host), so the hint never faults. */
+#ifdef __psp__
+#define TA_AHEAD 512
+#define TA_FILL(ptr) __asm__ volatile("cache 0x1e, 0(%0)" : : "r"(ptr))
+#else
+#define TA_AHEAD 0
+#define TA_FILL(ptr) ((void)(ptr))
+#endif
+
 /* Parse one buffer region.  Polygons of list types 0 and 4 draw at once
  * (sorted = 0); translucent ones (2) are collected for sorting. */
 static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted) {
@@ -731,6 +743,7 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
     uint32_t p = start;
     int in_strip = 0;
     while (p + 32 <= end) {
+        if (TA_AHEAD && !((uintptr_t)(hb + (p - start)) & 63) && p + TA_AHEAD < end) TA_FILL(hb + (p - start) + TA_AHEAD);
         uint32_t pcw = TRD32(p);
         uint32_t type = pcw >> 29;
         if (type == 7) {                                   /* vertex */
