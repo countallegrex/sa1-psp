@@ -15,6 +15,12 @@ build-psp/sa1psp) to it as host0:.  One run:
      given);
   2. starts usbhostfs_pc rooted at DIR if nothing listens on its port
      (it keeps running for the next run: leave it running, see below);
+     a host already listening is reused as it is.  On Windows the host is
+     started through WMI (Win32_Process.Create, log in
+     DIR/psplink-run/usbhostfs_pc.log) so that it belongs to no session:
+     subprocess's DETACHED_PROCESS stays inside the launching shell's job
+     object, and on 2026-10-19 a session closing killed its host that way
+     and wedged the connected PSP;
   3. waits for PSPLink to answer, resets it ('reset': a clean reboot into
      PSPLink, so the run starts from the same state every time), waits for
      it to come back and checks host0: is DIR;
@@ -177,17 +183,42 @@ def port_open(port: int) -> bool:
         return False
 
 
+def start_hostfs_wmi(exe: str, root: str, log_path: str) -> None:
+    """Windows: usbhostfs_pc started by WMI (Win32_Process.Create), so the
+    WMI provider host is its creator and no session's process tree or job
+    object owns it.  subprocess's DETACHED_PROCESS stays in the launching
+    shell's job object: on 2026-10-19 a session closing took its host down
+    with it and wedged the connected PSP.  cmd.exe /c does the log
+    redirection (Win32_Process.Create has no standard handles)."""
+    def ps_str(s: str) -> str:
+        return "'" + s.replace("'", "''") + "'"
+    cmdline = f'cmd.exe /c ""{exe}" > "{log_path}" 2>&1"'
+    script = ("$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
+              f"@{{CommandLine={ps_str(cmdline)}; CurrentDirectory={ps_str(root)}}}; "
+              "Write-Output \"$($r.ReturnValue) $($r.ProcessId)\"")
+    import base64
+    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    try:
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc],
+                             capture_output=True, text=True, timeout=60).stdout.split()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise SetupError(f"usbhostfs_pc: Win32_Process.Create through powershell failed: {e}")
+    if len(out) < 2 or out[-2] != "0":
+        raise SetupError(f"usbhostfs_pc: Win32_Process.Create returned {' '.join(out) or 'nothing'}")
+    print(f"psp_run: usbhostfs_pc launched through WMI (cmd.exe pid {out[-1]}); it outlives this session", flush=True)
+
+
 def start_hostfs(exe: str, root: str, log_path: str) -> None:
     """usbhostfs_pc with root as its cwd: host0..7 default to the cwd (a root
     argument not starting with '/' is taken relative to the cwd, so a Windows
     path cannot be passed to the Cygwin build)."""
-    log = open(log_path, "w")
-    flags = 0
     if os.name == "nt":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen([exe], cwd=root, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                     creationflags=flags, close_fds=True)
-    log.close()
+        start_hostfs_wmi(exe, root, log_path)
+    else:
+        log = open(log_path, "w")
+        subprocess.Popen([exe], cwd=root, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                         start_new_session=True, close_fds=True)
+        log.close()
     for _ in range(50):
         if port_open(BASE_PORT):
             return
