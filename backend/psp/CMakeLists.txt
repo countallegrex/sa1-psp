@@ -61,6 +61,19 @@ add_custom_command(
   COMMENT "Building sa1exc.prx (kernel-mode crash screen)")
 add_custom_target(sa1exc ALL DEPENDS ${CMAKE_BINARY_DIR}/sa1psp/sa1exc.prx)
 
+# sa1prof.prx: the kernel-mode PC sampler for --prof (prof/sa1prof.c), built
+# the same way.
+set(SA1_PROF_DIR ${CMAKE_BINARY_DIR}/sa1prof)
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/sa1psp/sa1prof.prx
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/prof ${SA1_PROF_DIR}
+  COMMAND make -C ${SA1_PROF_DIR}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/sa1psp
+  COMMAND ${CMAKE_COMMAND} -E copy ${SA1_PROF_DIR}/sa1prof.prx ${CMAKE_BINARY_DIR}/sa1psp/sa1prof.prx
+  DEPENDS prof/sa1prof.c prof/Makefile
+  COMMENT "Building sa1prof.prx (kernel-mode PC sampler)")
+add_custom_target(sa1prof ALL DEPENDS ${CMAKE_BINARY_DIR}/sa1psp/sa1prof.prx)
+
 file(GLOB SA1_GAME_SRCS CONFIGURE_DEPENDS "${SA1_RECOMP_OUT}/emitter/game_[0-9]*.c")
 file(GLOB SA1_OVERLAY_SRCS CONFIGURE_DEPENDS "${SA1_RECOMP_OUT}/overlays/emitter/*/ovl_*.c")
 if(SA1_GAME_SRCS)

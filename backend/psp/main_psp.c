@@ -30,6 +30,11 @@
  *   --poke FRAME:ADDR:VALUE[:SIZE]  write a guest word (as the desktop)
  *   --save FRAME:FILE, --load FILE  save states (savestate_psp.c): ~30 MB,
  *                   only for the build and memory layout that saved them
+ *   --prof FROM:TO[:FILE]  sample the CPU's PC every ~1 ms from guest frame
+ *                   FROM to TO (prof/sa1prof.c, a kernel module through
+ *                   kubridge) into FILE (default prof_pc.bin);
+ *                   tools/psp_prof.py --pcs names the samples
+ *   --prof-us N     the sampling period (default 1000 us)
  *
  * Without args.txt the EBOOT plays: the pad drives the game, frames are
  * paced to the vblank.  HOME exits.
@@ -103,6 +108,12 @@ static int npokes;
 static struct { uint32_t frame; const char *path; } saves[16];   /* --save FRAME:FILE */
 static int nsaves;
 static const char *load_path;
+/* --prof: the buffer prof/sa1prof.c's alarm handler fills (same layout). */
+struct prof_buf { volatile uint32_t magic, run, count, cap, period_us, missed, alarm, reserved; uint32_t pc[]; };
+static struct prof_buf *prof;
+static uint32_t prof_from, prof_to, prof_us = 1000;
+static const char *prof_path;
+#define PROF_CAP (96u * 1024u)
 
 /* --stage: straight into a level, past the title and menus (a test
  * checkpoint: seconds instead of the tape's minutes on the console).  At
@@ -240,9 +251,47 @@ static void milestones(uint32_t frame) {
     mode = m; level = l; act = a;
 }
 
+/* --prof: load the sampler with the buffer's address as its argument; it
+ * records while run == 1 and stops its alarm when run == 2. */
+static const char *abs_path(char *out, unsigned n, const char *p);
+static void prof_start(void) {
+    char path[300];
+    prof = malloc(sizeof *prof + PROF_CAP * 4u);
+    if (!prof) { sa1_log("prof: no memory for %u samples", PROF_CAP); prof_path = NULL; return; }
+    memset(prof, 0, sizeof *prof);
+    prof->magic = 0x464F5250u;
+    prof->cap = PROF_CAP;
+    prof->period_us = prof_us;
+    SceUID m = kuKernelLoadModule(abs_path(path, sizeof path, "sa1prof.prx"), 0, NULL);
+    struct prof_buf *arg = prof;
+    int st = 0, r = m >= 0 ? sceKernelStartModule(m, sizeof arg, &arg, &st, NULL) : m;
+    sa1_log("prof: sa1prof.prx load 0x%08x, start 0x%08x, alarm 0x%08x; frames %u-%u every ~%u us -> %s",
+            (unsigned)m, (unsigned)r, (unsigned)prof->alarm, prof_from, prof_to, prof_us, prof_path);
+    if (m < 0 || r < 0 || (int)prof->alarm <= 0) prof_path = NULL;
+}
+
+static void prof_frame(uint32_t frame) {
+    if (frame >= prof_from && !prof->run) { prof->run = 1; sa1_log("prof: sampling from frame %u", frame); }
+    if (frame < prof_to) return;
+    prof->run = 2;
+    char path[300];
+    uint32_t n = prof->count;
+    FILE *f = fopen(abs_path(path, sizeof path, prof_path), "wb");
+    if (f) {
+        uint32_t hdr[4] = { 0x464F5250u, n, prof->period_us, prof->missed };
+        fwrite(hdr, 4, 4, f);
+        fwrite(prof->pc, 4, n, f);
+        fclose(f);
+    }
+    sa1_log("prof: %u samples (%u missed) over frames %u-%u -> %s%s", n, (unsigned)prof->missed,
+            prof_from, prof_to, prof_path, f ? "" : " (cannot write)");
+    prof_path = NULL;
+}
+
 static void on_frame(uint32_t frame) {
     if (!headless && !no_pace) pace(frame);
     milestones(frame);
+    if (prof_path) prof_frame(frame);
     uint32_t b = 0;
     int scripted = 0;
     for (int i = 0; i < npresses; i++)
@@ -457,6 +506,12 @@ int main(int argc, char **argv) {
             saves[nsaves].path = *end == ':' ? end + 1 : "frame.state";
             nsaves++;
         } else if (!strcmp(av[i], "--load") && i + 1 < args_c) load_path = av[++i];
+        else if (!strcmp(av[i], "--prof") && i + 1 < args_c) {        /* FROM:TO[:FILE] */
+            char *end;
+            prof_from = (uint32_t)strtoul(av[++i], &end, 0);
+            prof_to = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : prof_from + 300;
+            prof_path = *end == ':' ? end + 1 : "prof_pc.bin";
+        } else if (!strcmp(av[i], "--prof-us") && i + 1 < args_c) prof_us = (uint32_t)strtoul(av[++i], NULL, 0);
         else if (!strcmp(av[i], "--stage") && i + 1 < args_c) {
             if (stage_arg(av[++i]) != 0) { /* logged below */ }
         } else if (input_tape_arg(args_c, av, &i)) continue;
@@ -482,6 +537,7 @@ int main(int argc, char **argv) {
         sa1_log("crash screen: sa1exc.prx load 0x%08x, start 0x%08x%s", (unsigned)m, (unsigned)r,
                 r >= 0 ? " (exceptions now show their registers)" : " (not installed: an exception powers the console off)");
     }
+    if (prof_path) prof_start();
     /* The FPU as the SH-4 runs the game (FPSCR 0x00040001: every exception
      * masked, denormals are zero).  The PSP starts threads with the invalid,
      * divide-by-zero and overflow traps enabled (FCSR 0x00000E00): a float

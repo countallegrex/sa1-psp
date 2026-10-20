@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """Name the console profile samples of tools/psp_run.py --sample-after.
 
-    psp_prof.py [--samples FILE] [--log FILE] [--elf FILE] [--top N] [--out FILE]
+    psp_prof.py [--samples FILE | --pcs FILE] [--log FILE] [--elf FILE] [--top N] [--out FILE]
+
+--pcs FILE: the samples of the game's own sampler (main_psp.c --prof,
+backend/psp/prof/sa1prof.c: cop0 EPC from a kernel alarm every ~1 ms,
+whichever thread was running; a 16-byte header 'PROF', count, period in
+us, missed, then the PCs as little-endian words).  PCs outside the PRX
+are the kernel, other modules and the idle thread (the game waiting).
+These have no return address, so the callers section is left out.  On
+firmware 6.61 thctx (--samples, psp_run.py --sample-after) reads a
+context that is not the thread's: use --pcs.
 
 Each sample is the game thread's PC at a moment PSPLink's shell preempted
 it (prof_samples.tsv: t, epc, real_epc, ra, sp).  A non-zero real_epc is
@@ -97,6 +106,7 @@ def group_of(name: str, src: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--samples", default=os.path.join(STAGE, "prof_samples.tsv"))
+    ap.add_argument("--pcs", help="the binary samples of main_psp.c --prof (instead of --samples)")
     ap.add_argument("--log", default=os.path.join(STAGE, "sa1psp.log"), help="the run's game log (the 'image: main at' line)")
     ap.add_argument("--elf", default=os.path.join(REPO, "build-psp", "sa1psp", "sa1psp_prx.elf"))
     ap.add_argument("--top", type=int, default=40)
@@ -124,27 +134,42 @@ def main() -> int:
     srcs = {}
     n = outside = 0
     t0 = t1 = None
-    with open(a.samples, encoding="utf-8") as f:
-        for line in f:
-            if line.startswith("#") or not line.strip():
-                continue
-            t, epc, real, ra, sp = line.split()[:5]
-            t = float(t)
-            t0 = t if t0 is None else t0
-            t1 = t
-            n += 1
-            epc, real, ra = int(epc, 16), int(real, 16), int(ra, 16)
-            if real:
-                s = syms.find(real - delta)
-                wait_by[s[2] if s else "0x%08x" % real] += 1
-                continue
-            s = syms.find(epc - delta)
-            if not s:
-                outside += 1
-                run["(outside the PRX: kernel, pspsdk modules) 0x%08x" % (epc & 0xFFFFF000)] += 1
-                continue
-            run[s[2]] += 1
-            srcs[s[2]] = s[3]
+    def rows():
+        if a.pcs:
+            import struct
+            data = open(a.pcs, "rb").read()
+            magic, count, period, missed = struct.unpack_from("<4I", data, 0)
+            if magic != 0x464F5250:
+                raise SystemExit(f"psp_prof: {a.pcs} is not a --prof file")
+            if missed:
+                print(f"psp_prof: {missed} samples missed (buffer full)", file=sys.stderr)
+            for i, pc in enumerate(struct.unpack_from(f"<{count}I", data, 16)):
+                yield "%f %08x 0 0 0" % (i * period / 1e6, pc)
+            return
+        with open(a.samples, encoding="utf-8") as f:
+            yield from f
+
+    for line in rows():
+        if line.startswith("#") or not line.strip():
+            continue
+        t, epc, real, ra, sp = line.split()[:5]
+        t = float(t)
+        t0 = t if t0 is None else t0
+        t1 = t
+        n += 1
+        epc, real, ra = int(epc, 16), int(real, 16), int(ra, 16)
+        if real:
+            s = syms.find(real - delta)
+            wait_by[s[2] if s else "0x%08x" % real] += 1
+            continue
+        s = syms.find(epc - delta)
+        if not s:
+            outside += 1
+            run["(outside the PRX: kernel, pspsdk modules) 0x%08x" % (epc & 0xFFFFF000)] += 1
+            continue
+        run[s[2]] += 1
+        srcs[s[2]] = s[3]
+        if ra:
             c = syms.find(ra - delta)
             ra_of[s[2]][c[2] if c else "0x%08x" % ra] += 1
 
@@ -173,9 +198,9 @@ def main() -> int:
     for g, k in groups.most_common():
         p(f"  {100.0 * k / n:6.2f} %  {k:6d}  {g}")
     p()
-    p("callers (ra) of the hottest non-game functions:")
+    p("callers (ra) of the hottest non-game functions:" if not a.pcs else "(no callers: --pcs samples carry no ra)")
     shown = 0
-    for name, k in run.most_common():
+    for name, k in (run.most_common() if not a.pcs else []):
         if name.startswith("fn_") or name.startswith("("):
             continue
         callers = ", ".join(f"{c} {v}" for c, v in ra_of[name].most_common(5))

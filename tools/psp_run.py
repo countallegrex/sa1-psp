@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the EBOOT on the PSP over USB with PSPLink: no card swap, live log.
 
-    psp_run.py [--timeout S] [--quiet S] [--wait S] [--no-reset] [--build DIR]
+    psp_run.py [--timeout S] [--quiet S] [--wait S] [--no-reset] [--build DIR] [--from DIR]
                [--tools DIR] [--out FILE] [--linger S] [-- GAME_OPTION ...]
     psp_run.py --stop --force
 
@@ -40,7 +40,18 @@ DIR/psplink-run/prof_samples.tsv: the PC where the thread was preempted,
 the user return address when it was in a syscall (waiting), and ra and
 sp.  The PSPLink shell thread preempts the game at a time unrelated to
 what it runs, so the PCs are an unbiased sample of where the CPU goes.
-tools/psp_prof.py names them against sa1psp_prx.elf.
+tools/psp_prof.py names them against sa1psp_prx.elf.  ON THE 3001's
+FIRMWARE 6.61 THIS GIVES NO USABLE PCs: thctx prints a context that is not
+the thread's (strings and 0xDEADBEEF fill), and its rate of ~500 replies a
+second slowed the game 4x (2026-10-19).  Use the game's own sampler
+instead: GAME_OPTION --prof FROM:TO[:FILE] (backend/psp/prof/sa1prof.c, a
+kernel alarm reading cop0 EPC every ~1 ms, no measurable slow-down), then
+tools/psp_prof.py --pcs FILE.
+
+--from DIR runs the PRX of another build (a second checkout's
+build-psp/sa1psp: the ELF names its addresses, sa1prof.prx comes with it)
+while the running usbhostfs_pc keeps serving --build: it is staged into
+--build's psplink-run/, where every run's PRX goes.
 
 Exit status: 0 the exit line was seen, 2 an exception, 3 timeout or no
 response, 4 setup failure (no tools, no PSP, a load error).
@@ -554,6 +565,8 @@ def main() -> int:
     ap.add_argument("--quiet", type=float, default=30, help="seconds without output before asking PSPLink whether the PSP is alive")
     ap.add_argument("--wait", type=float, default=90, help="seconds to wait for PSPLink to answer (start, and after the reset)")
     ap.add_argument("--no-reset", action="store_true", help="launch into the running PSPLink without resetting it first")
+    ap.add_argument("--from", dest="src", help="run the PRX (and name addresses with the ELF) of this build folder "
+                    "instead of --build's: a second checkout's build-psp/sa1psp, staged into the served folder")
     ap.add_argument("--build", default=os.path.join(REPO, "build-psp", "sa1psp"), help="the folder with EBOOT.PBP and sa1psp.elf; host0:")
     ap.add_argument("--tools", help="folder with usbhostfs_pc (default tools-psplink/pc-windows/psplinkusb-windows next to the repo)")
     ap.add_argument("--out", help="the run's console log (default BUILD/psplink-run/psp_run.log)")
@@ -574,8 +587,9 @@ def main() -> int:
 
     build = os.path.abspath(a.build)
     pbp = os.path.join(build, "EBOOT.PBP")
-    elf = os.path.join(build, "sa1psp_prx.elf")
-    prx = os.path.join(build, "sa1psp.prx")
+    src = os.path.abspath(a.src) if a.src else build
+    elf = os.path.join(src, "sa1psp_prx.elf")
+    prx = os.path.join(src, "sa1psp.prx")
     stage = os.path.join(build, STAGE)
     try:
         if not os.path.isfile(pbp):
@@ -584,6 +598,8 @@ def main() -> int:
         if not os.path.isfile(prx):
             raise SetupError(f"no {prx} (build the sa1psp_prx target)")
         stage_prx(prx, os.path.join(stage, "sa1psp.prx"))
+        if os.path.isfile(os.path.join(src, "sa1prof.prx")):            # --prof's sampler
+            shutil.copyfile(os.path.join(src, "sa1prof.prx"), os.path.join(stage, "sa1prof.prx"))
         args = write_args(os.path.join(stage, "args.txt"), game_args)
     except (SetupError, OSError) as e:
         print(f"psp_run: {e}", file=sys.stderr)
