@@ -763,18 +763,9 @@ static void apply_blend_depth(const draw_state *s) {
         sceGuBlendFunc(GU_ADD, sf, df, sfix, dfix);
     }
     sceGuDepthFunc((gu_debug & 8) && s->layer == DRAW_LAYER_2D ? GU_ALWAYS : depth_func(s->depth_func));
-    /* Translucent 2D strips (menus, HUD, text) do not write depth: they are
-     * drawn sorted far to near, so their order among themselves is the
-     * painter's, and they still test against the 3D depth.  With writes, the
-     * 16-bit buffer decided ties between 2D layers at the same 1/w by the
-     * GE's rounding: on the console the character select's text lost to its
-     * own backing quads (all at 1/w 0.00002, a unit or two above the far end
-     * of the buffer) where PPSSPP's exact compare let it through.  3D
-     * translucent strips keep their writes: the characters are largely in
-     * the translucent list and need them for their own front and back (with
-     * them off, Sonic's back showed through his front, the maintainer's run of
-     * 694b9e8). */
-    sceGuDepthMask(s->depth_write && !(s->translucent && s->layer == DRAW_LAYER_2D) ? GU_FALSE : GU_TRUE);     /* GU_TRUE masks (disables) the write */
+    /* depth_write is the game's, except for translucent 2D strips at either
+     * end of the buffer (rec_depth_write) */
+    sceGuDepthMask(s->depth_write ? GU_FALSE : GU_TRUE);     /* GU_TRUE masks (disables) the write */
     if (s->alpha_test) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GEQUAL, 0x80, 0xFF); }
     else sceGuDisable(GU_ALPHA_TEST);
     if (s->texture && s->texture < TEX_MAX && texs[s->texture].mem) sceGuEnable(GU_TEXTURE_2D);
@@ -1070,12 +1061,47 @@ static void strip_split(const draw_vertex *v, int n, int guard) {
     }
 }
 
+/* Translucent 2D strips (menus, HUD, text) at either end of the 16-bit
+ * buffer do not write depth: they are drawn sorted far to near, so their
+ * order among themselves is the painter's, and they still test against the
+ * 3D depth.  With writes, the buffer decided ties between 2D layers at the
+ * same 1/w by the GE's rounding: on the console the character select's
+ * text lost to its own backing quads (all at 1/w 0.00002, a unit or two
+ * above the far end) where PPSSPP's exact compare let it through (694b9e8).
+ * Between the ends they write as the game asks: the Station Square
+ * opening's skyline and rooftop are one translucent 2D quad at 1/w 0.001
+ * (station3, priority -1000), and without its depth the sea (sswater01,
+ * z ~1400 there, behind it) showed through as a blue wedge over the roof
+ * (2026-10-19).  The 2D depth is 1/max(1, -priority) (draw2d.c), so the
+ * ends are the priorities beyond -10000 and the HUD's 1.  3D translucent
+ * strips always keep their writes: the characters are largely in the
+ * translucent list and need them for their own front and back (with them
+ * off, Sonic's back showed through his front, the maintainer's run of 694b9e8).
+ * The state recorded for the strip carries the write it gets. */
+#define UI_FAR_W 1e-4f
+static void rec_depth_write(const draw_vertex *v) {
+    if (!cur.translucent || cur.layer != DRAW_LAYER_2D || !cur.depth_write || !nrstates) return;
+    uint8_t want = v[0].w >= UI_FAR_W && v[0].w < 1.0f;
+    if (rstates[nrstates - 1].depth_write == want) return;
+    batch_flush();
+    draw_state s = cur;
+    s.depth_write = want;
+    rec_state(&s);
+}
+
 void draw_strip(const draw_vertex *v, int n) {
     if (n < 3) return;
     stats.strips++; stats.triangles += (uint32_t)(n - 2);
     if (headless || !list_open || !cur_valid || n > BATCH_MAX - 4 || list_full()) return;
     select_proj(v, n);
+    rec_depth_write(v);
     int guard = !in_guard(v, n), pass = guard ? -1 : pass_of(v, n);
+    if (gu_debug & (32 | 64)) {       /* bisection: 32 skips 3D strips that reach the near plane, 64 guard-band ones */
+        int near1 = 0;
+        for (int i = 0; i < n; i++) if (v[i].w >= 0.999f) near1 = 1;
+        if ((gu_debug & 32) && near1 && cur.layer != DRAW_LAYER_2D) return;
+        if ((gu_debug & 64) && guard) return;
+    }
     if (pass >= 0) strip_emit(pass, v, n);
     else strip_split(v, n, guard);
 }
