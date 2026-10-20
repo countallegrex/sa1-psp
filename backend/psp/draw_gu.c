@@ -1091,16 +1091,44 @@ static int pass_of(const draw_vertex *v, int n) {
 
 /* Triangle by triangle: clipped to the guard band when guard, cut at the
  * split, each piece to its pass. */
+static inline int vtx_in_guard(const draw_vertex *p) {
+    return p->x >= GUARD_X0 && p->x <= GUARD_X1 && p->y >= GUARD_Y0 && p->y <= GUARD_Y1;
+}
+
+/* v[i..j+2] as a strip of its own: from an odd i the run starts with v[i]
+ * twice, so its first real triangle keeps the odd (flipped) winding. */
+static void substrip_emit(int pass, const draw_vertex *v, int i, int j) {
+    static draw_vertex tmp[BATCH_MAX];  /* static: the task stacks are 32 KB */
+    if (!(i & 1)) { strip_emit(pass, v + i, j + 3 - i); return; }
+    int m = j + 3 - i;
+    tmp[0] = v[i];
+    memcpy(tmp + 1, v + i, (size_t)m * sizeof *v);
+    strip_emit(pass, tmp, m + 1);
+}
+
+/* Triangle by triangle: clipped to the guard band when guard, cut at the
+ * split, each piece to its pass.  Runs of triangles inside the band on one
+ * side of the split go out as sub-strips, unclipped: of the ~300 guard-band
+ * strips a frame in Station Square most triangles are inside. */
 static void strip_split(const draw_vertex *v, int n, int guard) {
     if (guard) gs.offscreen++;
     float ws = depth_split ? 1.0f / depth_split : 0.0f;
     for (int i = 0; i + 2 < n; i++) {
+        if (n - i - 2 > 1) {
+            int j = i, pass = -2;
+            while (j + 2 < n && vtx_in_guard(&v[j]) && vtx_in_guard(&v[j + 1]) && vtx_in_guard(&v[j + 2])) {
+                int p = pass_of(v + j, 3);
+                if (p < 0 || (pass != -2 && p != pass)) break;
+                pass = p; j++;
+            }
+            if (j - i >= 2) { substrip_emit(pass, v, i, j - 1); i = j - 1; continue; }
+        }
         draw_vertex poly[2][16];
         poly[0][0] = v[(i & 1) ? i + 1 : i];
         poly[0][1] = v[(i & 1) ? i : i + 1];
         poly[0][2] = v[i + 2];
         int k = 3, c = 0;
-        if (guard) {
+        if (guard && !(vtx_in_guard(&poly[0][0]) && vtx_in_guard(&poly[0][1]) && vtx_in_guard(&poly[0][2]))) {
             k = clip_plane(poly[c], k, poly[c ^ 1], 0, GUARD_X0, -1.0f); c ^= 1;
             if (k >= 3) { k = clip_plane(poly[c], k, poly[c ^ 1], 0, GUARD_X1, 1.0f); c ^= 1; }
             if (k >= 3) { k = clip_plane(poly[c], k, poly[c ^ 1], 1, GUARD_Y0, -1.0f); c ^= 1; }
