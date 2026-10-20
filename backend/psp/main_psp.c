@@ -187,12 +187,20 @@ static void mem_report(const char *when) {
 
 /* ---- host stack probe (sa1_depth_hook): the desktop's, against our slots ---- */
 static int stack_tripped;
+/* Runs on every indirect call and seam hit (2 % of the console's frame with
+ * the slot lookup), so the current coroutine's limit is kept between calls. */
+static const sa1_coro *probe_co;
+static uintptr_t probe_limit;
 static void stack_probe(void) {
-    int i = sa1_plat_coro_index(sa1_plat_coro_current());
+    const sa1_coro *co = sa1_plat_coro_current();
+    uintptr_t sp = (uintptr_t)__builtin_frame_address(0);
+    if (co == probe_co && sp >= probe_limit) return;
+    int i = sa1_plat_coro_index(co);
     if (i < 0 || stack_tripped) return;
-    uintptr_t lo, hi, sp = (uintptr_t)__builtin_frame_address(0);
+    uintptr_t lo, hi;
     sa1_plat_coro_stack(i, &lo, &hi);
-    if (sp >= lo + SA1_CORO_CANARY + 4096u) return;
+    probe_co = co; probe_limit = lo + SA1_CORO_CANARY + 4096u;
+    if (sp >= probe_limit) return;
     stack_tripped = 1;
     uint32_t task = hle_task_running();
     sa1_log("stack: %u of %u bytes in use on %s%08x (slot %d): trapping before the overflow",
