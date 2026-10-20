@@ -650,15 +650,88 @@ static int cmp_key(const void *a, const void *b) {
     return ka->i < kb->i ? -1 : ka->i > kb->i ? 1 : 0;
 }
 
+/* The host bytes of a TA region in guest RAM (contiguous there: the buffers
+ * sit in the 16 MB or the extra area above it), or NULL if it is not. */
+static const uint8_t *ta_host(uint32_t start, uint32_t end) {
+    uint32_t off = start & SA1_RAM_MASK;
+    if (!hle_in_ram(start) || end < start || off + (end - start) > SA1_RAM_SIZE + SA1_RAM_EXTRA) {
+        static int logged;
+        if (!logged++) sa1_log("kamui: TA region 0x%08x..0x%08x not in RAM; skipped", start, end);
+        return NULL;
+    }
+    return sa1_ram + off;
+}
+
+/* Vertex and global parameter sizes of a polygon or sprite header (pcw). */
+static uint32_t ta_vsize(uint32_t pcw) {
+    uint32_t list = (pcw >> 24) & 7, coltype = (pcw >> 4) & 3, textured = (pcw >> 3) & 1, volume = (pcw >> 6) & 1;
+    if ((pcw >> 29) == 5 || list == 1 || list == 3) return 64;
+    return ((textured && coltype == 1) || (volume && textured)) ? 64 : 32;
+}
+static uint32_t ta_hsize(uint32_t pcw) {
+    uint32_t list = (pcw >> 24) & 7, coltype = (pcw >> 4) & 3, offset = (pcw >> 2) & 1, volume = (pcw >> 6) & 1;
+    if ((pcw >> 29) == 5 || list == 1 || list == 3) return 32;
+    return ((coltype == 2 && offset) || (volume && coltype >= 2)) ? 64 : 32;
+}
+
+/* One walk over a buffer that cuts it into runs of consecutive headers of
+ * one list type, so that each list's parse visits its own runs only: the
+ * three parses (opaque, punch-through, translucent) used to walk every
+ * buffer whole, reading each vertex's word through the guest-address
+ * helpers, which on the console was two thirds of parse_region (15 % of
+ * the frame in Station Square, 2026-10-19). */
+typedef struct ta_run { uint32_t lo, hi; int list; } ta_run;
+static ta_run *runs[3]; static uint32_t nruns[3], runs_cap[3], ta_lo[3], ta_hi[3];
+static void ta_runs(int b, uint32_t start, uint32_t end) {
+    nruns[b] = 0; ta_lo[b] = start; ta_hi[b] = end;
+    const uint8_t *hb = ta_host(start, end);
+    if (!hb) return;
+    uint32_t p = start, lo = start, vsize = 32;
+    int list = -1;
+    while (p + 32 <= end) {
+        uint32_t pcw = *(const sa1_u32a *)(hb + (p - start)), type = pcw >> 29;
+        if (type == 7) { if (p + vsize > end) break; p += vsize; continue; }
+        if (type == 4 || type == 5) {
+            int l = (int)((pcw >> 24) & 7);
+            if (l != list) {
+                if (p > lo && grow((void **)&runs[b], &runs_cap[b], nruns[b] + 1, sizeof (ta_run)))
+                    runs[b][nruns[b]++] = (ta_run){lo, p, list};
+                lo = p; list = l;
+            }
+            vsize = ta_vsize(pcw);
+            p += ta_hsize(pcw);
+            continue;
+        }
+        p += 32;
+    }
+    if (end > lo && grow((void **)&runs[b], &runs_cap[b], nruns[b] + 1, sizeof (ta_run)))
+        runs[b][nruns[b]++] = (ta_run){lo, end, list};
+}
+static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted);
+static void parse_list(int want, int sorted) {
+    if (want == 0 && ptr_trace()) {     /* the header dump logs every list's headers in the opaque parse */
+        for (int b = 0; b < 3; b++) if (ta_hi[b] > ta_lo[b]) parse_region(ta_lo[b], ta_hi[b], 0, 0);
+        return;
+    }
+    for (int b = 0; b < 3; b++)
+        for (uint32_t k = 0; k < nruns[b]; k++)
+            if (runs[b][k].list == want) parse_region(runs[b][k].lo, runs[b][k].hi, want, sorted);
+}
+
 /* Parse one buffer region.  Polygons of list types 0 and 4 draw at once
  * (sorted = 0); translucent ones (2) are collected for sorting. */
 static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted) {
+    const uint8_t *hb = ta_host(start, end);
+    if (!hb) return;
+#define TRD32(a) (*(const sa1_u32a *)(hb + ((a) - start)))
+#define TRDF(a)  (*(const sa1_f32a *)(hb + ((a) - start)))
+#define TPACK(a) nj_pack_argb(TRDF(a), TRDF((a) + 4), TRDF((a) + 8), TRDF((a) + 12))
     parse_ctx pc; memset(&pc, 0, sizeof pc);
     pc.list = -1; pc.strip_start = nverts;
     uint32_t p = start;
     int in_strip = 0;
     while (p + 32 <= end) {
-        uint32_t pcw = hle_rd32(p);
+        uint32_t pcw = TRD32(p);
         uint32_t type = pcw >> 29;
         if (type == 7) {                                   /* vertex */
             uint32_t vsize = pc.modvol ? 64 : ((pc.textured && pc.coltype == 1) || (pc.volume && pc.textured)) ? 64 : 32;
@@ -668,11 +741,11 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
                 if (pc.sprite) {
                     /* 4 points a,b,c,d (d has no z: it takes c's) and 3 packed uv pairs */
                     if (grow((void **)&verts, &verts_cap, nverts + 4, sizeof *verts)) {
-                        float ax = hle_rdf(p + 4), ay = hle_rdf(p + 8), az = hle_rdf(p + 12);
-                        float bx = hle_rdf(p + 16), by = hle_rdf(p + 20), bz = hle_rdf(p + 24);
-                        float cx = hle_rdf(p + 28), cy = hle_rdf(p + 32), cz = hle_rdf(p + 36);
-                        float dx = hle_rdf(p + 40), dy = hle_rdf(p + 44);
-                        uint32_t uva = hle_rd32(p + 52), uvb = hle_rd32(p + 56), uvc = hle_rd32(p + 60);
+                        float ax = TRDF(p + 4), ay = TRDF(p + 8), az = TRDF(p + 12);
+                        float bx = TRDF(p + 16), by = TRDF(p + 20), bz = TRDF(p + 24);
+                        float cx = TRDF(p + 28), cy = TRDF(p + 32), cz = TRDF(p + 36);
+                        float dx = TRDF(p + 40), dy = TRDF(p + 44);
+                        uint32_t uva = TRD32(p + 52), uvb = TRD32(p + 56), uvc = TRD32(p + 60);
                         float au = sh4_u2f(uva & 0xFFFF0000u), av = sh4_u2f(uva << 16);
                         float bu = sh4_u2f(uvb & 0xFFFF0000u), bv = sh4_u2f(uvb << 16);
                         float cu = sh4_u2f(uvc & 0xFFFF0000u), cv = sh4_u2f(uvc << 16);
@@ -688,20 +761,20 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
                 } else {
                     if (grow((void **)&verts, &verts_cap, nverts + 1, sizeof *verts)) {
                         draw_vertex *v = verts + nverts;
-                        v->x = hle_rdf(p + 4); v->y = hle_rdf(p + 8); v->w = hle_rdf(p + 12);
+                        v->x = TRDF(p + 4); v->y = TRDF(p + 8); v->w = TRDF(p + 12);
                         v->u = v->v = 0.0f; v->ocolor = 0;
                         uint32_t q = p + 16;
                         if (pc.textured) {
-                            if (pc.uv16) { uint32_t uv = hle_rd32(q); v->u = sh4_u2f(uv & 0xFFFF0000u); v->v = sh4_u2f(uv << 16); q += 8; }
-                            else { v->u = hle_rdf(q); v->v = hle_rdf(q + 4); q += 8; }
+                            if (pc.uv16) { uint32_t uv = TRD32(q); v->u = sh4_u2f(uv & 0xFFFF0000u); v->v = sh4_u2f(uv << 16); q += 8; }
+                            else { v->u = TRDF(q); v->v = TRDF(q + 4); q += 8; }
                         } else q += 8;
                         switch (pc.coltype) {
-                        case 0: v->color = hle_rd32(q); if (pc.offset) v->ocolor = hle_rd32(q + 4); break;
+                        case 0: v->color = TRD32(q); if (pc.offset) v->ocolor = TRD32(q + 4); break;
                         case 1:
-                            if (pc.textured) { v->color = pack_floats(p + 32); if (pc.offset) v->ocolor = pack_floats(p + 48); }
-                            else v->color = pack_floats(q);
+                            if (pc.textured) { v->color = TPACK(p + 32); if (pc.offset) v->ocolor = TPACK(p + 48); }
+                            else v->color = TPACK(q);
                             break;
-                        default: v->color = scale_argb(pc.face, hle_rdf(q)); if (pc.offset) v->ocolor = scale_argb(pc.face_off, hle_rdf(q + 4)); break;
+                        default: v->color = scale_argb(pc.face, TRDF(q)); if (pc.offset) v->ocolor = scale_argb(pc.face_off, TRDF(q + 4)); break;
                         }
                         nverts++;
                         in_strip = 1;
@@ -715,7 +788,7 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
         /* a global parameter ends any open strip */
         if (in_strip) { flush_strip(&pc, sorted); in_strip = 0; }
         if (type == 4 || type == 5) {
-            uint32_t isp = hle_rd32(p + 4), tsp = hle_rd32(p + 8), tcw = hle_rd32(p + 12);
+            uint32_t isp = TRD32(p + 4), tsp = TRD32(p + 8), tcw = TRD32(p + 12);
             if (ptr_trace() && want_list == 0 && !sorted) {
                 /* count the vertices that follow, with their screen extent and 1/w range */
                 uint32_t q = p + 32, nv = 0;
@@ -766,10 +839,10 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
             pc.uv16 = pcw & 1; pc.volume = (pcw >> 6) & 1;
             uint32_t hsize = 32;
             if (!pc.sprite && !pc.modvol && ((pc.coltype == 2 && pc.offset) || (pc.volume && pc.coltype >= 2))) hsize = 64;
-            if (pc.sprite) { pc.face = hle_rd32(p + 16); pc.face_off = hle_rd32(p + 20); }
+            if (pc.sprite) { pc.face = TRD32(p + 16); pc.face_off = TRD32(p + 20); }
             else if (pc.coltype >= 2) {
-                pc.face = pack_floats(p + 16);
-                pc.face_off = hsize == 64 ? pack_floats(p + 32) : 0;
+                pc.face = TPACK(p + 16);
+                pc.face_off = hsize == 64 ? TPACK(p + 32) : 0;
             } else { pc.face = 0xFFFFFFFFu; pc.face_off = 0; }
             if (pc.list == want_list) {
                 if (pc.modvol) stat_modvols++;
@@ -783,6 +856,9 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
         p += 32;
     }
     if (in_strip) flush_strip(&pc, sorted);
+#undef TRD32
+#undef TRDF
+#undef TPACK
 }
 
 static void render_lists(void) {
@@ -802,14 +878,13 @@ static void render_lists(void) {
     draw_begin_frame(clear_color);
     nverts = 0; nstrips = 0;
     frame_polys[0] = frame_polys[1] = frame_polys[2] = 0;
+    for (int i = 0; i < 3; i++) { nruns[i] = 0; ta_lo[i] = ta_hi[i] = 0; if (bufs[i].base) ta_runs(i, bufs[i].base & 0x1FFFFFFFu, ends[i]); }
     /* opaque, then punch-through, in the order written; both buffers may hold either */
-    for (int l = 0; l < 2; l++) {
-        int want = l == 0 ? 0 : 4;
-        for (int i = 0; i < 3; i++) if (bufs[i].base) parse_region(bufs[i].base & 0x1FFFFFFFu, ends[i], want, 0);
-    }
+    parse_list(0, 0);
+    parse_list(4, 0);
     /* translucent: collect from every buffer, sort far to near, draw */
     nverts = 0;
-    for (int i = 0; i < 3; i++) if (bufs[i].base) parse_region(bufs[i].base & 0x1FFFFFFFu, ends[i], 2, 1);
+    parse_list(2, 1);
     if (nstrips) {
         sort_key *arr = malloc(nstrips * sizeof *arr);
         if (arr) {
