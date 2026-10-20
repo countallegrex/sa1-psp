@@ -38,7 +38,7 @@ static inline int hle_in_ram(uint32_t a) { return ((a & 0x1F000000u) == 0x0C0000
 /* Stack argument i (0-based) for calls with more than four word arguments. */
 #define STACK_ARG(i) RD32(c->r[15], 4 * (i))
 /* Every HLE body counts itself so the exit report lists real bodies too. */
-#define HLE_ENTER(addr, name) sa1_seam_hit((addr), (name))
+#define HLE_ENTER(addr, name) do { static struct sa1_hit *hle_site_; sa1_seam_hit_at(&hle_site_, (addr), (name)); } while (0)
 
 /* ---- platform interface (backend/<target>/platform_*.c) ---------------- */
 uint64_t sa1_plat_time_us(void);              /* monotonic microseconds */

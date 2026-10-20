@@ -116,7 +116,7 @@ void fn_8c10be78(sh4_ctx *c) {
  * from here; accepted and ignored, r0 = 0.  The game only calls them from
  * its clock-setting menu. */
 static void rtc_write(sh4_ctx *c, uint32_t addr, const char *name) {
-    HLE_ENTER(addr, name);
+    sa1_seam_hit(addr, name);          /* addr varies: no per-site cache (HLE_ENTER) */
     static int logged;
     if (!logged) { sa1_log("rtc: the game wrote the clock (0x%08x, value 0x%x); ignored", addr, ARG0); logged = 1; }
     RET(0);

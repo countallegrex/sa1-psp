@@ -53,7 +53,7 @@ void sdk_8c601a34(sh4_ctx *c) {
 
 /* 0x8C601874 / 0x8C601F5A: pdGetPeripheral(unit) -> the record's address. */
 static void get_peripheral(sh4_ctx *c, uint32_t addr, const char *name) {
-    HLE_ENTER(addr, name);
+    sa1_seam_hit(addr, name);          /* addr varies: no per-site cache (HLE_ENTER) */
     uint32_t idx = ARG0 < PAD_UNITS ? ARG0 : 0;
     RET(PAD_TABLE + idx * PAD_RECORD);
 }

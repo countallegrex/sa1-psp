@@ -173,6 +173,10 @@ void sa1_seam_stub(sh4_ctx *c, uint32_t addr, const char *name);
  * prints the busiest callees at exit (sa1_seam_report).  A real HLE body
  * calls sa1_seam_hit so it is counted too. */
 void sa1_seam_hit(uint32_t addr, const char *name);
+/* The same with the counter's slot cached at the call site (HLE_ENTER): *site
+ * starts NULL and is filled on the first call. */
+struct sa1_hit;
+void sa1_seam_hit_at(struct sa1_hit **site, uint32_t addr, const char *name);
 void sa1_seam_report(int top);
 /* Native functions installed at run time for guest addresses that have no
  * emitted code (BIOS syscall vectors, host-provided callbacks).  Checked

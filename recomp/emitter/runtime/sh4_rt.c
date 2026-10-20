@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 uint8_t *sa1_ram;
 extern uint32_t (*sa1_trace_frame)(void);
@@ -26,9 +27,18 @@ void sa1_log(const char *fmt, ...) {
 
 static const sa1_overlay *sa1_slots[SA1_SLOT_COUNT];
 
+/* sa1_fn_lookup's answers, direct-mapped by address: an indirect call
+ * otherwise scans the registered functions and the overlay slots and
+ * binary-searches the main table every time.  Emptied whenever a slot or a
+ * registered function changes. */
+#define SA1_LOOKUP_CACHE 1024
+static struct { uint32_t key; sa1_fn fn; } sa1_lookup_cache[SA1_LOOKUP_CACHE];
+static void lookup_cache_clear(void) { memset(sa1_lookup_cache, 0, sizeof sa1_lookup_cache); }
+
 void sa1_overlay_set(int slot, const sa1_overlay *ov) {
     if (slot < 0 || slot >= SA1_SLOT_COUNT) return;
     sa1_slots[slot] = ov;
+    lookup_cache_clear();
     sa1_log("overlay slot %d: %s", slot, ov ? ov->name : "(empty)");
 }
 
@@ -53,6 +63,7 @@ static uint32_t sa1_reg_count;
 
 void sa1_register_fn(uint32_t addr, sa1_fn fn) {
     uint32_t key = addr & 0x1FFFFFFFu;
+    lookup_cache_clear();
     for (uint32_t i = 0; i < sa1_reg_count; i++)
         if (sa1_reg[i].addr == key) { sa1_reg[i].fn = fn; return; }
     if (sa1_reg_count < SA1_REG_MAX) {
@@ -64,8 +75,7 @@ void sa1_register_fn(uint32_t addr, sa1_fn fn) {
     }
 }
 
-sa1_fn sa1_fn_lookup(uint32_t addr) {
-    uint32_t key = addr & 0x1FFFFFFFu;
+static sa1_fn fn_lookup_slow(uint32_t key) {
     for (uint32_t i = 0; i < sa1_reg_count; i++)
         if (sa1_reg[i].addr == key) return sa1_reg[i].fn;
     for (int s = 0; s < SA1_SLOT_COUNT; s++) {
@@ -75,6 +85,15 @@ sa1_fn sa1_fn_lookup(uint32_t addr) {
     }
     sa1_fn fn = sa1_table_find(sa1_fn_table, sa1_fn_count, key);
     return fn ? fn : sa1_table_find(sa1_seam_table, sa1_seam_count, key);
+}
+
+sa1_fn sa1_fn_lookup(uint32_t addr) {
+    uint32_t key = addr & 0x1FFFFFFFu;
+    uint32_t i = (key >> 1) & (SA1_LOOKUP_CACHE - 1);   /* SH4 code is 2-byte aligned */
+    if (sa1_lookup_cache[i].key == key && sa1_lookup_cache[i].fn) return sa1_lookup_cache[i].fn;
+    sa1_fn fn = fn_lookup_slow(key);
+    if (fn) { sa1_lookup_cache[i].key = key; sa1_lookup_cache[i].fn = fn; }
+    return fn;
 }
 
 uint32_t sa1_watch_addr;
@@ -197,7 +216,7 @@ void sa1_mmio_wr(uint32_t addr, int size, uint32_t value) {
 
 /* ---- seam hit counters ----------------------------------------------- */
 #define SA1_HIT_MAX 512          /* 291 seam entries + room for HLE-side names */
-typedef struct { uint32_t addr; uint32_t hits; const char *name; int logged; } sa1_hit;
+typedef struct sa1_hit { uint32_t addr; uint32_t hits; const char *name; int logged; } sa1_hit;
 static sa1_hit sa1_hits[SA1_HIT_MAX];
 static uint32_t sa1_hit_count;
 
@@ -224,18 +243,29 @@ static sa1_hit *sa1_hit_slot(uint32_t addr, const char *name) {
  * unchanged trap with a backtrace. */
 static uint32_t hit_last_addr, hit_repeat, hit_frame;
 
-void sa1_seam_hit(uint32_t addr, const char *name) {
+/* The frame counter is read only on a repeat of the last entry: a run starts
+ * with the frame unknown and takes it at its first repeat. */
+static inline void seam_hit_count(sa1_hit *h, uint32_t addr, const char *name) {
     if (sa1_depth_hook) sa1_depth_hook();
     if (sa1_watch_addr) sa1_watch_check(name);
-    sa1_hit *h = sa1_hit_slot(addr, name);
     if (h) h->hits++;
+    if (addr != hit_last_addr) { hit_last_addr = addr; hit_frame = UINT32_MAX; hit_repeat = 0; return; }
     uint32_t f = sa1_trace_frame ? sa1_trace_frame() : 0;
-    if (addr == hit_last_addr && f == hit_frame) {
-        if (++hit_repeat == SA1_SPIN_LIMIT) {
-            sh4_ctx dummy = {0};
-            sa1_trap(&dummy, addr, name);
-        }
-    } else { hit_last_addr = addr; hit_frame = f; hit_repeat = 0; }
+    if (f != hit_frame) { hit_frame = f; hit_repeat = 0; return; }
+    if (++hit_repeat == SA1_SPIN_LIMIT) {
+        sh4_ctx dummy = {0};
+        sa1_trap(&dummy, addr, name);
+    }
+}
+
+void sa1_seam_hit(uint32_t addr, const char *name) {
+    seam_hit_count(sa1_hit_slot(addr, name), addr, name);
+}
+
+void sa1_seam_hit_at(sa1_hit **site, uint32_t addr, const char *name) {
+    sa1_hit *h = *site;
+    if (!h) h = *site = sa1_hit_slot(addr, name);
+    seam_hit_count(h, addr, name);
 }
 
 static uint32_t stub_last_addr, stub_repeat;
