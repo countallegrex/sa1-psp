@@ -1162,6 +1162,38 @@ void draw_strip(const draw_vertex *v, int n) {
     else strip_split(v, n, guard);
 }
 
+/* The strip's z values (vtx_z: 1/w, w clamped to 1e-6..1/depth_zn) four at
+ * a time on the VFPU, and its largest w: vrcp.q in place of a div.s per
+ * vertex, which stalled strip_emit ~30 cycles a vertex (about 25,000 a
+ * frame in Station Square).  The last group repeats v[n-1], so nothing past
+ * the strip is read.  z must hold n rounded up to 4, 16-byte aligned. */
+static float strip_z[BATCH_MAX + 4] __attribute__((aligned(16)));
+static float strip_zs(const draw_vertex *v, int n, float *z) {
+    union { float f; uint32_t u; } lo = { 1e-6f }, hi = { 1.0f / depth_zn };
+    __asm__ volatile(
+        "vzero.q C100\n"
+        "mtv %0, S020\n mtv %0, S021\n mtv %0, S022\n mtv %0, S023\n"
+        "mtv %1, S030\n mtv %1, S031\n mtv %1, S032\n mtv %1, S033\n"
+        : : "r"(lo.u), "r"(hi.u));
+    const draw_vertex *last = &v[n - 1];
+    for (int i = 0; i < n; i += 4, z += 4) {
+        const draw_vertex *a = &v[i], *b = i + 1 < n ? a + 1 : last, *c = i + 2 < n ? a + 2 : last, *d = i + 3 < n ? a + 3 : last;
+        __asm__ volatile(
+            "lv.s S000, 8(%1)\n lv.s S001, 8(%2)\n lv.s S002, 8(%3)\n lv.s S003, 8(%4)\n"
+            "vmax.q C100, C100, C000\n"
+            "vmin.q C000, C000, C030\n"
+            "vmax.q C000, C000, C020\n"
+            "vrcp.q C000, C000\n"
+            "sv.q C000, 0(%0)\n"
+            : : "r"(z), "r"(a), "r"(b), "r"(c), "r"(d) : "memory");
+    }
+    uint32_t m0, m1, m2, m3;
+    __asm__ volatile("mfv %0, S100\n mfv %1, S101\n mfv %2, S102\n mfv %3, S103\n" : "=r"(m0), "=r"(m1), "=r"(m2), "=r"(m3));
+    union { uint32_t u; float f; } w0 = { m0 }, w1 = { m1 }, w2 = { m2 }, w3 = { m3 };
+    float a = w0.f > w1.f ? w0.f : w1.f, b = w2.f > w3.f ? w2.f : w3.f;
+    return a > b ? a : b;
+}
+
 static void strip_emit(int pass, const draw_vertex *v, int n) {
     int has_offset = 0;
     if (cur.texture) for (int i = 0; i < n && !has_offset; i++) if (v[i].ocolor & 0x00FFFFFFu) has_offset = 1;
@@ -1184,7 +1216,8 @@ static void strip_emit(int pass, const draw_vertex *v, int n) {
     int nb = nbatch[pass], no = nobatch[pass];
     uint8_t *vl = vline[pass], *ol = oline[pass];
     int scale = cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA, mode = conv_mode();
-    float z0 = vtx_z(&v[0]);
+    const float *zs = strip_z;
+    float wmax = strip_zs(v, n, strip_z), z0 = zs[0];
     if (nb) {                         /* degenerate joint; keep the next strip's winding parity */
         vl = claim_lines(vl, b + 3);
         gu_vtx last = b[-1];
@@ -1199,28 +1232,33 @@ static void strip_emit(int pass, const draw_vertex *v, int n) {
         if (no & 1) *o++ = last;
         conv_offset(o++, &v[0], z0, scale);
     }
-    float wmax = 0.0f;
-    unsigned near16 = 0;
-    for (int i = 0; i < n; i++) {
-        float z = i ? vtx_z(&v[i]) : z0, w = v[i].w;
-        vl = claim_lines(vl, b + 1);
-        conv(b++, &v[i], z, mode);
-        if (has_offset) { ol = claim_lines(ol, o + 1); conv_offset(o++, &v[i], z, scale); }
-        if (w > wmax) wmax = w;
-        near16 += w > 0.0625f;
+    if (has_offset) {
+        for (int i = 0; i < n; i++) {
+            float z = zs[i];
+            vl = claim_lines(vl, b + 1);
+            conv(b++, &v[i], z, mode);
+            ol = claim_lines(ol, o + 1);
+            conv_offset(o++, &v[i], z, scale);
+        }
+    } else {
+        for (int i = 0; i < n; i++) {
+            vl = claim_lines(vl, b + 1);
+            conv(b++, &v[i], zs[i], mode);
+        }
     }
     nbatch[pass] = (int)(b - batch[pass]);
     nobatch[pass] = (int)(o - obatch[pass]);
     vline[pass] = vl; oline[pass] = ol;
-    /* the depth statistics (--stats): nearest z, and the vertices nearer than z 2, 4, 8, 16 (w > 1/2 ...) */
+    /* the nearest z (the next frame's depth range), and for --stats the vertices
+     * nearer than z 2, 4, 8, 16 (w > 1/2 ...) */
     if (cur.layer != DRAW_LAYER_2D && wmax > 0.0f) {
         float zmin = 1.0f / wmax;
         if (zmin < gs.zmin_frame) gs.zmin_frame = zmin;
-        if (near16) {
-            gs.znear_verts[3] += near16;
+        if (wmax > 0.0625f) {
             for (int i = 0; i < n; i++) {
                 float w = v[i].w;
-                gs.znear_verts[0] += w > 0.5f; gs.znear_verts[1] += w > 0.25f; gs.znear_verts[2] += w > 0.125f;
+                gs.znear_verts[0] += w > 0.5f; gs.znear_verts[1] += w > 0.25f;
+                gs.znear_verts[2] += w > 0.125f; gs.znear_verts[3] += w > 0.0625f;
             }
         }
     }
