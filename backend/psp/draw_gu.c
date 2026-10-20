@@ -923,24 +923,9 @@ static void set_proj(int pass, int p) {
     }
 }
 
-/* In GU_DIRECT, pspgu ends every sceGuDrawArray with a
- * sceGeListUpdateStallAddr syscall (unless an object is open), ~900 a
- * frame.  The replay holds the object depth at 1 so the draws skip it, and
- * moves the stall itself every REPLAY_KICK draws: the GE still runs behind
- * the list as it grows.  Nothing here opens an object (sceGuBeginObject). */
-typedef struct { unsigned int *start, *current; int parent_context; } gu_dlist;   /* pspgu's GuDisplayList */
-extern int gu_object_stack_depth;
-extern int ge_list_executed[2];
-extern gu_dlist *gu_list;
-#define REPLAY_KICK 32
-static inline void replay_kick(void) { sceGeListUpdateStallAddr(ge_list_executed[0], gu_list->current); }
-
 /* Draws what the frame recorded: the far pass, a depth clear, the near pass. */
 static void replay(void) {
     batch_flush();
-    int depth0 = gu_object_stack_depth;
-    gu_object_stack_depth = 1;
-    int kick = REPLAY_KICK;
     frame_clear();
     for (int pass = 0; pass < PASSES; pass++) {
         if (!nitems[pass]) continue;
@@ -968,11 +953,8 @@ static void replay(void) {
                 stats.draw_calls++;
                 apply_blend_depth(s);     /* the texture stays bound; only its enable changed */
             }
-            if (--kick == 0) { replay_kick(); kick = REPLAY_KICK; }
         }
     }
-    gu_object_stack_depth = depth0;
-    replay_kick();
 }
 
 static inline uint32_t sat_add(uint32_t c, uint32_t o) {
