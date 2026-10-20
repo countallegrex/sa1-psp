@@ -543,8 +543,8 @@ int main(int argc, char **argv) {
      * divide-by-zero and overflow traps enabled (FCSR 0x00000E00): a float
      * 0/0 in the recompiled code then traps and the console powers off,
      * which PPSSPP never shows (it raises no FPU exceptions).  So: enables
-     * (bits 7-11) and causes (12-17) cleared, FS (24, flush to zero) set,
-     * rounding to nearest as on the desktop. */
+     * (bits 7-11) and causes (12-17) cleared, FS (24, flush to zero) set.
+     * The rounding (RM, bits 0-1) is set once the tapes are read, below. */
     {
         uint32_t fcsr, now;
         __asm__ volatile("cfc1 %0, $31" : "=r"(fcsr));
@@ -580,6 +580,24 @@ int main(int argc, char **argv) {
     sa1_log("step: tapes");
     if (input_tape_start(bin) != 0) { sa1_log("tape: start-up failed (stderr.txt has why)"); plat_log_flush(); sceKernelExitGame(); return 2; }
     if (!frame_limit) frame_limit = input_tape_frames();
+    /* The rounding as the desktop's (backend/desktop/main.c): the console
+     * runs with FPSCR.RM = 1, round toward zero (the Katana reset value
+     * 0x00040001), and the recompiled code computes on this FPU, so FCSR.RM
+     * = 1 (0x01000001) unless a tape recorded before 2026-10-19 (no
+     * fpu-round line) or --fpu-round nearest asks for round-to-nearest.
+     * FCSR is per thread: this is the game's thread, every coroutine runs on
+     * it and coro_psp.c's switch does not touch FCSR, so this covers them
+     * all.  (Float-to-int casts are trunc.w.s, which ignores RM, as the
+     * SH-4's ftrc truncates.) */
+    {
+        int fpu_zero = input_tape_fpu_zero() != 0;
+        uint32_t fcsr, now;
+        __asm__ volatile("cfc1 %0, $31" : "=r"(fcsr));
+        uint32_t want = (fcsr & ~3u) | (fpu_zero ? 1u : 0u);
+        __asm__ volatile("ctc1 %0, $31" : : "r"(want));
+        __asm__ volatile("cfc1 %0, $31" : "=r"(now));
+        sa1_log("fpu: FCSR 0x%08x, rounds %s", now, fpu_zero ? "toward zero, as the console" : "to nearest (a tape recorded before round-toward-zero)");
+    }
     plat_set_data_root(root);
     sa1_log("step: hle_init");
     hle_init();
