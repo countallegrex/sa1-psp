@@ -30,11 +30,14 @@ build-psp/sa1psp) to it as host0:.  One run:
   5. streams the PSP's stdout and stderr and PSPLink's shell output to the
      console and to FILE (default DIR/psplink-run/psp_run.log).
 
-It returns when the game logs its exit line ("] exit: "), when PSPLink
+It returns when the game has logged its exit line ("] exit: ") and PSPLink,
+reset by the game's exit, is back at its prompt (never while the PSP still
+streams: a socket closed under that stream killed usbhostfs_pc by SIGPIPE
+and wedged the console, 2026-10-19), when PSPLink
 reports an exception (the registers, then EPC and RA named against
 build-psp/sa1psp/sa1psp_prx.elf, less the PRX's load offset, with
 tools/psp_addr2line.sh through WSL), or at
---timeout.  --quiet S: after S seconds without a byte from the PSP it asks
+--timeout (after a PSPLink 'reset', so the game stops writing first).  --quiet S: after S seconds without a byte from the PSP it asks
 PSPLink for its version; no answer means the console is hung below PSPLink
 (interrupts off, a kernel or bus fault) and only holding POWER recovers it.
 
@@ -192,7 +195,11 @@ def start_hostfs_wmi(exe: str, root: str, log_path: str) -> None:
     redirection (Win32_Process.Create has no standard handles)."""
     def ps_str(s: str) -> str:
         return "'" + s.replace("'", "''") + "'"
-    cmdline = f'cmd.exe /c ""{exe}" > "{log_path}" 2>&1"'
+    # The exit status goes to the end of the log, so the next death is named
+    # (a silent SIGPIPE death was the wedge's middle link); /v:on makes
+    # !ERRORLEVEL! the status after the host ran, not when the line was parsed.
+    cmdline = (f'cmd.exe /v:on /c ""{exe}" > "{log_path}" 2>&1 & '
+               f'echo usbhostfs_pc exited with status !ERRORLEVEL! >> "{log_path}""')
     script = ("$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
               f"@{{CommandLine={ps_str(cmdline)}; CurrentDirectory={ps_str(root)}}}; "
               "Write-Output \"$($r.ReturnValue) $($r.ProcessId)\"")
@@ -290,8 +297,23 @@ class Session:
             self.socks[name] = s
             threading.Thread(target=self._reader, args=(name, s), daemon=True).start()
 
-    def close(self) -> None:
+    def close(self, quiet: float = 0.5, cap: float = 3.0) -> None:
+        """Let go of usbhostfs_pc only once the PSP has gone quiet: data it
+        writes into a socket this side has closed is answered with a reset,
+        and its next write raises SIGPIPE, which kills it (Cygwin).  Then a
+        half-close (FIN) before the close: with nothing unread, no RST."""
+        end = time.monotonic() + cap
+        calm = time.monotonic() + quiet
+        while time.monotonic() < min(calm, end) and not self.lost:
+            seen = self.last_data
+            self.pump(0.1)
+            if self.last_data != seen:
+                calm = time.monotonic() + quiet
         for s in self.socks.values():
+            try:
+                s.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
             try:
                 s.close()
             except OSError:
@@ -458,6 +480,22 @@ def reset_psplink(sess: Session, seconds: float) -> bool:
     while not sess.booted and time.monotonic() - t0 < seconds and not sess.lost:
         sess.pump(0.2)
     return wait_psplink(sess, max(10.0, seconds - (time.monotonic() - t0)))
+
+
+def wait_exit_reset(sess: Session, seconds: float) -> bool:
+    """After the game's exit line: keep reading until PSPLink has reset and
+    is back at its prompt.  The PSP streams the rest of the exit report and
+    "Resetting psplink" after the exit line; a socket closed under that
+    stream makes usbhostfs_pc write into a reset connection (SIGPIPE kills
+    it on Cygwin), and the PSP, blocked in that stdout write with no
+    timeout, is wedged until it is power-cycled."""
+    end = time.monotonic() + seconds
+    while not sess.booted and time.monotonic() < end and not sess.lost:
+        sess.pump(0.2)
+    if not sess.booted and not sess.lost:
+        sess.say(f"PSPLink did not come back within {seconds:g} s of the game's exit"
+                 + ("" if sess.resetting else " (no 'Resetting psplink' either)"))
+    return sess.booted
 
 
 def link_address(symbol: str, elf: str, distro: str) -> int | None:
@@ -666,6 +704,11 @@ def main() -> int:
             r = sess.command("ldstart", f"host0:/{STAGE}/sa1psp.prx", timeout=120)
             if not r or any("Failed to Load/Start" in l or "Error invalid file" in l for l in sess.cmd_lines):
                 raise SetupError("ldstart failed" + ("" if r else " (no answer in 120 s)"))
+            # From here "Resetting psplink" is the game's exit (psplink.ini resetonexit=1), not
+            # the reset this run did before the launch: left set, the exit test below returned
+            # at the exit line itself, closing the sockets while the PSP still streamed its exit
+            # report, and usbhostfs_pc died of SIGPIPE writing into them (the PSPLink wedge).
+            sess.resetting = sess.booted = False
             t0 = time.monotonic()
             probe_due = time.monotonic() + a.quiet
             sampler = None
@@ -691,9 +734,13 @@ def main() -> int:
                 if sess.exit_line and (sess.resetting or now - sess.last_data > a.linger
                                        or now - sess.exit_at > 10 * a.linger):
                     sess.say("exit line seen: " + sess.exit_line.split("] exit: ", 1)[1])
+                    wait_exit_reset(sess, 30)
                     return EXIT_OK
                 if now - t0 > a.timeout:
-                    sess.say(f"timeout after {a.timeout:g} s; the game is left running (the next run resets it)")
+                    sess.say(f"timeout after {a.timeout:g} s; resetting PSPLink so the game stops writing "
+                             "before this script lets go of usbhostfs_pc")
+                    if not reset_psplink(sess, 30) and not sess.lost:
+                        sess.say("PSPLink did not come back within 30 s of the reset")
                     return EXIT_TIMEOUT
                 if now - sess.last_data > a.quiet and now >= probe_due:
                     sess.say(f"no output for {now - sess.last_data:.0f} s: asking PSPLink whether the PSP is alive")
