@@ -63,6 +63,7 @@ def main(argv=None):
     ap.add_argument("--from-state", type=int, metavar="N", help="start the console from the library state nearest before tape frame N")
     ap.add_argument("--until", type=int, metavar="G", help="stop the console at desktop game frame G")
     ap.add_argument("--poke-ec", action="store_true", help="the scripted route: --poke 5290 on the desktop replay, the same rewrite on the console when Chaos 0 would load")
+    oracle_states.add_timing_args(ap)
     a = ap.parse_args(argv)
 
     dump = os.environ.get("SA1_DUMP")
@@ -79,7 +80,7 @@ def main(argv=None):
     work = os.path.abspath(a.work or tempfile.mkdtemp(prefix="sa1-oracle-"))
     os.makedirs(work, exist_ok=True)
     tape = os.path.abspath(a.tape)
-    desk, gpad = oracle_states.desktop_trace(exe, data, tape, work, a.poke_ec)
+    desk, gpad = oracle_states.desktop_trace(exe, data, tape, work, a.poke_ec, oracle_states.timing_args(a))
     fly = os.path.join(work, "flycast.tsv")
 
     fexe = oracle_dir(a.flycast)

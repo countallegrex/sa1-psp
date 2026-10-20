@@ -156,12 +156,29 @@ def run_flycast(fexe, gdi, lua, env, timeout, log, extra_config=()):
     return code
 
 
-def desktop_trace(exe, data, tape, work, poke_ec=False):
+def add_timing_args(ap):
+    """--fpu-round / --sound-timing: override the tape's header lines on the desktop replay, so
+    a tape recorded before those lines replays like the console (zero, real)."""
+    ap.add_argument("--fpu-round", choices=("zero", "nearest"), help="desktop FPU rounding (default: the tape's fpu-round line)")
+    ap.add_argument("--sound-timing", choices=("real", "none"), help="desktop sound timing (default: the tape's sound-timing line)")
+
+
+def timing_args(a):
+    """The desktop flags for add_timing_args' options."""
+    out = []
+    if getattr(a, "fpu_round", None):
+        out += ["--fpu-round", a.fpu_round]
+    if getattr(a, "sound_timing", None):
+        out += ["--sound-timing", a.sound_timing]
+    return out
+
+
+def desktop_trace(exe, data, tape, work, poke_ec=False, extra=()):
     """Replays the tape on the desktop build with the watch trace; returns (trace, gpad) paths.
     poke_ec: the scripted route's stage pokes (tools/replay_test.py ROUTE_POKES), which the
-    console side mirrors with SA1_ORACLE_POKE_EC."""
+    console side mirrors with SA1_ORACLE_POKE_EC.  extra: more desktop flags (timing_args)."""
     desk, gpad = os.path.join(work, "desktop.tsv"), os.path.join(work, "gpad.txt")
-    args = ["--replay", os.path.abspath(tape), "--watch-list", WATCH, "--watch-trace", desk] + (replay_test.ROUTE_POKES if poke_ec else [])
+    args = ["--replay", os.path.abspath(tape), "--watch-list", WATCH, "--watch-trace", desk] + (replay_test.ROUTE_POKES if poke_ec else []) + list(extra)
     code, _ = replay_test.run(os.path.abspath(exe), data, args, os.path.join(work, "desktop.log"))
     if code != 0:
         sys.exit("desktop replay failed (exit %d), log %s" % (code, os.path.join(work, "desktop.log")))
@@ -187,13 +204,13 @@ def default_frames(tape, end):
     return [("start", 120)] + [("f%d" % f, f) for f in range(3000, end, 3000)]
 
 
-def build(tape, frames, exe, data, gdi, flycast=None, poke_ec=False, work=None, timeout=0):
+def build(tape, frames, exe, data, gdi, flycast=None, poke_ec=False, work=None, timeout=0, extra=()):
     """Builds (or rebuilds) the library entries of one tape.  Returns the entries made."""
     import tempfile
     tape = os.path.abspath(tape)
     work = work or tempfile.mkdtemp(prefix="sa1-states-")
     os.makedirs(work, exist_ok=True)
-    desk, gpad = desktop_trace(exe, data, tape, work, poke_ec)
+    desk, gpad = desktop_trace(exe, data, tape, work, poke_ec, extra)
     fexe = oracle_dir(flycast)
     frames = sorted(frames, key=lambda nf: nf[1])
     plan = []
@@ -310,6 +327,7 @@ def main(argv=None):
     b.add_argument("--gdi", help="GD-ROM image (default: the .gdi in $SA1_DUMP)")
     b.add_argument("--work", help="working directory for the traces")
     b.add_argument("--timeout", type=int, default=0)
+    add_timing_args(b)
     sub.add_parser("list", help="the library's manifest")
     c = sub.add_parser("check", help="is the library of this tape current?")
     c.add_argument("tape")
@@ -344,7 +362,7 @@ def main(argv=None):
         sys.exit("no desktop executable")
     end = tape_io.read(a.tape).end
     frames = parse_frames(a.frames) if a.frames else default_frames(a.tape, end)
-    build(a.tape, frames, exe, data, gdi, a.flycast, a.poke_ec, a.work, a.timeout)
+    build(a.tape, frames, exe, data, gdi, a.flycast, a.poke_ec, a.work, a.timeout, timing_args(a))
     return 0
 
 
