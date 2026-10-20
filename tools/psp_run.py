@@ -196,16 +196,26 @@ def start_hostfs_wmi(exe: str, root: str, log_path: str) -> None:
     object owns it.  subprocess's DETACHED_PROCESS stays in the launching
     shell's job object: on 2026-10-19 a session closing took its host down
     with it and wedged the connected PSP.  cmd.exe /c does the log
-    redirection (Win32_Process.Create has no standard handles)."""
+    redirection (Win32_Process.Create has no standard handles).
+
+    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no console at all.  With
+    the hidden console WMI gave the cmd.exe wrapper, a console event killed
+    the host on 2026-10-20 at 09:24 (the log ended in "^C", without the
+    host's own "Exiting" or the wrapper's exit line: both went at once),
+    and another host died unexplained before 11:57 (its log was
+    overwritten by the next start; now kept).  Without a console no Ctrl+C, Ctrl+Break or close
+    event can reach it."""
     def ps_str(s: str) -> str:
         return "'" + s.replace("'", "''") + "'"
     # The exit status goes to the end of the log, so the next death is named
     # (a silent SIGPIPE death was the wedge's middle link); /v:on makes
     # !ERRORLEVEL! the status after the host ran, not when the line was parsed.
     cmdline = (f'cmd.exe /v:on /c ""{exe}" > "{log_path}" 2>&1 & '
-               f'echo usbhostfs_pc exited with status !ERRORLEVEL! >> "{log_path}""')
-    script = ("$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
-              f"@{{CommandLine={ps_str(cmdline)}; CurrentDirectory={ps_str(root)}}}; "
+               f'echo usbhostfs_pc exited with status !ERRORLEVEL! at !DATE! !TIME! >> "{log_path}""')
+    script = ("$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly "
+              "-Property @{CreateFlags=[uint32]0x208; ShowWindow=[uint16]0}; "      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+              "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
+              f"@{{CommandLine={ps_str(cmdline)}; CurrentDirectory={ps_str(root)}; ProcessStartupInformation=$si}}; "
               "Write-Output \"$($r.ReturnValue) $($r.ProcessId)\"")
     import base64
     enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
@@ -222,7 +232,15 @@ def start_hostfs_wmi(exe: str, root: str, log_path: str) -> None:
 def start_hostfs(exe: str, root: str, log_path: str) -> None:
     """usbhostfs_pc with root as its cwd: host0..7 default to the cwd (a root
     argument not starting with '/' is taken relative to the cwd, so a Windows
-    path cannot be passed to the Cygwin build)."""
+    path cannot be passed to the Cygwin build).  The previous host's log is
+    kept as usbhostfs_pc.<its mtime>.log: its end tells how that host died."""
+    if os.path.isfile(log_path):
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(os.path.getmtime(log_path)))
+        base, ext = os.path.splitext(log_path)
+        try:
+            os.replace(log_path, f"{base}.{stamp}{ext}")
+        except OSError:
+            pass
     if os.name == "nt":
         start_hostfs_wmi(exe, root, log_path)
     else:
