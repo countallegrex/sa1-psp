@@ -42,6 +42,25 @@
 static uint32_t memlist_base, memlist_count;
 typedef struct { uint32_t handle; uint32_t bytes; int used; uint32_t gbix; uint32_t index; uint16_t w, h; uint8_t pixfmt, datafmt, alpha, amin; char name[20]; } mem_slot;
 static mem_slot slots[MAX_ENTRIES];
+/* Backend handle -> slot + 1 (0: none), so the per-polygon lookups
+ * (texture_from_tcw: kamui's every textured strip) are not a walk over the
+ * 2048 slots (27 % of the console's CPU in Station Square, 2026-10-19).
+ * Both backends hand out handles below their TEX_MAX (2048); larger ones
+ * take the walk.  Kept by slot_set/slot_clear and rebuilt by hmap_rebuild. */
+#define HMAP 4096u
+static uint16_t hmap[HMAP];
+static void hmap_rebuild(void) {
+    memset(hmap, 0, sizeof hmap);
+    for (uint32_t i = 0; i < MAX_ENTRIES; i++) if (slots[i].used && slots[i].handle < HMAP) hmap[slots[i].handle] = (uint16_t)(i + 1);
+}
+static int slot_of_handle(uint32_t h) {
+    if (h < HMAP) {
+        int i = (int)hmap[h] - 1;
+        return i >= 0 && (uint32_t)i < memlist_count && slots[i].used && slots[i].handle == h ? i : -1;
+    }
+    for (uint32_t i = 0; i < memlist_count; i++) if (slots[i].used && slots[i].handle == h) return (int)i;
+    return -1;
+}
 static uint32_t total_bytes;
 static int ntex;
 static uint32_t palette[1024];        /* KAMUI palette RAM, ARGB8888 */
@@ -211,6 +230,7 @@ static int load_entry_ex(const uint8_t *p, uint32_t n, uint32_t gbix_hint, const
     int i = find_free();
     if (i < 0) { draw_texture_destroy(handle); sa1_log("texture: memory list full (%u entries)", memlist_count); return -1; }
     slots[i].used = 1; slots[i].handle = handle; slots[i].bytes = bytes; slots[i].gbix = gbix;
+    if (handle < HMAP) hmap[handle] = (uint16_t)(i + 1);
     slots[i].index = decode_index; slots[i].w = (uint16_t)w; slots[i].h = (uint16_t)h; slots[i].pixfmt = (uint8_t)pixfmt; slots[i].datafmt = (uint8_t)decode_datafmt;
     slots[i].alpha = (uint8_t)decode_alpha; slots[i].amin = (uint8_t)decode_amin;
     snprintf(slots[i].name, sizeof slots[i].name, "%s", what ? what : "");
@@ -237,6 +257,7 @@ static void release_entry(uint32_t e) {
     if (cnt > 1) { hle_wr32(e + 64, cnt - 1); return; }
     draw_texture_destroy(slots[i].handle);
     total_bytes -= slots[i].bytes; ntex--;
+    if (slots[i].handle < HMAP) hmap[slots[i].handle] = 0;
     memset(&slots[i], 0, sizeof slots[i]);
     hle_wr32(e + 0, 0xFFFFFFFFu); hle_wr32(e + 12, 0); hle_wr32(e + 64, 0);
 }
@@ -255,7 +276,8 @@ int texture_select_gindex(uint32_t gbix) {
 
 /* "<index> <fmt> <flags> <w>x<h>" of a live texture handle (the mark key). */
 int texture_describe(uint32_t handle, char *buf, unsigned n) {
-    for (uint32_t i = 0; i < memlist_count; i++) if (slots[i].used && slots[i].handle == handle) {
+    int i = slot_of_handle(handle);
+    if (i >= 0) {
         snprintf(buf, n, "%04u %s %s %ux%u h%u", slots[i].index, pixfmt_name(slots[i].pixfmt), datafmt_name(slots[i].datafmt), slots[i].w, slots[i].h, handle);
         return 1;
     }
@@ -264,11 +286,12 @@ int texture_describe(uint32_t handle, char *buf, unsigned n) {
 }
 
 const char *texture_name(uint32_t handle) {
-    for (uint32_t i = 0; i < memlist_count; i++) if (slots[i].used && slots[i].handle == handle) return slots[i].name;
-    return "?";
+    int i = slot_of_handle(handle);
+    return i >= 0 ? slots[i].name : "?";
 }
 int texture_alpha_info(uint32_t handle, int *amin) {
-    for (uint32_t i = 0; i < memlist_count; i++) if (slots[i].used && slots[i].handle == handle) {
+    int i = slot_of_handle(handle);
+    if (i >= 0) {
         if (amin) *amin = slots[i].amin;
         return slots[i].alpha;
     }
@@ -278,11 +301,10 @@ int texture_alpha_info(uint32_t handle, int *amin) {
 
 uint32_t texture_from_tcw(uint32_t tcw) {
     uint32_t h = tcw & 0x1FFFFFu;
-    for (uint32_t i = 0; i < memlist_count; i++) if (slots[i].used && slots[i].handle == h) return h;
-    return 0;
+    return slot_of_handle(h) >= 0 ? h : 0;
 }
 
-void texture_init(void) { memset(slots, 0, sizeof slots); total_bytes = 0; ntex = 0; }
+void texture_init(void) { memset(slots, 0, sizeof slots); memset(hmap, 0, sizeof hmap); total_bytes = 0; ntex = 0; }
 
 /* ---- texlist helpers --------------------------------------------------------------- */
 #define ATTR_GLOBALINDEX 0x80000000u
@@ -501,4 +523,5 @@ void texture_state(hle_state_io *io) {
     hle_state_blob(io, "tex.n", &ntex, sizeof ntex);
     hle_state_blob(io, "tex.palette", palette, sizeof palette);
     hle_state_blob(io, "tex.index", &decode_index, sizeof decode_index);
+    hmap_rebuild();
 }
