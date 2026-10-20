@@ -63,8 +63,12 @@ def main(argv=None):
     ap.add_argument("--from-state", type=int, metavar="N", help="start the console from the library state nearest before tape frame N")
     ap.add_argument("--until", type=int, metavar="G", help="stop the console at desktop game frame G")
     ap.add_argument("--poke-ec", action="store_true", help="the scripted route: --poke 5290 on the desktop replay, the same rewrite on the console when Chaos 0 would load")
+    ap.add_argument("--watch", help="watch list for both sides (default tests/replay/watch.txt)")
     oracle_states.add_timing_args(ap)
     a = ap.parse_args(argv)
+    global WATCH
+    if a.watch:
+        WATCH = oracle_states.WATCH = os.path.abspath(a.watch)
 
     dump = os.environ.get("SA1_DUMP")
     if not dump:
