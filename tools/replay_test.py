@@ -64,8 +64,11 @@ def find_exe(arg):
     return None
 
 
+GAME_ARGS = []      # --game-arg: options added to every run
+
+
 def run(exe, data, args, log):
-    cmd = [exe, os.path.join(data, "1ST_READ.BIN"), data, "--headless", "--log", log] + args
+    cmd = [exe, os.path.join(data, "1ST_READ.BIN"), data, "--headless", "--log", log] + args + GAME_ARGS
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     text = open(log, encoding="utf-8", errors="replace").read() if os.path.exists(log) else ""
     return p.returncode, text + p.stderr
@@ -127,8 +130,10 @@ def main(argv=None):
     ap.add_argument("--update", metavar="NAME", action="append", default=[],
                     help="regenerate NAME.check from a traced replay of NAME.tape (repeatable)")
     ap.add_argument("--keep", action="store_true", help="keep the run logs (printed paths)")
+    ap.add_argument("--game-arg", action="append", default=[], help="an option for every run (e.g. --game-arg=--ta-direct)")
     ap.add_argument("names", nargs="*", help="tapes to run (default: all)")
     a = ap.parse_args(argv)
+    GAME_ARGS[:] = a.game_arg
 
     dump = os.environ.get("SA1_DUMP")
     if not dump:

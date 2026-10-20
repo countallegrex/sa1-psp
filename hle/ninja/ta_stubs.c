@@ -27,6 +27,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "../hle.h"
+#include "ninja.h"
 
 #include <stdlib.h>
 
@@ -102,7 +103,21 @@ TA_PASS(8c037460)
 TA_PASS(8c0374d4)
 TA_PASS(8c037538)
 TA_PASS(8c0375b0)
+/* With --ta-direct the native body (ta_direct.c) writes the strips into
+ * kamui's host store; a traced frame keeps the TA bytes for the dump. */
+void fn_8c037990_orig(sh4_ctx *c);
+void fn_8c037990_ta(sh4_ctx *c);
+void fn_8c037990(sh4_ctx *c) {
+    if (hle_ta_direct && !kamui_ptr_trace()) {
+        HLE_ENTER(0x8c037990u, "TA writer fn_8c037990");
+        ta_direct_8c037990(c);
+        return;
+    }
+    fn_8c037990_ta(c);
+}
+#define fn_8c037990 fn_8c037990_ta
 TA_PASS(8c037990)
+#undef fn_8c037990
 TA_PASS(8c037c3c)
 TA_PASS(8c037ccc)
 TA_PASS_BANKED(8c037ee0)

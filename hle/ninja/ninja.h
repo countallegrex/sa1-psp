@@ -37,6 +37,11 @@ void kamui_draw_end(sh4_ctx *c);
 /* Bracket writes of 2D elements (HUD, menus, 2D sprites): the parameters
  * written in between are drawn in the 4:3 area (draw.h, DRAW_LAYER_2D). */
 int kamui_ptr_trace(void);            /* SA1_KAMUI_DUMP: this frame is being traced */
+/* The TA bypass (docs/ta-direct.md): n vertices in the host strip store for
+ * a native writer, *first their index for the marker; NULL when full.  The
+ * pointer is good until the next call. */
+draw_vertex *kamui_direct_strip(uint32_t n, uint32_t *first);
+void ta_direct_8c037990(sh4_ctx *c);
 void kamui_mark2d_begin(void);
 void kamui_mark2d_end(void);
 int kamui_select_texture(uint32_t n);
