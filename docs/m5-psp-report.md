@@ -43,6 +43,15 @@ uncommitted edits, and usbhostfs_pc is never restarted.
 | 448786f | `texture_from_tcw` by a handle map: kamui looked up every textured strip's TCW by walking the 2048 texture slots, **27.5 %** of all samples | 98-101 | 40-42 |
 | 68ca26e | (the M3 audio in the build) | 102-106 | 41-43 |
 | d5d3e10, e978392 | kamui: one walk cuts each TA buffer into runs of one list, each parse visits its own runs and reads through one host pointer (the three parses walked every buffer whole, reading each vertex word through the guest-address helpers: two thirds of `parse_region`); renderer: one 1/w per vertex (it was divided twice, three times with an offset colour, plus three integer divides by 255) | 88-90 | 28-30 |
+| 5c16b92 | the game thread's FPU rounds toward zero, as the Dreamcast (correctness; the baseline below) | 88.33 | 28.4 |
+| d4d245a | the hottest game chunks (game_003, game_005) at `-O2`, so `sa1_off` is inlined there (+117 KB) | 84.56 | 28.8 |
+| 4fc6352 | `stack_probe` keeps the current coroutine's stack limit instead of looking it up per call | 86.13 (alone) | 28.3 |
+| d4d245a + 4fc6352 | both (title_menu.tape PASS on the console) | **82.45-82.49** | 28.9 |
+
+From 5c16b92 on, the frame column is the mean of the three `--stats 150`
+windows ending at frames 300, 450 and 600 (two runs each agree within
+0.05 ms). Tried and dropped: replaying the display list without pspsdk's
+per-draw `sceGeListUpdateStallAddr` syscall measured 1.1 ms worse.
 
 The whole `sonic_ec1` tape to frame 7000 took 679 s at the start, 501 s
 after 448786f; the Station Square streets went 150 -> 127 ms, the
@@ -86,9 +95,9 @@ the text at 0.00002, and the HUD at 1) skip the write.
 
 ## 4. Open
 
-- Measure on the console: hot chunks at `-O2`, the replay without the
-  per-draw `sceGeListUpdateStallAddr` (pspsdk's `sceGuDrawArray` makes the
-  syscall on every draw of a direct list: ~1,500 a frame).
+- `sa1_off` for good: a guest-memory base register, the emitter knowing
+  which bases are RAM (r15, GBR, literal pools); more hot chunks at `-O2`
+  meanwhile, chosen by a per-chunk profile.
 - The display-list copy through the uncached alias (`memcpy` 3.4 %).
 - The game's TA writers and the HLE model path: the GE hardware
   transform lever (README §5, orchestrator backlog).
