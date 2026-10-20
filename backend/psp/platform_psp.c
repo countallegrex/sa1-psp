@@ -227,6 +227,13 @@ void plat_log_flush(void) {
     log_len = 0;
 }
 
+/* At exit: the buffer out and nothing left open on host0:. */
+void plat_log_close(void) {
+    plat_log_flush();
+    if (log_fd >= 0) { sceIoClose(log_fd); log_fd = -1; }
+    log_path_s[0] = 0;
+}
+
 void plat_log_sync(int on) {
     if (on == log_sync) return;
     if (on) { plat_log_flush(); if (log_fd >= 0) { sceIoClose(log_fd); log_fd = -1; } }

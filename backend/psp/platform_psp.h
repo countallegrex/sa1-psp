@@ -54,6 +54,8 @@ void plat_io_report(void);
  * PPSSPP's log).  plat_log_flush writes the buffer out. */
 int plat_log_open(const char *path, int to_stdout);
 void plat_log_flush(void);
+/* plat_log_flush, then close the log file (at exit: later lines go to stdout only). */
+void plat_log_close(void);
 /* 1 = write every line through to the card (the default until main_psp.c
  * turns it off after the first frames), 0 = buffered. */
 void plat_log_sync(int on);

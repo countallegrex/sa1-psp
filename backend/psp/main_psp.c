@@ -209,14 +209,26 @@ static void stack_probe(void) {
     sa1_trap(&ctx, 0, "host stack nearly exhausted");
 }
 
+/* --prof: its alarm ends at its next tick once run == 2 (the exit reset
+ * reboots the kernel anyway). */
+static void prof_stop(void) {
+    if (!prof || prof->run == 2) return;
+    prof->run = 2;
+    sceKernelDelayThread(3 * prof_us);
+}
+
+/* The exit line last: psp_run.py takes it as the end of the run, so the
+ * reports go before it, then the log is closed and the GE stopped. */
 static void report_and_exit(int code) {
     code = input_tape_finish(code, NULL);
-    sa1_log("exit: %u frames, %.3f s, code %d", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6, code);
+    prof_stop();
+    uint64_t t_end = sa1_plat_time_us();
     kamui_report();
     draw_gu_report();
     mem_report("exit");
     sa1_seam_report(20);
-    plat_log_flush();
+    sa1_log("exit: %u frames, %.3f s, code %d", hle_frame_count(), (t_end - t0) / 1e6, code);
+    plat_log_close();
     plat_files_close_all();
     draw_shutdown();
     sceKernelExitGame();
@@ -226,11 +238,13 @@ static void report_and_exit(int code) {
 static void on_trap(sh4_ctx *c, uint32_t pc, const char *what) {
     (void)c; (void)pc; (void)what;
     input_tape_finish(3, "trap");
+    prof_stop();
     plat_backtrace();
-    sa1_log("exit: trap after %u frames, %.3f s", hle_frame_count(), (sa1_plat_time_us() - t0) / 1e6);
+    uint64_t t_end = sa1_plat_time_us();
     mem_report("trap");
     sa1_seam_report(20);
-    plat_log_flush();
+    sa1_log("exit: trap after %u frames, %.3f s", hle_frame_count(), (t_end - t0) / 1e6);
+    plat_log_close();
 }
 static void on_badaddr(uint32_t addr) { (void)addr; plat_backtrace(); }
 
@@ -405,8 +419,9 @@ static void read_args_file(const char *path) {
 
 static int exit_callback(int a, int b, void *c) {
     (void)a; (void)b; (void)c;
+    prof_stop();
     sa1_log("exit: HOME at frame %u", hle_frame_count());
-    plat_log_flush();
+    plat_log_close();
     sceKernelExitGame();
     return 0;
 }

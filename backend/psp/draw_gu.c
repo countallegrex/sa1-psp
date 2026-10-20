@@ -576,6 +576,8 @@ int draw_init(int scale, int want_headless) {
 
 void draw_shutdown(void) {
     if (headless) return;
+    sceGuSync(0, 0);                    /* let the GE finish the last list */
+    sceGuDisplay(GU_FALSE);
     sceGuTerm();
     headless = 1;
 }
