@@ -69,6 +69,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <fenv.h>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -574,6 +575,15 @@ int main(int argc, char **argv) {
     savestate_add("main", main_state);
     savestate_add("textures", draw_gl_texture_state);
     savestate_set_meta(state_meta_fill, state_loaded);
+    /* The console runs with FPSCR.RM = 1 (round toward zero, the Katana
+     * reset value 0x00040001); the recompiled code does its float work on
+     * the host FPU, so the host rounds the same way.  Every coroutine runs
+     * on this OS thread and the switch does not touch MXCSR, so this one
+     * call covers them all.  Tapes recorded before this replay with
+     * round-to-nearest (input_tape.c, fpu-round). */
+    int fpu_zero = input_tape_fpu_zero() != 0;
+    fesetround(fpu_zero ? FE_TOWARDZERO : FE_TONEAREST);
+    sa1_log("fpu: host rounds %s", fpu_zero ? "toward zero, as the console" : "to nearest (a tape recorded before round-toward-zero)");
     if (savestate_supervise(boot, NULL, load_path) != 0) { report_and_exit(1); return 1; }
     report_and_exit(0);
     return 0;

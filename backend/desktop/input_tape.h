@@ -27,3 +27,6 @@ int input_tape_recording(void);
 /* The sound timing the run must give the guest: 1 real, 0 none (a tape
  * recorded before M3), -1 when neither a tape nor --sound-timing says. */
 int input_tape_sound_timing(void);
+/* The host FPU rounding the run must use: 1 toward zero (the console's),
+ * 0 to nearest (a tape recorded before 2026-10-19), -1 not given. */
+int input_tape_fpu_zero(void);

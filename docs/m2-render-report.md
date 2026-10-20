@@ -966,7 +966,9 @@ in §6 with what is known about each.
   stays stuck there (it is then hit by the Egg Keeper at about 3070 and
   loses a life; ours runs on into the pier). The first divergence of the
   recompiled game from the console found by the oracle that is not
-  timing; a seam or collision body to find.
+  timing; a seam or collision body to find. *Resolved 2026-10-19: the
+  host FPU rounded to nearest where the console rounds toward zero
+  (tests/replay/README.md, `fpu-round`).*
 - The console's stage timer reads three hundredths behind ours
   throughout Emerald Coast (the intro-pan timing of §10).
 

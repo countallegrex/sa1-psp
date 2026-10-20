@@ -23,6 +23,12 @@
  *                       its mode into the tape; a replay takes the tape's,
  *                       and a tape without the line (recorded before M3)
  *                       replays as "none"
+ *   --fpu-round zero|nearest
+ *                       the host FPU's rounding: "zero" is the console's (the
+ *                       Katana reset FPSCR 0x00040001 has RM = 1, round
+ *                       toward zero), "nearest" what every run used before
+ *                       2026-10-19.  A recording writes its mode into the
+ *                       tape; a tape without the line replays as "nearest"
  *
  * main.c calls in at five points: argument parsing, start-up (before
  * hle_init), the pad of each frame, the end of each frame hook (where
@@ -45,6 +51,7 @@ static int strict;
 static int64_t epoch = 946684800;           /* 2000-01-01 00:00 UTC */
 static int epoch_set;
 static int sound_timing = -1, sound_timing_set;   /* 1 real, 0 none, -1 not given */
+static int fpu_zero = -1, fpu_zero_set;           /* 1 toward zero, 0 nearest, -1 not given */
 static const char *record_path, *replay_path, *check_path, *watch_list_path, *watch_trace_path;
 static uint32_t expect_frame;
 static char title_sha[65];
@@ -118,6 +125,7 @@ static int load_tape(const char *path) {
                 }
             } else if (!strcmp(key, "epoch")) { if (!epoch_set) epoch = strtoll(val, NULL, 0); }
             else if (!strcmp(key, "sound-timing")) { if (!sound_timing_set) sound_timing = strcmp(val, "none") != 0; }
+            else if (!strcmp(key, "fpu-round")) { if (!fpu_zero_set) fpu_zero = !strcmp(val, "zero"); }
             else if (!strcmp(key, "end")) {
                 uint32_t e = (uint32_t)strtoul(val, NULL, 0) + 1;
                 if (e > tape_frames) {
@@ -280,6 +288,7 @@ int input_tape_arg(int argc, char **argv, int *i) {
     else if (*i + 1 >= argc) return 0;
     else if (!strcmp(a, "--epoch")) { epoch = strtoll(argv[++*i], NULL, 0); epoch_set = 1; }
     else if (!strcmp(a, "--sound-timing")) { sound_timing = strcmp(argv[++*i], "none") != 0; sound_timing_set = 1; }
+    else if (!strcmp(a, "--fpu-round")) { fpu_zero = !strcmp(argv[++*i], "zero"); fpu_zero_set = 1; }
     else if (!strcmp(a, "--record")) { record_path = argv[++*i]; strict = 1; }
     else if (!strcmp(a, "--replay")) { replay_path = argv[++*i]; strict = 1; }
     else if (!strcmp(a, "--check")) check_path = argv[++*i];
@@ -307,6 +316,7 @@ int input_tape_start(const char *title_path) {
     }
     if (record_path || replay_path) sha256_hex(digest, title_sha);
     if (replay_path && !sound_timing_set) sound_timing = 0;      /* the tape's line, if any, sets it back */
+    if (replay_path && !fpu_zero_set) fpu_zero = 0;
     if (replay_path && load_tape(replay_path) != 0) return -1;
     if (check_path && load_checks(check_path) != 0) return -1;
     if (record_path) {
@@ -314,6 +324,7 @@ int input_tape_start(const char *title_path) {
         if (!rec) { fprintf(stderr, "record: cannot write %s\n", record_path); return -1; }
         fprintf(rec, "sa1psp-tape %d\ntitle-sha256 %s\nepoch %lld\ntool %s\n", TAPE_FORMAT, title_sha, (long long)epoch, TAPE_TOOL);
         fprintf(rec, "sound-timing %s\n", sound_timing == 0 ? "none" : "real");
+        fprintf(rec, "fpu-round %s\n", fpu_zero == 0 ? "nearest" : "zero");
         fprintf(rec, "# FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]\n");
         sa1_log("record: %s", record_path);
     }
@@ -401,3 +412,4 @@ int input_tape_finish(int code, const char *why) {
 }
 
 int input_tape_sound_timing(void) { return sound_timing; }
+int input_tape_fpu_zero(void) { return fpu_zero; }

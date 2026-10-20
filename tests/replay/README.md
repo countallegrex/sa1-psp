@@ -146,6 +146,7 @@ title-sha256 45bc5d3c…          # SHA-256 of 1ST_READ.BIN; replay refuses anot
 epoch 946684800                 # RTC start, Unix seconds
 tool sa1psp input_tape 1
 sound-timing real               # M3 and later; absent = none
+fpu-round zero                  # 2026-10-19 and later; absent = nearest
 # FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]
 1 0 0 0 0 0 499
 500 8 0 0 0 0 4
@@ -167,7 +168,7 @@ otherwise. `#` starts a comment.
 `sound-timing` records what the guest saw of sound playback when the
 tape was made. Before M3 there was no ADX player, so every voice line
 ended the moment it started; with real playback a cutscene waits for its
-line (`docs/formats/sound.md` �2.2), which moves everything after it.
+line (`docs/formats/sound.md` §2.2), which moves everything after it.
 Replaying a pre-M3 tape with real timing desyncs it (the Chaos 0 fight of
 `sonic_ec1` drifts from tape frame 7200), so a tape without the line
 replays as `none`: the players are still created and still heard (BGM,
@@ -175,6 +176,22 @@ voices, effects all render), but they report "stopped" and no time to the
 game, as before. `--record` writes `real` (or what `--sound-timing` says),
 and `--sound-timing real|none` overrides a tape's line. All the tapes in
 this directory predate M3.
+
+`fpu-round` is the host FPU's rounding during the run. The console runs
+its float code with FPSCR.RM = 1, round toward zero (the Katana reset
+value 0x00040001), and the recompiled code computes on the host FPU, so
+since 2026-10-19 the desktop sets the host to round toward zero too
+(`backend/desktop/main.c`). It matters: on the scripted Emerald Coast
+route, round-to-nearest drifts Sonic's position by tenths of a unit from
+game frame 2844, he stops 3.4 units further on at the beach deck chairs
+and at 2859 gets free and runs on, while the console stays stuck; with
+round toward zero he stops where the console does (z 403.80 against
+403.84) and stays, and the routes agree to 2900 (position within 4 units,
+none of the 325-unit split). Tapes recorded before carry no line and
+replay with round-to-nearest, which they were recorded with; `--record`
+writes `zero`, and `--fpu-round zero|nearest` overrides a tape's line.
+For console comparisons of an old tape (`tools/flycast/`), replay it with
+`--fpu-round zero --sound-timing real` to get the console's behaviour.
 
 ## Check format (`.check`)
 
