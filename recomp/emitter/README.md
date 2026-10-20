@@ -135,8 +135,11 @@ precision (PR=1) uses `DR(hi, lo)`/`DR_SET` over the two float locals
 under SZ=1 transfer FR[2n] from the lower address and FR[2n+1] from the
 higher one (register order = address order), which is what makes a
 `float[4][4]` matrix load into XMTRX in column-major order; to be confirmed
-against a Flycast trace in M2 if any PR=1 code turns up. `fmac` is two
-roundings: compile the output with `-ffp-contract=off`. `fsca` uses
+against a Flycast trace in M2 if any PR=1 code turns up. `fmac` goes
+through `FMAC_F` (sh4_rt.h): fused, as Flycast computes it, when the build
+defines `SH4_FMAC_FUSED` (the desktop), else two roundings (the PSP, where
+the fused form needs soft-float doubles); compile the output with
+`-ffp-contract=off` either way. `fsca` uses
 `sinf`/`cosf`, `fsrra` is `1/sqrtf`, `ftrc` saturates like the hardware.
 Rounding mode: the C code runs in the host's default (round to nearest);
 FPSCR.RM writes are tracked but not applied. If the M2 traces show the game
@@ -244,7 +247,7 @@ Generated from `LOWERING_DOC` in `sh4emit/lower.py`.
 | fmov.s loads/stores | `RDF/WRF`; under SZ=1 two words, register order = address order (see README) |
 | fldi0 / fldi1 / flds / fsts | assignments, `F2U/U2F` for the bit moves |
 | fadd / fsub / fmul / fdiv | float operators; under PR=1 `DR_SET(hi, lo, DR(..) op DR(..))` |
-| fmac | `frn = fr0 * frm + frn;` (two roundings: compile with -ffp-contract=off) |
+| fmac | `frn = FMAC_F(fr0, frm, frn);` (fused with SH4_FMAC_FUSED, else two roundings) |
 | fabs / fneg | sign-bit operations (`FABS_F/FNEG_F`), `fabs()` / `-` under PR=1 |
 | fsqrt / fsrra | `sqrtf` / `1.0f / sqrtf` |
 | fcmp/eq / fcmp/gt | `t = a == b;` / `t = b > a;` (frn > frm) |

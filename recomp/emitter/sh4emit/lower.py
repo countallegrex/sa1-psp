@@ -395,7 +395,7 @@ class Lowerer:
             dbl = "fpul = FTRC_D(DR(%s, %s));" % self.DRn(m)
             self.pr_select(E, single, dbl)
         elif op == "FMAC":
-            E("%s = %s * %s + %s;" % (self.F(n), self.F(0), self.F(m), self.F(n)))
+            E("%s = FMAC_F(%s, %s, %s);" % (self.F(n), self.F(0), self.F(m), self.F(n)))
         elif op == "FCNVDS":
             E("fpul = F2U((float)DR(%s, %s));" % self.DRn(m))
         elif op == "FCNVSD":
@@ -531,7 +531,7 @@ LOWERING_DOC = [
     ("fmov.s loads/stores", "`RDF/WRF`; under SZ=1 two words, register order = address order (see README)"),
     ("fldi0 / fldi1 / flds / fsts", "assignments, `F2U/U2F` for the bit moves"),
     ("fadd / fsub / fmul / fdiv", "float operators; under PR=1 `DR_SET(hi, lo, DR(..) op DR(..))`"),
-    ("fmac", "`frn = fr0 * frm + frn;` (two roundings: compile with -ffp-contract=off)"),
+    ("fmac", "`frn = FMAC_F(fr0, frm, frn);` (sh4_rt.h: fused with SH4_FMAC_FUSED, else two roundings)"),
     ("fabs / fneg", "sign-bit operations (`FABS_F/FNEG_F`), `fabs()` / `-` under PR=1"),
     ("fsqrt / fsrra", "`sqrtf` / `1.0f / sqrtf`"),
     ("fcmp/eq / fcmp/gt", "`t = a == b;` / `t = b > a;` (frn > frm)"),

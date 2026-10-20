@@ -103,6 +103,8 @@ if(SA1_GAME_SRCS)
   target_compile_options(sa1psp PRIVATE
     -fno-strict-aliasing -ffp-contract=off -Wall
     -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable -Wno-parentheses)
+  # fmac fused like the console oracle (sh4_rt.h FMAC_F)
+  target_compile_definitions(sa1psp PRIVATE SH4_FMAC_FUSED=1)
   option(SA1_TRACE_FUNCS "Instrument the recompiled code for --trace-funcs (debug)" OFF)
   set(SA1_GAME_FLAGS "${SA1_GAME_OPT}")
   if(SA1_TRACE_FUNCS)

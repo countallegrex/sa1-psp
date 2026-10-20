@@ -6,7 +6,7 @@
  *
  * Requirements on the C compiler: little-endian target, IEEE-754 float and
  * double, -fno-strict-aliasing or support for __attribute__((may_alias)),
- * and -ffp-contract=off so that fmac is two roundings like the hardware.
+ * and -ffp-contract=off (fmac goes through FMAC_F below, never a contraction).
  */
 #ifndef SH4_RT_H
 #define SH4_RT_H
@@ -312,6 +312,18 @@ static inline uint32_t sh4_ftrc_d(double d) {
 }
 #define FTRC(f) sh4_ftrc(f)
 #define FTRC_D(d) sh4_ftrc_d(d)
+/* fmac FR0,FRm,FRn: FRn = FR0 * FRm + FRn.  Flycast (the oracle) computes it
+ * fused, one rounding (std::fma); with SH4_FMAC_FUSED (the desktop build) so
+ * do we: the product of two floats is exact in a double, and under the
+ * game's round-toward-zero (FPSCR.RM = 1) truncating the double sum and then
+ * the float is one truncation, so the double form is the fused result
+ * exactly (round-to-nearest tapes: off by one ulp in rare ties).  Without it
+ * (the PSP, where doubles are soft-float): two roundings. */
+#ifdef SH4_FMAC_FUSED
+#define FMAC_F(a, b, c) ((float)((double)(a) * (double)(b) + (double)(c)))
+#else
+#define FMAC_F(a, b, c) ((a) * (b) + (c))
+#endif
 /* fsca: angle is the low 16 bits of FPUL, 65536 = one turn. */
 #define FSCA(fp, sn, cs) do { float a_ = (float)((fp) & 0xFFFFu) * (float)(6.283185307179586 / 65536.0); \
     (sn) = sinf(a_); (cs) = cosf(a_); } while (0)
