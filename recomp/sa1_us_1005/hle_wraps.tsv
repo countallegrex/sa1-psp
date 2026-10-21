@@ -18,6 +18,7 @@ address	hle	what
 8c099ab2	hle/game/tasks.c	task kill (task): recursive; the wrapper releases the native coroutine
 8c0517f6	hle/shinobi/vsync.c	game frame wait, second entry: spins while the VBlank countdown 0x8C754EC0 is above r4 (the adventure field runs several logic updates per frame)
 8c037294	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c037350	hle/ninja/ta_stubs.c	model lighting stage (ta_xform.c)
 8c037460	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
 8c0374d4	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
 8c037538	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op

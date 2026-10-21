@@ -48,6 +48,16 @@ file(GLOB SA1_HLE_SRCS CONFIGURE_DEPENDS
      "${CMAKE_SOURCE_DIR}/hle/sound/*.c"
      "${CMAKE_SOURCE_DIR}/hle/overlay/*.c")
 add_library(sa1_hle OBJECT ${SA1_HLE_SRCS} ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime/sh4_rt.c)
+# 0x8C037350 (model lighting, hle/ninja/ta_xform.c) is wrapped only when the
+# emitted code renamed its body (recomp/sa1_us_1005/hle_wraps.tsv): a
+# recomp/out emitted before that entry keeps the recompiled function.
+if(EXISTS "${SA1_RECOMP_OUT}/emitter/game.h")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SA1_RECOMP_OUT}/emitter/game.h")
+  file(STRINGS "${SA1_RECOMP_OUT}/emitter/game.h" _sa1_wrap350 REGEX "fn_8c037350_orig" LIMIT_COUNT 1)
+  if(_sa1_wrap350)
+    target_compile_definitions(sa1_hle PRIVATE SA1_WRAP_8C037350)
+  endif()
+endif()
 target_include_directories(sa1_hle PUBLIC
   ${CMAKE_SOURCE_DIR}/hle
   ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime

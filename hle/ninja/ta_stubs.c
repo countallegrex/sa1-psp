@@ -98,7 +98,31 @@ static void ta_bt_leave(uint32_t tr) {       /* at exit: the wanted header lies 
         fn_##addr##_orig(c); \
         kamui_mark2d_end(); }
 
+/* The per-vertex transform and the lighting (ta_xform.c) natively with
+ * --ta-direct too; a traced frame runs the recompiled bodies. */
+void fn_8c037294_orig(sh4_ctx *c);
+void fn_8c037294_ta(sh4_ctx *c);
+void fn_8c037294(sh4_ctx *c) {
+    if (hle_ta_direct && !kamui_ptr_trace()) {
+        HLE_ENTER(0x8c037294u, "TA writer fn_8c037294");
+        ta_xform_8c037294(c);
+        return;
+    }
+    fn_8c037294_ta(c);
+}
+#define fn_8c037294 fn_8c037294_ta
 TA_PASS(8c037294)
+#undef fn_8c037294
+/* 0x8C037350 is wrapped once recomp/sa1_us_1005/hle_wraps.tsv lists it and
+ * recomp/out is regenerated (its body then is fn_8c037350_orig). */
+#ifdef SA1_WRAP_8C037350
+void fn_8c037350_orig(sh4_ctx *c);
+void fn_8c037350(sh4_ctx *c) {
+    HLE_ENTER(0x8c037350u, "model lighting fn_8c037350");
+    if (hle_ta_direct && !kamui_ptr_trace()) ta_xform_8c037350(c);
+    else fn_8c037350_orig(c);
+}
+#endif
 TA_PASS(8c037460)
 TA_PASS(8c0374d4)
 TA_PASS(8c037538)
