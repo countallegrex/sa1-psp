@@ -102,6 +102,7 @@ static struct { uint32_t frame, hold; int x, y; } sticks[PRESS_MAX];
 static int nsticks;
 static struct { uint32_t frame; const char *path; } shots[PRESS_MAX];
 static int nshots;
+static int aspect_given;                               /* --aspect given: it overrides the tape's aspect line */
 static uint32_t mem_frames[16];
 static int nmem;
 static struct { uint32_t frame, addr, value, size; } pokes[PRESS_MAX];   /* --poke, --stage */
@@ -500,7 +501,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--gu-max-mip") && i + 1 < args_c) draw_gu_set_max_mip(atoi(av[++i]));
         else if (!strcmp(av[i], "--stats") && i + 1 < args_c) stats_every = atoi(av[++i]);
         else if (!strcmp(av[i], "--mem") && i + 1 < args_c && nmem < 16) mem_frames[nmem++] = (uint32_t)strtoul(av[++i], NULL, 0);
-        else if (!strcmp(av[i], "--aspect") && i + 1 < args_c) { const char *a = av[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; }
+        else if (!strcmp(av[i], "--aspect") && i + 1 < args_c) { const char *a = av[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; aspect_given = 1; }
         else if (!strcmp(av[i], "--screenshot") && i + 1 < args_c && nshots < PRESS_MAX) {
             char *spec = av[++i], *end;
             shots[nshots].frame = (uint32_t)strtoul(spec, &end, 0);
@@ -606,6 +607,7 @@ int main(int argc, char **argv) {
     sa1_log("step: tapes");
     if (input_tape_start(bin) != 0) { sa1_log("tape: start-up failed (stderr.txt has why)"); plat_log_flush(); sceKernelExitGame(); return 2; }
     if (!frame_limit) frame_limit = input_tape_frames();
+    if (!aspect_given && input_tape_aspect_wide() >= 0) hle_aspect_wide = input_tape_aspect_wide();
     /* The rounding as the desktop's (backend/desktop/main.c): the console
      * runs with FPSCR.RM = 1, round toward zero (the Katana reset value
      * 0x00040001), and the recompiled code computes on this FPU, so FCSR.RM
