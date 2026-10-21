@@ -59,6 +59,15 @@
 -- vblank presents what the desktop had at the next one: in the first vblank
 -- of game frame G the pad of G's last vblank ("G ..." lines), in a later
 -- vblank the pad of G+1's first vblank ("first G+1 ..." lines).
+-- When the watch list has an rng_seed row (the game's rand() state) and the
+-- sync line carries the desktop's seed, the console's seed is set to it at
+-- that sync, and the gap is printed as a count of rand() calls.  Loads let
+-- vblanks pass on the console (a blocking 200 KB read is ~6 vblanks in
+-- Flycast, instant on the desktop), and the adventure field then runs
+-- catch-up logic updates (0x8C04EA90): a different number of rand() calls
+-- before the mode change, so without the resync every object that picks a
+-- random target diverges after the first load.  Mode changes happen at
+-- loads, where no rand() call runs, so both sides are at rest there.
 --
 -- Part of sa1-psp (MIT).
 
@@ -73,7 +82,7 @@ local loaded = LOAD_SLOT < 0          -- vblanks before the state is in are not 
 
 local pads, firsts, first_g, last_g = {}, {}, nil, -1
 local cur_g, phase = nil, 0   -- the counter and the vblanks since it changed
-local watches, counter, modew = {}, nil, nil
+local watches, counter, modew, rngw = {}, nil, nil, nil
 local syncs, next_sync, offset, aligned, last_mode, unaligned_since = {}, 1, 0, true, nil, 0
 local START_TAP = {8, 0, 0, 0, 0}
 local LOOKAHEAD = 4          -- desktop mode changes the console may skip before a match
@@ -94,8 +103,8 @@ end
 
 local function load()
   for line in io.lines(GPAD) do
-    local sm, sg = line:match("^sync%s+(%d+)%s+(%d+)")
-    if sm then syncs[#syncs + 1] = {mode = tonumber(sm), g = tonumber(sg)} end
+    local sm, sg, ss = line:match("^sync%s+(%d+)%s+(%d+)%s*(%x*)")
+    if sm then syncs[#syncs + 1] = {mode = tonumber(sm), g = tonumber(sg), seed = ss ~= "" and tonumber(ss, 16) or nil} end
     local fg, fb, fx, fy, flt, frt = line:match("^first%s+(%d+)%s+(%x+)%s+(%-?%d+)%s+(%-?%d+)%s+(%d+)%s+(%d+)")
     if fg then firsts[tonumber(fg)] = {tonumber(fb, 16), tonumber(fx), tonumber(fy), tonumber(flt), tonumber(frt)} end
     local g, b, x, y, lt, rt = line:match("^(%d+)%s+(%x+)%s+(%-?%d+)%s+(%-?%d+)%s+(%d+)%s+(%d+)")
@@ -113,6 +122,7 @@ local function load()
       watches[#watches + 1] = w
       if name == "game_frame" then counter = w end
       if name == "game_mode" then modew = w end
+      if name == "rng_seed" then rngw = w end
     end
   end
   assert(counter and modew, "watch list needs game_frame and game_mode rows")
@@ -151,6 +161,24 @@ local function value(w)
   return string.format("%d", v)
 end
 
+-- rand() calls from seed a to seed b (the game's LCG, 0x8C10D334), or nil
+local function rng_steps(a, b)
+  for n = 0, 100000 do
+    if a == b then return n end
+    a = (a * 0x41C64E6D + 0x3039) & 0xFFFFFFFF
+  end
+  return nil
+end
+
+local function rng_resync(seed, g)
+  local cur = mem.read32(rngw.addr)
+  if cur == seed then return end
+  local ahead, behind = rng_steps(seed, cur), rng_steps(cur, seed)
+  local gap = ahead and string.format("%d calls ahead", ahead) or behind and string.format("%d calls behind", behind) or "unrelated"
+  print(string.format("tape_oracle: rng resync at game frame %d: console seed %08x (%s), set to %08x", g, cur, gap, seed))
+  mem.write32(rngw.addr, seed)
+end
+
 local function finish(why)
   if done then return end
   done = true
@@ -180,6 +208,7 @@ local function on_vblank()
       local at = (prev_g and g > prev_g + 1) and prev_g + 1 or g
       offset, aligned, next_sync = at - syncs[found].g, true, found + 1
       print(string.format("tape_oracle: vblank %d, game mode %d at game frame %d = desktop %d", vblank, mode, at, syncs[found].g))
+      if rngw and syncs[found].seed then rng_resync(syncs[found].seed, syncs[found].g) end
     else
       aligned = next_sync > 1 and syncs[next_sync - 1].mode == mode
       unaligned_since = vblank

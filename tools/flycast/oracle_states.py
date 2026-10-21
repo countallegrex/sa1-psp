@@ -161,6 +161,8 @@ def add_timing_args(ap):
     a tape recorded before those lines replays like the console (zero, real)."""
     ap.add_argument("--fpu-round", choices=("zero", "nearest"), help="desktop FPU rounding (default: the tape's fpu-round line)")
     ap.add_argument("--sound-timing", choices=("real", "none"), help="desktop sound timing (default: the tape's sound-timing line)")
+    ap.add_argument("--aspect", choices=("4:3", "wide"), default="4:3",
+                    help="desktop aspect (default 4:3, the console's: wide widens the game's own culling rectangle, which game logic reads)")
 
 
 def timing_args(a):
@@ -170,6 +172,8 @@ def timing_args(a):
         out += ["--fpu-round", a.fpu_round]
     if getattr(a, "sound_timing", None):
         out += ["--sound-timing", a.sound_timing]
+    if getattr(a, "aspect", None):
+        out += ["--aspect", a.aspect]
     return out
 
 

@@ -11,6 +11,7 @@
 8c7493ba    2     level       milestone
 8c7493bc    2     act         milestone
 8c7a64e4    4     game_frame  trace
+8c5fbb08    4     rng_seed    trace
 8c752be4    s2    rings       exact      0
 8c752be0    s1    lives       exact      0
 8c6bad10    f     player_x    exact      4.0

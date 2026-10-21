@@ -37,6 +37,7 @@ import tape_io  # noqa: E402
 
 COUNTER = "game_frame"
 MODE = "game_mode"
+RNG = "rng_seed"
 ALIGNED = "oracle_g"     # tape_oracle.lua: the desktop game frame this row aligns with, -1 = none
 
 
@@ -91,7 +92,8 @@ def cmd_gpad(a):
     if not pads:
         sys.exit("%s: empty trace" % a.trace)
     lines = ["# game-frame pads from %s and %s (tools/tape_diff.py gpad)" % (os.path.basename(a.tape), os.path.basename(a.trace)),
-             "# sync MODE GAME_FRAME: the desktop run entered game mode MODE at GAME_FRAME",
+             "# sync MODE GAME_FRAME [SEED]: the desktop run entered game mode MODE at GAME_FRAME,"
+             " with the rand() seed SEED (hex; when the trace has an rng_seed column)",
              "# GAME_FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG: the pad at the game frame's last vblank",
              "# first GAME_FRAME BUTTONS ...: the pad at its first vblank"]
     mode, prev = None, None
@@ -99,7 +101,9 @@ def cmd_gpad(a):
         if MODE in r and r[MODE] != mode:
             mode = r[MODE]
             g = int(r[COUNTER])    # the first count after the last one seen in the old mode (tape_oracle.lua)
-            lines.append("sync %d %d" % (mode, prev + 1 if prev is not None and g > prev + 1 else g))
+            at = prev + 1 if prev is not None and g > prev + 1 else g
+            seed = " %x" % (int(r[RNG]) & 0xFFFFFFFF) if RNG in r else ""
+            lines.append("sync %d %d%s" % (mode, at, seed))
         prev = int(r[COUNTER])
     last = (0, 0, 0, 0, 0)
     for g in range(min(pads), max(pads) + 1):

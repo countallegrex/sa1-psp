@@ -193,6 +193,19 @@ writes `zero`, and `--fpu-round zero|nearest` overrides a tape's line.
 For console comparisons of an old tape (`tools/flycast/`), replay it with
 `--fpu-round zero --sound-timing real` to get the console's behaviour.
 
+The aspect is game logic too. The wide default widens the clip rectangle
+the game's own culling tests (0x8C88F600, `hle/ninja/kamui.c`), and some
+objects update only while that test passes: Emerald Coast's 0x8C0FDCE0
+blends its animation only on screen, which moves its `rand()` calls and,
+through them, the Egg Keeper's turns. The oracle tools therefore replay
+the desktop side with `--aspect 4:3` (their `--aspect` option, default
+4:3); the tapes' own checks stay wide. The oracle also copies the
+desktop's `rand()` seed into the console at each game-mode change
+(`tools/flycast/tape_oracle.lua`): a load lets vblanks pass on the console
+and the adventure field then runs catch-up updates, a few more `rand()`
+calls than the instant desktop load makes (19 at the Station Square to
+Emerald Coast change).
+
 ## Check format (`.check`)
 
 ```
@@ -324,6 +337,7 @@ route (Emerald Coast entered by `--poke` at 5290, then the stick held with
 | `0x8C760970` | 2 | game mode | 1 boot, 11 title, 5 adventure field at 2444, 4 action stage after the poke (`docs/m1-boot-report.md`) |
 | `0x8C7493BA` / `BC` | 2 | level / act | 26/3 in Station Square, 1/0 in Emerald Coast (`docs/m2-render-report.md`) |
 | `0x8C7A64E4` | 4 | the game's frame counter | +1000 over frames 1000–3000, +1499 over 3000–6000: one per game frame (two vblanks), one lag frame |
+| `0x8C5FBB08` | 4 | the `rand()` seed (trace only) | the LCG state of 0x8C10D334 (×0x41C64E6D + 0x3039); the Station Square field calls it 19 times per update; `tools/flycast/tape_oracle.lua` copies the desktop's value into the console at each mode change |
 | `0x8C752BE4` | s2 | rings | 3 on the HUD at frames 5900 and 6000, 0 after Sonic is hit at 6200; never moves with the stick neutral |
 | `0x8C752BE0` | s1 | lives | 4 on the HUD; rings poked to 99 at 5505, the next ring makes it 5 |
 | `0x8C6BAD10` / `14` / `18` | f | player X / Y / Z | (-9, 4, 4) standing at the Emerald Coast start; (-681, -7, 847) after holding up 1100 frames; inside a static struct at `0x8C6BACF0` that game code addresses directly |

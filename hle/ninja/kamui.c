@@ -280,11 +280,16 @@ void sdk_8c604702(sh4_ctx *c) {
     hle_wrf(NJ_G_AX, 1.0f); hle_wrf(NJ_G_AY, 1.0f);
     hle_wrf(NJ_G_CLIPN, 1.0f); hle_wrf(NJ_G_CLIPF, 65535.0f);
     /* the screen clip rectangle the game's own culling (0x8C038D00) tests
-     * projected bounding spheres against: left, top, right, bottom.  In
-     * wide mode it is the 16:9 frame in the game's 640x480 space, so the
-     * objects that only the wider frame shows are not culled (draw.h). */
+     * projected bounding spheres against: left, top, right, bottom, the
+     * last pixel inclusive (the console holds 0, 0, 639, 479).  In wide
+     * mode it is the 16:9 frame in the game's 640x480 space, so the objects
+     * that only the wider frame shows are not culled (draw.h).  That is
+     * game logic too: objects run parts of their update only while this
+     * test passes (Emerald Coast's 0x8C0FDCE0 blends its animation only
+     * then), so a wide run plays differently from the console; replays
+     * that are compared with it run --aspect 4:3. */
     float left = hle_aspect_wide ? DRAW_WIDE_LEFT : 0.0f;
-    hle_wrf(0x8C88F600u, left); hle_wrf(0x8C88F604u, 0.0f); hle_wrf(0x8C88F608u, 640.0f - left); hle_wrf(0x8C88F60Cu, 480.0f);
+    hle_wrf(0x8C88F600u, left); hle_wrf(0x8C88F604u, 0.0f); hle_wrf(0x8C88F608u, 639.0f - left); hle_wrf(0x8C88F60Cu, 479.0f);
     sa1_log("njInitSystem: mode 0x%x, frame %u, count %u", ARG0, ARG1, ARG2);
     kamui_init();
 }
