@@ -202,6 +202,24 @@ extern void (*sa1_trap_hook)(sh4_ctx *c, uint32_t pc, const char *what);
  * stack probe (depth high-water mark; traps before an unbounded guest
  * recursion overflows the host stack). */
 extern void (*sa1_depth_hook)(void);
+
+/* HLE_ENTER's common case inline: an entry other than the last one counted
+ * only bumps its counter and restarts the spin check, which is all
+ * sa1_seam_hit_at does then besides the stack probe (that one still runs at
+ * every repeat and at every indirect call).  A repeat, a watch, or the first
+ * call of a site (slot not cached yet) take the full path. */
+struct sa1_hit { uint32_t addr; uint32_t hits; const char *name; int logged; };
+struct sa1_hit_spin { uint32_t addr, frame, repeat; };
+extern struct sa1_hit_spin sa1_hit_spin;
+static inline void sa1_seam_enter(struct sa1_hit **site, uint32_t addr, const char *name) {
+    struct sa1_hit *h = *site;
+    if (__builtin_expect(h != 0 && addr != sa1_hit_spin.addr && !sa1_watch_addr, 1)) {
+        h->hits++;
+        sa1_hit_spin.addr = addr; sa1_hit_spin.frame = UINT32_MAX; sa1_hit_spin.repeat = 0;
+        return;
+    }
+    sa1_seam_hit_at(site, addr, name);
+}
 /* Called on the first access to each guest address outside RAM (SA1_RAM_CHECK
  * builds); the desktop backend prints the host backtrace, which names the
  * recompiled functions on the guest call stack. */

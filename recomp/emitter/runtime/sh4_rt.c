@@ -216,7 +216,7 @@ void sa1_mmio_wr(uint32_t addr, int size, uint32_t value) {
 
 /* ---- seam hit counters ----------------------------------------------- */
 #define SA1_HIT_MAX 512          /* 291 seam entries + room for HLE-side names */
-typedef struct sa1_hit { uint32_t addr; uint32_t hits; const char *name; int logged; } sa1_hit;
+typedef struct sa1_hit sa1_hit;   /* sh4_rt.h */
 static sa1_hit sa1_hits[SA1_HIT_MAX];
 static uint32_t sa1_hit_count;
 
@@ -241,7 +241,7 @@ static sa1_hit *sa1_hit_slot(uint32_t addr, const char *name) {
 /* A native body the game polls without the frame advancing is a spin too:
  * SA1_SPIN_LIMIT consecutive hits of one entry with the frame counter
  * unchanged trap with a backtrace. */
-static uint32_t hit_last_addr, hit_repeat, hit_frame;
+struct sa1_hit_spin sa1_hit_spin;   /* the last entry, its frame, its repeats (sh4_rt.h) */
 
 /* The frame counter is read only on a repeat of the last entry: a run starts
  * with the frame unknown and takes it at its first repeat. */
@@ -249,10 +249,11 @@ static inline void seam_hit_count(sa1_hit *h, uint32_t addr, const char *name) {
     if (sa1_depth_hook) sa1_depth_hook();
     if (sa1_watch_addr) sa1_watch_check(name);
     if (h) h->hits++;
-    if (addr != hit_last_addr) { hit_last_addr = addr; hit_frame = UINT32_MAX; hit_repeat = 0; return; }
+    struct sa1_hit_spin *s = &sa1_hit_spin;
+    if (addr != s->addr) { s->addr = addr; s->frame = UINT32_MAX; s->repeat = 0; return; }
     uint32_t f = sa1_trace_frame ? sa1_trace_frame() : 0;
-    if (f != hit_frame) { hit_frame = f; hit_repeat = 0; return; }
-    if (++hit_repeat == SA1_SPIN_LIMIT) {
+    if (f != s->frame) { s->frame = f; s->repeat = 0; return; }
+    if (++s->repeat == SA1_SPIN_LIMIT) {
         sh4_ctx dummy = {0};
         sa1_trap(&dummy, addr, name);
     }
