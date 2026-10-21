@@ -644,9 +644,12 @@ static void flush_strip(parse_ctx *pc, int sorted) {
     }
     if (!grow((void **)&strips, &strips_cap, nstrips + 1, sizeof *strips) ||
         !grow((void **)&strip_states, &states_cap, nstrips + 1, sizeof *strip_states)) { nverts = pc->strip_start; return; }
-    float sum = 0.0f;
-    for (uint32_t i = 0; i < n; i++) sum += verts[pc->strip_start + i].w;
-    strips[nstrips].off = pc->strip_start; strips[nstrips].count = n; strips[nstrips].depth = sum / (float)n;
+    /* sort key: the farthest vertex (smallest 1/w), as Flycast's per-polygon
+     * sort.  A mean lets a near-clipped plane (the Emerald Coast open sea,
+     * vertices out to 1/w 1.0) sort in front of the coast water it lies under. */
+    float far = verts[pc->strip_start].w;
+    for (uint32_t i = 1; i < n; i++) if (verts[pc->strip_start + i].w < far) far = verts[pc->strip_start + i].w;
+    strips[nstrips].off = pc->strip_start; strips[nstrips].count = n; strips[nstrips].depth = far;
     strip_states[nstrips] = pc->state;
     nstrips++;
     stat_strips[1]++;
