@@ -253,9 +253,12 @@ static inline void seam_hit_count(sa1_hit *h, uint32_t addr, const char *name) {
     if (h) h->hits++;
     struct sa1_hit_spin *s = &sa1_hit_spin;
     if (addr != s->addr) { s->addr = addr; s->frame = UINT32_MAX; s->repeat = 0; return; }
+    /* A repeat reads the frame only every 65536 repeats (the read at every
+     * one was most of this path's 0.8 % of the PSP-3001's frame). */
+    if ((++s->repeat & 0xFFFFu) != 0) return;
     uint32_t f = sa1_trace_frame ? sa1_trace_frame() : 0;
     if (f != s->frame) { s->frame = f; s->repeat = 0; return; }
-    if (++s->repeat == SA1_SPIN_LIMIT) {
+    if (s->repeat >= SA1_SPIN_LIMIT) {
         sh4_ctx dummy = {0};
         sa1_trap(&dummy, addr, name);
     }
