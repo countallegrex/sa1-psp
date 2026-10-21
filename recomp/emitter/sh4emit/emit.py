@@ -154,7 +154,9 @@ class Program:
 
         # summaries to a fixpoint
         t0 = time.time()
-        for rnd in range(8):
+        # Summaries grow from empty, so an unconverged may_write can miss a
+        # reload after a call: run to the fixpoint (18 rounds on 1.005).
+        for rnd in range(64):
             changed = 0
             for e in self.order:
                 fa = FunctionAnalysis(self.cfgs[e], self)
@@ -170,6 +172,8 @@ class Program:
             self.log("analysis round %d: %d summaries changed (%.1fs)" % (rnd + 1, changed, time.time() - t0))
             if not changed:
                 break
+        else:
+            raise SystemExit("analysis: no fixpoint after 64 rounds")
 
     def find_patched(self, cfgs, env):
         """Image words some store writes through a constant address."""
