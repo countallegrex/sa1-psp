@@ -94,6 +94,10 @@ if(SA1_GAME_SRCS)
   # The runtime header first: the emitter leaves a copy of sh4_rt.h next to
   # its output, which must not shadow the one in the tree.
   target_include_directories(sa1psp BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime)
+  # A quoted #include searches the including file's folder first, so the copy
+  # won anyway (as on the PSP until 2e0f494): the tree's header is included
+  # first and its guard turns the copy's #include into nothing.
+  target_compile_options(sa1psp BEFORE PRIVATE "SHELL:-include \"${CMAKE_SOURCE_DIR}/recomp/emitter/runtime/sh4_rt.h\"")
   target_include_directories(sa1psp PRIVATE ${SA1_RECOMP_OUT}/emitter)
   target_link_libraries(sa1psp PRIVATE sa1_backend_desktop sa1_hle)
   target_include_directories(sa1psp PRIVATE ${CMAKE_SOURCE_DIR}/hle ${CMAKE_SOURCE_DIR}/backend)

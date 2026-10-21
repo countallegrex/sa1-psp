@@ -147,6 +147,7 @@ epoch 946684800                 # RTC start, Unix seconds
 tool sa1psp input_tape 1
 sound-timing real               # M3 and later; absent = none
 fpu-round zero                  # 2026-10-19 and later; absent = nearest
+fmac fused                      # 2026-10-21 and later; absent = follows fpu-round
 aspect 4:3                      # 2026-10-21 and later; absent = wide
 # FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]
 1 0 0 0 0 0 499
@@ -193,6 +194,13 @@ replay with round-to-nearest, which they were recorded with; `--record`
 writes `zero`, and `--fpu-round zero|nearest` overrides a tape's line.
 For console comparisons of an old tape (`tools/flycast/`), replay it with
 `--fpu-round zero --sound-timing real` to get the console's behaviour.
+
+`fmac` is how the recompiled `fmac` rounds: `fused` once, as Flycast
+does, `split` twice, as every desktop build before e8a141a (and the
+PSP build always). One ulp in a rare tie was enough for `sonic_ec1`
+(recorded split, to nearest) to lose its route at frame 24000 on the
+fused form. A tape without the line follows its rounding: `zero` fused,
+`nearest` split. `--fmac fused|split` overrides it.
 
 The aspect is game logic too. The wide default widens the clip rectangle
 the game's own culling tests (0x8C88F600, `hle/ninja/kamui.c`), and some

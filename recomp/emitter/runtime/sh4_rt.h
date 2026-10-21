@@ -373,9 +373,12 @@ static inline uint32_t sh4_ftrc_d(double d) {
  * game's round-toward-zero (FPSCR.RM = 1) truncating the double sum and then
  * the float is one truncation, so the double form is the fused result
  * exactly (round-to-nearest tapes: off by one ulp in rare ties).  Without it
- * (the PSP, where doubles are soft-float): two roundings. */
+ * (the PSP, where doubles are soft-float): two roundings.  The desktop picks
+ * per run (sh4_fmac_fused, from the tape): a tape recorded with two
+ * roundings leaves its route on the fused form (sonic_ec1, frame 24000). */
 #ifdef SH4_FMAC_FUSED
-#define FMAC_F(a, b, c) ((float)((double)(a) * (double)(b) + (double)(c)))
+extern int sh4_fmac_fused;
+#define FMAC_F(a, b, c) (sh4_fmac_fused ? (float)((double)(a) * (double)(b) + (double)(c)) : (a) * (b) + (c))
 #else
 #define FMAC_F(a, b, c) ((a) * (b) + (c))
 #endif

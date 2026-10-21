@@ -29,6 +29,11 @@
  *                       toward zero), "nearest" what every run used before
  *                       2026-10-19.  A recording writes its mode into the
  *                       tape; a tape without the line replays as "nearest"
+ *   --fmac fused|split  fmac rounded once, as Flycast (the oracle), or twice,
+ *                       as every desktop build before e8a141a.  A recording
+ *                       writes its mode into the tape; without the option
+ *                       or the line it follows the rounding: fused toward
+ *                       zero, split to nearest (the tapes recorded then)
  *   (--aspect, main.c)  a recording writes the run's aspect into the tape; a
  *                       replay without --aspect takes the tape's (absent:
  *                       wide, the default every tape before 2026-10-21 had)
@@ -55,6 +60,7 @@ static int64_t epoch = 946684800;           /* 2000-01-01 00:00 UTC */
 static int epoch_set;
 static int sound_timing = -1, sound_timing_set;   /* 1 real, 0 none, -1 not given */
 static int fpu_zero = -1, fpu_zero_set;           /* 1 toward zero, 0 nearest, -1 not given */
+static int fmac_fused = -1, fmac_set;           /* 1 fused, 0 split, -1 follow fpu_zero */
 static int tape_aspect = -1;                      /* the tape's line: 1 wide, 0 4:3, -1 none */
 static const char *record_path, *replay_path, *check_path, *watch_list_path, *watch_trace_path;
 static uint32_t expect_frame;
@@ -130,6 +136,7 @@ static int load_tape(const char *path) {
             } else if (!strcmp(key, "epoch")) { if (!epoch_set) epoch = strtoll(val, NULL, 0); }
             else if (!strcmp(key, "sound-timing")) { if (!sound_timing_set) sound_timing = strcmp(val, "none") != 0; }
             else if (!strcmp(key, "fpu-round")) { if (!fpu_zero_set) fpu_zero = !strcmp(val, "zero"); }
+            else if (!strcmp(key, "fmac")) { if (!fmac_set) fmac_fused = !strcmp(val, "fused"); }
             else if (!strcmp(key, "aspect")) tape_aspect = strcmp(val, "4:3") != 0 && strcmp(val, "4x3") != 0;
             else if (!strcmp(key, "end")) {
                 uint32_t e = (uint32_t)strtoul(val, NULL, 0) + 1;
@@ -294,6 +301,7 @@ int input_tape_arg(int argc, char **argv, int *i) {
     else if (!strcmp(a, "--epoch")) { epoch = strtoll(argv[++*i], NULL, 0); epoch_set = 1; }
     else if (!strcmp(a, "--sound-timing")) { sound_timing = strcmp(argv[++*i], "none") != 0; sound_timing_set = 1; }
     else if (!strcmp(a, "--fpu-round")) { fpu_zero = !strcmp(argv[++*i], "zero"); fpu_zero_set = 1; }
+    else if (!strcmp(a, "--fmac")) { fmac_fused = !strcmp(argv[++*i], "fused"); fmac_set = 1; }
     else if (!strcmp(a, "--record")) { record_path = argv[++*i]; strict = 1; }
     else if (!strcmp(a, "--replay")) { replay_path = argv[++*i]; strict = 1; }
     else if (!strcmp(a, "--check")) check_path = argv[++*i];
@@ -330,6 +338,7 @@ int input_tape_start(const char *title_path) {
         fprintf(rec, "sa1psp-tape %d\ntitle-sha256 %s\nepoch %lld\ntool %s\n", TAPE_FORMAT, title_sha, (long long)epoch, TAPE_TOOL);
         fprintf(rec, "sound-timing %s\n", sound_timing == 0 ? "none" : "real");
         fprintf(rec, "fpu-round %s\n", fpu_zero == 0 ? "nearest" : "zero");
+        fprintf(rec, "fmac %s\n", input_tape_fmac_fused() ? "fused" : "split");
         fprintf(rec, "aspect %s\n", hle_aspect_wide ? "wide" : "4:3");
         fprintf(rec, "# FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]\n");
         sa1_log("record: %s", record_path);
@@ -419,4 +428,5 @@ int input_tape_finish(int code, const char *why) {
 
 int input_tape_sound_timing(void) { return sound_timing; }
 int input_tape_fpu_zero(void) { return fpu_zero; }
+int input_tape_fmac_fused(void) { return fmac_fused >= 0 ? fmac_fused : fpu_zero != 0; }
 int input_tape_aspect_wide(void) { return tape_aspect; }

@@ -100,6 +100,7 @@ static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
 static int headless, scale = 2, stats_every, no_pad;   /* --no-pad: ignore the controller and keyboard (scripted runs) */
+int sh4_fmac_fused = 1;                                /* sh4_rt.h FMAC_F; set from the tape at start-up */
 static int aspect_given;                               /* --aspect given: it overrides the tape's aspect line */
 #define SHOT_MAX 64
 static struct { uint32_t frame; const char *path; } shots[SHOT_MAX], dumps[SHOT_MAX];
@@ -588,6 +589,8 @@ int main(int argc, char **argv) {
     int fpu_zero = input_tape_fpu_zero() != 0;
     fesetround(fpu_zero ? FE_TOWARDZERO : FE_TONEAREST);
     sa1_log("fpu: host rounds %s", fpu_zero ? "toward zero, as the console" : "to nearest (a tape recorded before round-toward-zero)");
+    sh4_fmac_fused = input_tape_fmac_fused();
+    sa1_log("fpu: fmac %s", sh4_fmac_fused ? "fused, as the console" : "rounded twice (a tape recorded before e8a141a)");
     if (savestate_supervise(boot, NULL, load_path) != 0) { report_and_exit(1); return 1; }
     report_and_exit(0);
     return 0;
