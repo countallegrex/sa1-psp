@@ -179,7 +179,7 @@ if(SA1_GAME_SRCS)
   # is inlined, where -Os calls it out of line at every access (12 % of the
   # frame in Station Square, 2026-10-19).  game_005 holds the game's TA
   # writers (fn_8c037294, fn_8c037990, ...), game_003 the next ones.
-  set(SA1_PSP_HOT_CHUNKS "game_003;game_005" CACHE STRING "Game chunks compiled at -O2 on the PSP")
+  set(SA1_PSP_HOT_CHUNKS "game_001;game_002;game_003;game_004;game_005;game_007;game_008;game_015;game_030" CACHE STRING "Game chunks compiled at -O2 on the PSP")
   foreach(chunk ${SA1_PSP_HOT_CHUNKS})
     set_source_files_properties(${SA1_RECOMP_OUT}/emitter/${chunk}.c PROPERTIES COMPILE_OPTIONS "-O2")
   endforeach()
