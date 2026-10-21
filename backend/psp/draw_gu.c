@@ -1083,41 +1083,68 @@ static int in_guard(const draw_vertex *v, int n) {
     return 1;
 }
 
-static uint32_t lerp_color(uint32_t a, float wa, uint32_t b, float wb, float t, float iw) {
-    if (a == b) return a;
-    uint32_t out = 0;
-    for (int sh = 0; sh < 32; sh += 8) {
-        float ca = (float)((a >> sh) & 255) * wa, cb = (float)((b >> sh) & 255) * wb;
-        float c = (ca + (cb - ca) * t) * iw;
-        int ci = (int)(c + 0.5f);
-        out |= (uint32_t)(ci < 0 ? 0 : ci > 255 ? 255 : ci) << sh;
-    }
-    return out;
+/* A vertex copied as its seven words, all loaded before any is stored (a
+ * struct copy came out as a 16-byte word loop whose pointers went through
+ * the stack: -fno-strict-aliasing). */
+static inline __attribute__((always_inline)) void vtx_copy(draw_vertex *d, const draw_vertex *s) {
+    const uint32_t *sw = (const uint32_t *)s;
+    uint32_t *dw = (uint32_t *)d;
+    uint32_t a = sw[0], b = sw[1], c = sw[2], e = sw[3], f = sw[4], g = sw[5], h = sw[6];
+    dw[0] = a; dw[1] = b; dw[2] = c; dw[3] = e; dw[4] = f; dw[5] = g; dw[6] = h;
 }
 
-static draw_vertex lerp_vertex(const draw_vertex *a, const draw_vertex *b, float t) {
-    draw_vertex o;
-    o.x = a->x + (b->x - a->x) * t;
-    o.y = a->y + (b->y - a->y) * t;
-    o.w = a->w + (b->w - a->w) * t;
-    float iw = 1.0f / (o.w > 1e-9f ? o.w : 1e-9f);
-    o.u = (a->u * a->w + (b->u * b->w - a->u * a->w) * t) * iw;
-    o.v = (a->v * a->w + (b->v * b->w - a->v * a->w) * t) * iw;
-    o.color = lerp_color(a->color, a->w, b->color, b->w, t, iw);
-    o.ocolor = lerp_color(a->ocolor, a->w, b->ocolor, b->w, t, iw);
-    return o;
+/* One channel (bits sh..sh+7) of lerp_color.  The four channels are written
+ * out, not looped over, so their float chains overlap. */
+static inline __attribute__((always_inline)) uint32_t lerp_chan(uint32_t a, float wa, uint32_t b, float wb, float t, float iw, int sh) {
+    float ca = (float)((a >> sh) & 255) * wa, cb = (float)((b >> sh) & 255) * wb;
+    float c = (ca + (cb - ca) * t) * iw;
+    int ci = (int)(c + 0.5f);
+    return (uint32_t)(ci < 0 ? 0 : ci > 255 ? 255 : ci) << sh;
+}
+static inline __attribute__((always_inline)) uint32_t lerp_color(uint32_t a, float wa, uint32_t b, float wb, float t, float iw) {
+    if (a == b) return a;
+    return lerp_chan(a, wa, b, wb, t, iw, 0) | lerp_chan(a, wa, b, wb, t, iw, 8) |
+           lerp_chan(a, wa, b, wb, t, iw, 16) | lerp_chan(a, wa, b, wb, t, iw, 24);
+}
+
+/* The vertex at t from a to b into o: everything is read before o is
+ * written. */
+static inline __attribute__((always_inline)) void lerp_vertex(draw_vertex *o, const draw_vertex *a, const draw_vertex *b, float t) {
+    float ax = a->x, ay = a->y, aw = a->w, au = a->u, av = a->v;
+    float bx = b->x, by = b->y, bw = b->w, bu = b->u, bv = b->v;
+    uint32_t ac = a->color, bc = b->color, ao = a->ocolor, bo = b->ocolor;
+    float x = ax + (bx - ax) * t;
+    float y = ay + (by - ay) * t;
+    float w = aw + (bw - aw) * t;
+    float iw = 1.0f / (w > 1e-9f ? w : 1e-9f);
+    float u = (au * aw + (bu * bw - au * aw) * t) * iw;
+    float v = (av * aw + (bv * bw - av * aw) * t) * iw;
+    uint32_t c = lerp_color(ac, aw, bc, bw, t, iw), oc = lerp_color(ao, aw, bo, bw, t, iw);
+    o->x = x; o->y = y; o->w = w; o->u = u; o->v = v;
+    o->color = c; o->ocolor = oc;
 }
 
 /* One plane of Sutherland-Hodgman on x (axis 0), y (1) or w (2): keep the
- * side where (coord * sign) <= lim * sign. */
-static float axis_of(const draw_vertex *v, int axis) { return axis == 0 ? v->x : axis == 1 ? v->y : v->w; }
+ * side where (coord * sign) <= lim * sign.  Each vertex's distance is taken
+ * once (it was twice, as a and as b, with a % n per edge).  When every
+ * vertex is on the kept side the output would be the input, vertex for
+ * vertex: -1 then, and nothing is written (most guard-band triangles cross
+ * one plane of the four). */
 static int clip_plane(const draw_vertex *in, int n, draw_vertex *out, int axis, float lim, float sign) {
+    float d[16];
+    const float *co = (const float *)in + axis;    /* x, y, w are the vertex's first three words */
+    int all = 1;
+    for (int i = 0; i < n; i++, co += sizeof *in / sizeof *co) {
+        d[i] = (*co - lim) * sign;
+        all &= d[i] <= 0.0f;
+    }
+    if (all) return -1;
     int m = 0;
     for (int i = 0; i < n; i++) {
-        const draw_vertex *a = &in[i], *b = &in[(i + 1) % n];
-        float da = (axis_of(a, axis) - lim) * sign, db = (axis_of(b, axis) - lim) * sign;
-        if (da <= 0.0f) out[m++] = *a;
-        if ((da <= 0.0f) != (db <= 0.0f)) out[m++] = lerp_vertex(a, b, da / (da - db));
+        int j = i + 1 < n ? i + 1 : 0;
+        float da = d[i], db = d[j];
+        if (da <= 0.0f) vtx_copy(&out[m++], &in[i]);
+        if ((da <= 0.0f) != (db <= 0.0f)) lerp_vertex(&out[m++], &in[i], &in[j], da / (da - db));
     }
     return m;
 }
@@ -1126,6 +1153,7 @@ static void strip_emit(int pass, const draw_vertex *v, int n);
 
 /* A convex polygon (consistent winding) as a strip, zigzag from vertex 0. */
 static void poly_emit(int pass, const draw_vertex *poly, int k) {
+    if (k == 3) { strip_emit(pass, poly, 3); return; }   /* the zigzag of a triangle is the triangle */
     draw_vertex strip[16];
     int lo = 1, hi = k - 1, m = 0;
     strip[m++] = poly[0];
@@ -1180,24 +1208,26 @@ static void strip_split(const draw_vertex *v, int n, int guard) {
             if (j - i >= 2) { substrip_emit(pass, v, i, j - 1); i = j - 1; continue; }
         }
         draw_vertex poly[2][16];
-        poly[0][0] = v[(i & 1) ? i + 1 : i];
-        poly[0][1] = v[(i & 1) ? i : i + 1];
-        poly[0][2] = v[i + 2];
-        int k = 3, c = 0;
-        if (guard && !(vtx_in_guard(&poly[0][0]) && vtx_in_guard(&poly[0][1]) && vtx_in_guard(&poly[0][2]))) {
-            k = clip_plane(poly[c], k, poly[c ^ 1], 0, GUARD_X0, -1.0f); c ^= 1;
-            if (k >= 3) { k = clip_plane(poly[c], k, poly[c ^ 1], 0, GUARD_X1, 1.0f); c ^= 1; }
-            if (k >= 3) { k = clip_plane(poly[c], k, poly[c ^ 1], 1, GUARD_Y0, -1.0f); c ^= 1; }
-            if (k >= 3) { k = clip_plane(poly[c], k, poly[c ^ 1], 1, GUARD_Y1, 1.0f); c ^= 1; }
+        const draw_vertex *t0 = &v[(i & 1) ? i + 1 : i], *t1 = &v[(i & 1) ? i : i + 1], *t2 = &v[i + 2];
+        vtx_copy(&poly[0][0], t0); vtx_copy(&poly[0][1], t1); vtx_copy(&poly[0][2], t2);
+        int k = 3, c = 0, r;
+        /* clip_plane's -1: nothing outside that plane, poly[c] stands */
+        if (guard && !(vtx_in_guard(t0) && vtx_in_guard(t1) && vtx_in_guard(t2))) {
+            if ((r = clip_plane(poly[c], k, poly[c ^ 1], 0, GUARD_X0, -1.0f)) >= 0) { k = r; c ^= 1; }
+            if (k >= 3 && (r = clip_plane(poly[c], k, poly[c ^ 1], 0, GUARD_X1, 1.0f)) >= 0) { k = r; c ^= 1; }
+            if (k >= 3 && (r = clip_plane(poly[c], k, poly[c ^ 1], 1, GUARD_Y0, -1.0f)) >= 0) { k = r; c ^= 1; }
+            if (k >= 3 && (r = clip_plane(poly[c], k, poly[c ^ 1], 1, GUARD_Y1, 1.0f)) >= 0) { k = r; c ^= 1; }
             if (k < 3) continue;
         }
         int pass = pass_of(poly[c], k);
         if (pass >= 0) { poly_emit(pass, poly[c], k); continue; }
         draw_vertex part[16];
         int kn = clip_plane(poly[c], k, part, 2, ws, -1.0f);     /* w >= ws: near */
-        if (kn >= 3) poly_emit(PASS_NEAR, part, kn);
+        if (kn < 0) poly_emit(PASS_NEAR, poly[c], k);
+        else if (kn >= 3) poly_emit(PASS_NEAR, part, kn);
         int kf = clip_plane(poly[c], k, part, 2, ws, 1.0f);      /* w <= ws: far */
-        if (kf >= 3) poly_emit(PASS_FAR, part, kf);
+        if (kf < 0) poly_emit(PASS_FAR, poly[c], k);
+        else if (kf >= 3) poly_emit(PASS_FAR, part, kf);
     }
 }
 
@@ -1229,13 +1259,50 @@ static void rec_depth_write(const draw_vertex *v) {
     rec_state(&s);
 }
 
+/* draw_strip's !in_guard(v, n) into *guard and its pass (guard ? -1 :
+ * pass_of(v, n)) in one pass over the strip, on the floats' bits in integer
+ * registers: the float compares took a c.cond.s, a nop and a bc1t each,
+ * four a vertex in in_guard and one more in pass_of.
+ *   Guard: a float's bits as unsigned order the positive values (sign 0)
+ * among themselves and the negative ones (sign 1) by magnitude, so x > X1
+ * is bits > bits(X1) for a positive x and x < X0 is bits > bits(X0) for a
+ * negative one.  A NaN passes that test too (in_guard keeps it: every
+ * compare is false), so the flag only says "maybe out" and in_guard
+ * decides.
+ *   Pass: as signed integers the bits order every non-negative float and
+ * put every negative one (-0, -NaN) below them all; ws is positive, so
+ * w > ws is bits > bits(ws) except for a +NaN w (above +inf's bits), where
+ * pass_of decides. */
+static inline uint32_t fbits(float f) { union { float f; uint32_t u; } x = { f }; return x.u; }
+static int strip_class(const draw_vertex *v, int n, int *guard) {
+    const uint32_t x0 = fbits(GUARD_X0), x1 = fbits(GUARD_X1), y0 = fbits(GUARD_Y0), y1 = fbits(GUARD_Y1);
+    const uint32_t *p = (const uint32_t *)v;
+    uint32_t out = 0;
+    int32_t wmax = INT32_MIN, wmin = INT32_MAX;
+    for (int i = 0; i < n; i++, p += sizeof *v / 4) {
+        uint32_t x = p[0], y = p[1];
+        int32_t w = (int32_t)p[2];
+        uint32_t tx = (int32_t)x < 0 ? x0 : x1, ty = (int32_t)y < 0 ? y0 : y1;
+        out |= (uint32_t)(x > tx) | (uint32_t)(y > ty);
+        wmax = w > wmax ? w : wmax;
+        wmin = w < wmin ? w : wmin;
+    }
+    *guard = out && !in_guard(v, n);
+    if (*guard) return -1;
+    if (!depth_split || (cur.layer == DRAW_LAYER_2D && v[0].w >= 1.0f)) return PASS_NEAR;
+    if (wmax > (int32_t)fbits(__builtin_inff())) return pass_of(v, n);
+    int32_t ws = (int32_t)fbits(depth_ws);
+    int near = wmax > ws, far = wmin <= ws;
+    return near && far ? -1 : near ? PASS_NEAR : PASS_FAR;
+}
+
 void draw_strip(const draw_vertex *v, int n) {
     if (n < 3) return;
     stats.strips++; stats.triangles += (uint32_t)(n - 2);
     if (headless || !list_open || !cur_valid || n > BATCH_MAX - 4 || list_full()) return;
     select_proj(v, n);
     rec_depth_write(v);
-    int guard = !in_guard(v, n), pass = guard ? -1 : pass_of(v, n);
+    int guard, pass = strip_class(v, n, &guard);
     if (gu_debug & (32 | 64)) {       /* bisection: 32 skips 3D strips that reach the near plane, 64 guard-band ones */
         int near1 = 0;
         for (int i = 0; i < n; i++) if (v[i].w >= 0.999f) near1 = 1;
