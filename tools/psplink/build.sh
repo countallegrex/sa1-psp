@@ -23,10 +23,13 @@ if [ ! -d "$WORK/.git" ]; then
     git clone -q https://github.com/pspdev/psplinkusb.git "$WORK"
 fi
 git -C "$WORK" checkout -q "$PIN"
-git -C "$WORK" checkout -q -- usbhostfs/main.c usbhostfs_pc/main.c
+git -C "$WORK" checkout -q -- usbhostfs/main.c usbhostfs_pc/main.c bootstrap/Makefile bootstrap/main.c psplink/shell.c
 for p in "$HERE"/0*.patch; do
     git -C "$WORK" apply --whitespace=nowarn "$p"
 done
+
+# PSPLINK2's XMB icon (original art, made by the project), for 0003's pack-pbp
+cp "$HERE/icon0.png" "$WORK/bootstrap/icon0.png"
 
 winpath() { cygpath -w "$1" 2>/dev/null || echo "$1"; }
 wslpath_of() { MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- wslpath -a "$(winpath "$1")" | tr -d '\r'; }

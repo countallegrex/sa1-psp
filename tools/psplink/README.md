@@ -62,6 +62,11 @@ From the 2026-10-20 audit; line numbers are from 4b767c0.
 
 Only the patched pair recovers from every row.
 
+**0003, PSPLINK2's look**
+- XMB title "PSPLink 2 (SA1 patched)" and its own icon (`icon0.png`, the project's original art), so it is not
+  mistaken for the stock PSPLink. The bootstrap's screen banner and the shell's `version` line say
+  "PSPLink 2 - SA1 PSP patched build". Only the EBOOT carries the first two; the `version` line is in psplink.prx.
+
 ## Build
 
 ```

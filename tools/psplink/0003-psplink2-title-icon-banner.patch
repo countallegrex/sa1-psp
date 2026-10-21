@@ -1,0 +1,39 @@
+diff --git a/bootstrap/Makefile b/bootstrap/Makefile
+index dc71f51..517ff2f 100644
+--- a/bootstrap/Makefile
++++ b/bootstrap/Makefile
+@@ -1,6 +1,6 @@
+ release: all
+-	mksfoex -d MEMSIZE=1 'PSPLink v3.2.1' PARAM.SFO
+-	pack-pbp EBOOT.PBP PARAM.SFO psplink.png NULL NULL NULL NULL psplink_boot.prx NULL
++	mksfoex -d MEMSIZE=1 'PSPLink 2 (SA1 patched)' PARAM.SFO
++	pack-pbp EBOOT.PBP PARAM.SFO icon0.png NULL NULL NULL NULL psplink_boot.prx NULL
+ 
+ clean_release:
+ 	rm -f PARAM.SFO
+diff --git a/bootstrap/main.c b/bootstrap/main.c
+index 77f68c2..1cf47b5 100644
+--- a/bootstrap/main.c
++++ b/bootstrap/main.c
+@@ -30,7 +30,7 @@ int _main(SceSize args, void *argp)
+ 	do
+ 	{
+ 		pspDebugScreenInit();
+-		pspDebugScreenPrintf("PSPLink Bootstrap TyRaNiD (c) 2k7 Version %s\n", PSPLINK_VERSION);
++		pspDebugScreenPrintf("PSPLink 2 - SA1 PSP patched build (PSPLink %s, TyRaNiD (c) 2k7)\n", PSPLINK_VERSION);
+ 		strcpy(path, argp);
+ 		slash = strrchr(path, '/');
+ 		if(slash == NULL)
+diff --git a/psplink/shell.c b/psplink/shell.c
+index 0b77e52..446a52b 100644
+--- a/psplink/shell.c
++++ b/psplink/shell.c
+@@ -3583,7 +3583,7 @@ static int skip_cmd(int argc, char **argv, unsigned int *vRet)
+ 
+ static int version_cmd(int argc, char **argv, unsigned int *vRet)
+ {
+-	SHELL_PRINT("PSPLink %s\n", PSPLINK_VERSION);
++	SHELL_PRINT("PSPLink 2 - SA1 PSP patched build (PSPLink %s)\n", PSPLINK_VERSION);
+ 
+ 	return CMD_OK;
+ }
