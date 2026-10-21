@@ -47,6 +47,22 @@
 static const float TURN = (float)(6.283185307179586 / 65536.0);
 static inline float ang_rad(uint32_t a) { return (float)(a & 0xFFFFu) * TURN; }
 static inline uint32_t rad_ang(float r) { return (uint32_t)(int32_t)(r * (65536.0f / 6.2831853f)) & 0xFFFFu; }
+/* sinf and cosf of a Ninja angle.  ang_rad keeps 16 bits, so both are a
+ * pure function of a & 0xFFFF: a direct-mapped cache (64 KB) hands back
+ * the libm values themselves, bit for bit, without newlib's argument
+ * reduction (host sinf/cosf were 2.3 % of a PSP-3001 Station Square frame,
+ * 2026-10-21). */
+#define SC_BITS 12
+static struct sc_ent { uint32_t key; float s, c, pad; } sc_cache[1u << SC_BITS];
+static inline __attribute__((always_inline)) void ang_sc(uint32_t a, float *s, float *c) {
+    a &= 0xFFFFu;
+    struct sc_ent *e = &sc_cache[a & ((1u << SC_BITS) - 1u)];
+    if (__builtin_expect(e->key != (a | 0x10000u), 0)) {
+        float r = ang_rad(a);
+        e->s = sinf(r); e->c = cosf(r); e->key = a | 0x10000u;
+    }
+    *s = e->s; *c = e->c;
+}
 
 /* ---- matrix access: XMTRX or guest memory ---------------------------------
  * Each guest block (a 64-byte matrix, a 12-byte vector) is resolved to a host
@@ -95,7 +111,7 @@ static void m_xform(const sa1_f32a *m, const float *v, float w, float *out) {
     for (int i = 0; i < 3; i++) out[i] = m[i] * v[0] + m[4 + i] * v[1] + m[8 + i] * v[2] + m[12 + i] * w;
 }
 static void m_rot_x(sa1_f32a *m, uint32_t a) {
-    float s = sinf(ang_rad(a)), co = cosf(ang_rad(a));
+    float s, co; ang_sc(a, &s, &co);
     for (int i = 0; i < 4; i++) {
         float c1 = m[4 + i], c2 = m[8 + i];
         m[4 + i] = co * c1 + s * c2;
@@ -103,7 +119,7 @@ static void m_rot_x(sa1_f32a *m, uint32_t a) {
     }
 }
 static void m_rot_y(sa1_f32a *m, uint32_t a) {
-    float s = sinf(ang_rad(a)), co = cosf(ang_rad(a));
+    float s, co; ang_sc(a, &s, &co);
     for (int i = 0; i < 4; i++) {
         float c0 = m[i], c2 = m[8 + i];
         m[i] = co * c0 - s * c2;
@@ -111,7 +127,7 @@ static void m_rot_y(sa1_f32a *m, uint32_t a) {
     }
 }
 static void m_rot_z(sa1_f32a *m, uint32_t a) {
-    float s = sinf(ang_rad(a)), co = cosf(ang_rad(a));
+    float s, co; ang_sc(a, &s, &co);
     for (int i = 0; i < 4; i++) {
         float c0 = m[i], c1 = m[4 + i];
         m[i] = co * c0 + s * c1;
@@ -248,9 +264,9 @@ void sdk_8c639bdc(sh4_ctx *c) {         /* njProjectScreen(m, p3, p2) */
 }
 
 /* ---- scalar and vector math ------------------------------------------------ */
-void sdk_8c63a9b8(sh4_ctx *c) { HLE_ENTER(0x8c63a9b8u, "njSin"); float a = ang_rad(ARG0); FR0(sinf(a)); c->fr[1] = cosf(a); }
-void sdk_8c63a970(sh4_ctx *c) { HLE_ENTER(0x8c63a970u, "njCos"); float a = ang_rad(ARG0); FR0(cosf(a)); c->fr[1] = sinf(a); }
-void sdk_8c63a9f4(sh4_ctx *c) { HLE_ENTER(0x8c63a9f4u, "njTan"); float a = ang_rad(ARG0); FR0(sinf(a) / cosf(a)); }
+void sdk_8c63a9b8(sh4_ctx *c) { HLE_ENTER(0x8c63a9b8u, "njSin"); float s, co; ang_sc(ARG0, &s, &co); FR0(s); c->fr[1] = co; }
+void sdk_8c63a970(sh4_ctx *c) { HLE_ENTER(0x8c63a970u, "njCos"); float s, co; ang_sc(ARG0, &s, &co); FR0(co); c->fr[1] = s; }
+void sdk_8c63a9f4(sh4_ctx *c) { HLE_ENTER(0x8c63a9f4u, "njTan"); float s, co; ang_sc(ARG0, &s, &co); FR0(s / co); }
 void sdk_8c63a9c4(sh4_ctx *c) { HLE_ENTER(0x8c63a9c4u, "njSqrt"); float x = FARG(0); FR0(x >= 0.0f ? sqrtf(x) : -sqrtf(-x)); }
 void sdk_8c63a980(sh4_ctx *c) { HLE_ENTER(0x8c63a980u, "njFraction"); float x = FARG(0); FR0(x - truncf(x)); }
 void sdk_8c63a994(sh4_ctx *c) { HLE_ENTER(0x8c63a994u, "njRoundOff"); FR0(truncf(FARG(0))); }
@@ -402,13 +418,13 @@ void sdk_8c6404e4(sh4_ctx *c) {         /* njCameraRoll(cam, ang): roll += ang *
 }
 void sdk_8c640454(sh4_ctx *c) {         /* njCameraPitch(cam, ang): rotate dir in y/z */
     HLE_ENTER(0x8c640454u, "njCameraPitch");
-    uint32_t cam = cam_arg(ARG0); float s = sinf(ang_rad(ARG1)), co = cosf(ang_rad(ARG1));
+    uint32_t cam = cam_arg(ARG0); float s, co; ang_sc(ARG1, &s, &co);
     float y = hle_rdf(cam + CAM_DIR + 4), z = hle_rdf(cam + CAM_DIR + 8);
     hle_wrf(cam + CAM_DIR + 8, z * co + y * s); hle_wrf(cam + CAM_DIR + 4, y * co - z * s);
 }
 void sdk_8c64048c(sh4_ctx *c) {         /* njCameraYaw(cam, ang): rotate dir in x/z */
     HLE_ENTER(0x8c64048cu, "njCameraYaw");
-    uint32_t cam = cam_arg(ARG0); float s = sinf(ang_rad(ARG1)), co = cosf(ang_rad(ARG1));
+    uint32_t cam = cam_arg(ARG0); float s, co; ang_sc(ARG1, &s, &co);
     float x = hle_rdf(cam + CAM_DIR), z = hle_rdf(cam + CAM_DIR + 8);
     hle_wrf(cam + CAM_DIR, x * co + z * s); hle_wrf(cam + CAM_DIR + 8, z * co - x * s);
 }
@@ -428,7 +444,7 @@ void sdk_8c6404c8(sh4_ctx *c) {         /* roll = base roll + ang */
  * which put the Chaos 0 cutscene camera under the police cars. */
 void sdk_8c64041c(sh4_ctx *c) {
     HLE_ENTER(0x8c64041cu, "njCameraDirFromBase");
-    uint32_t cam = cam_arg(ARG0); float s = sinf(ang_rad(ARG1)), co = cosf(ang_rad(ARG1));
+    uint32_t cam = cam_arg(ARG0); float s, co; ang_sc(ARG1, &s, &co);
     float x = hle_rdf(cam + CAM_BDIR), y = hle_rdf(cam + CAM_BDIR + 4), z = hle_rdf(cam + CAM_BDIR + 8);
     hle_wrf(cam + CAM_DIR, x); hle_wrf(cam + CAM_DIR + 4, y * co - z * s); hle_wrf(cam + CAM_DIR + 8, z * co + y * s);
 }
