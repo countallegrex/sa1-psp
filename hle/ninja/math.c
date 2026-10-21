@@ -56,30 +56,45 @@ static inline uint32_t rad_ang(float r) { return (uint32_t)(int32_t)(r * (65536.
  * float.  Debug builds (SA1_RAM_CHECK) check the base only. */
 static inline const sa1_f32a *g_rd(uint32_t addr) { return (const sa1_f32a *)(const void *)RAMP(addr, 0); }
 static inline sa1_f32a *g_wr(uint32_t addr) { return (sa1_f32a *)(void *)RAMPW(addr, 0); }
-static void m_load(sh4_ctx *c, uint32_t addr, float *m) {
-    if (addr == 0) for (int i = 0; i < 16; i++) m[i] = c->xf[i];
-    else { const sa1_f32a *p = g_rd(addr); for (int i = 0; i < 16; i++) m[i] = p[i]; }
+/* A matrix argument as a host pointer: XMTRX (the context's back bank) for
+ * 0, else the guest block.  The njXxx bodies work on it in place instead of
+ * copying it into a local and back (2026-10-21: those copies were 5 % of a
+ * Station Square frame on the PSP-3001, about 9,000 a frame).  In place is
+ * the same: every helper below reads what it needs of a column (or of the
+ * whole matrix, m_mul and m_invert through a temporary) before it writes
+ * there, and a word it leaves alone was only ever rewritten with its own
+ * bits. */
+static inline const sa1_f32a *m_rp(sh4_ctx *c, uint32_t addr) { return addr ? g_rd(addr) : (const sa1_f32a *)c->xf; }
+static inline sa1_f32a *m_wp(sh4_ctx *c, uint32_t addr) { return addr ? g_wr(addr) : (sa1_f32a *)c->xf; }
+/* 16 words, all read before any is written (a load into a local and a store
+ * back, as before, also for overlapping blocks); as words, so the bits are
+ * the bits, and with no load-use stall between a load and its store. */
+static inline void m_copy(void *d, const void *s) {
+    const sa1_u32a *p = (const sa1_u32a *)s; sa1_u32a *q = (sa1_u32a *)d;
+    /* Sixteen scalars, not a loop through a local array: GCC made that a
+     * byte-aligned block move (lwl/lwr) through a spilled pointer. */
+    uint32_t t0 = p[0], t1 = p[1], t2 = p[2], t3 = p[3], t4 = p[4], t5 = p[5], t6 = p[6], t7 = p[7];
+    uint32_t t8 = p[8], t9 = p[9], t10 = p[10], t11 = p[11], t12 = p[12], t13 = p[13], t14 = p[14], t15 = p[15];
+    q[0] = t0; q[1] = t1; q[2] = t2; q[3] = t3; q[4] = t4; q[5] = t5; q[6] = t6; q[7] = t7;
+    q[8] = t8; q[9] = t9; q[10] = t10; q[11] = t11; q[12] = t12; q[13] = t13; q[14] = t14; q[15] = t15;
 }
-static void m_store(sh4_ctx *c, uint32_t addr, const float *m) {
-    if (addr == 0) for (int i = 0; i < 16; i++) c->xf[i] = m[i];
-    else { sa1_f32a *p = g_wr(addr); for (int i = 0; i < 16; i++) p[i] = m[i]; }
-}
+static void m_store(sh4_ctx *c, uint32_t addr, const float *m) { m_copy(m_wp(c, addr), m); }
 static void v_load(uint32_t addr, float *v) { const sa1_f32a *p = g_rd(addr); for (int i = 0; i < 3; i++) v[i] = p[i]; }
 static void v_store(uint32_t addr, const float *v) { sa1_f32a *p = g_wr(addr); for (int i = 0; i < 3; i++) p[i] = v[i]; }
 
 static void m_unit(float *m) { for (int i = 0; i < 16; i++) m[i] = (i % 5 == 0) ? 1.0f : 0.0f; }
 /* d = a * b */
-static void m_mul(float *d, const float *a, const float *b) {
+static void m_mul(sa1_f32a *d, const sa1_f32a *a, const sa1_f32a *b) {
     float r[16];
     for (int j = 0; j < 4; j++)
         for (int i = 0; i < 4; i++)
             r[4 * j + i] = a[i] * b[4 * j] + a[4 + i] * b[4 * j + 1] + a[8 + i] * b[4 * j + 2] + a[12 + i] * b[4 * j + 3];
     for (int i = 0; i < 16; i++) d[i] = r[i];
 }
-static void m_xform(const float *m, const float *v, float w, float *out) {
+static void m_xform(const sa1_f32a *m, const float *v, float w, float *out) {
     for (int i = 0; i < 3; i++) out[i] = m[i] * v[0] + m[4 + i] * v[1] + m[8 + i] * v[2] + m[12 + i] * w;
 }
-static void m_rot_x(float *m, uint32_t a) {
+static void m_rot_x(sa1_f32a *m, uint32_t a) {
     float s = sinf(ang_rad(a)), co = cosf(ang_rad(a));
     for (int i = 0; i < 4; i++) {
         float c1 = m[4 + i], c2 = m[8 + i];
@@ -87,7 +102,7 @@ static void m_rot_x(float *m, uint32_t a) {
         m[8 + i] = co * c2 - s * c1;
     }
 }
-static void m_rot_y(float *m, uint32_t a) {
+static void m_rot_y(sa1_f32a *m, uint32_t a) {
     float s = sinf(ang_rad(a)), co = cosf(ang_rad(a));
     for (int i = 0; i < 4; i++) {
         float c0 = m[i], c2 = m[8 + i];
@@ -95,7 +110,7 @@ static void m_rot_y(float *m, uint32_t a) {
         m[8 + i] = s * c0 + co * c2;
     }
 }
-static void m_rot_z(float *m, uint32_t a) {
+static void m_rot_z(sa1_f32a *m, uint32_t a) {
     float s = sinf(ang_rad(a)), co = cosf(ang_rad(a));
     for (int i = 0; i < 4; i++) {
         float c0 = m[i], c1 = m[4 + i];
@@ -103,12 +118,12 @@ static void m_rot_z(float *m, uint32_t a) {
         m[4 + i] = co * c1 - s * c0;
     }
 }
-static void m_translate(float *m, const float *v) {
+static void m_translate(sa1_f32a *m, const float *v) {
     float t[3];
     m_xform(m, v, 1.0f, t);
     m[12] = t[0]; m[13] = t[1]; m[14] = t[2];
 }
-static void m_scale(float *m, const float *v) {
+static void m_scale(sa1_f32a *m, const float *v) {
     for (int i = 0; i < 4; i++) { m[i] *= v[0]; m[4 + i] *= v[1]; m[8 + i] *= v[2]; }
 }
 static float v_dot(const float *a, const float *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
@@ -118,7 +133,7 @@ static void v_cross(const float *a, const float *b, float *d) {
 }
 
 /* General 4x4 inverse by cofactors; det 0 fills with 3.4e38 like the SDK. */
-static void m_invert(float *m) {
+static void m_invert(sa1_f32a *m) {
     float inv[16];
     inv[0] = m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
     inv[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
@@ -158,13 +173,11 @@ void sdk_8c639c70(sh4_ctx *c) {         /* njPushMatrix(m) */
     uint32_t depth = hle_rd32(G_DEPTH);
     if (depth >= hle_rd32(G_MAX)) { RET(0); return; }
     uint32_t ptr = hle_rd32(G_PTR);
-    float m[16];
-    m_load(c, 0, m);
-    m_store(c, ptr, m);
+    m_copy(g_wr(ptr), c->xf);
     ptr += 64;
     hle_wr32(G_DEPTH, depth + 1); hle_wr32(G_PTR, ptr);
-    if (ARG0 == 0) m_store(c, ptr, m);
-    else { m_load(c, ARG0, m); m_store(c, 0, m); }
+    if (ARG0 == 0) m_copy(g_wr(ptr), c->xf);
+    else m_copy(c->xf, g_rd(ARG0));
     RET(1);
 }
 
@@ -174,62 +187,60 @@ void sdk_8c639b98(sh4_ctx *c) {         /* njPopMatrix(n) */
     if ((int32_t)(depth - n) < 1) { RET(0); return; }
     uint32_t ptr = hle_rd32(G_PTR) - 64 * n;
     hle_wr32(G_DEPTH, depth - n); hle_wr32(G_PTR, ptr);
-    float m[16];
-    m_load(c, ptr, m); m_store(c, 0, m);
+    m_copy(c->xf, g_rd(ptr));
     RET(1);
 }
 
 void sdk_8c63a8e0(sh4_ctx *c) { HLE_ENTER(0x8c63a8e0u, "njUnitMatrix"); float m[16]; m_unit(m); m_store(c, ARG0, m); }
-void sdk_8c63a770(sh4_ctx *c) { HLE_ENTER(0x8c63a770u, "njSetMatrix"); float m[16]; m_load(c, ARG1, m); m_store(c, ARG0, m); }
-void sdk_8c638f94(sh4_ctx *c) { HLE_ENTER(0x8c638f94u, "njGetMatrix"); float m[16]; m_load(c, 0, m); m_store(c, ARG0, m); }
+void sdk_8c63a770(sh4_ctx *c) { HLE_ENTER(0x8c63a770u, "njSetMatrix"); const sa1_f32a *s = m_rp(c, ARG1); m_copy(m_wp(c, ARG0), s); }
+void sdk_8c638f94(sh4_ctx *c) { HLE_ENTER(0x8c638f94u, "njGetMatrix"); m_copy(m_wp(c, ARG0), c->xf); }
 void sdk_8c63997c(sh4_ctx *c) {         /* njMultiMatrix(md, ms): Md = Md * Ms */
     HLE_ENTER(0x8c63997cu, "njMultiMatrix");
-    float a[16], b[16]; m_load(c, ARG0, a); m_load(c, ARG1, b); m_mul(a, a, b); m_store(c, ARG0, a);
+    const sa1_f32a *b = m_rp(c, ARG1); sa1_f32a *a = m_wp(c, ARG0); m_mul(a, a, b);
 }
-void sdk_8c6390b0(sh4_ctx *c) { HLE_ENTER(0x8c6390b0u, "njInvertMatrix"); float m[16]; m_load(c, ARG0, m); m_invert(m); m_store(c, ARG0, m); }
+void sdk_8c6390b0(sh4_ctx *c) { HLE_ENTER(0x8c6390b0u, "njInvertMatrix"); m_invert(m_wp(c, ARG0)); }
 
-void sdk_8c639ec8(sh4_ctx *c) { HLE_ENTER(0x8c639ec8u, "njRotateX"); float m[16]; m_load(c, ARG0, m); m_rot_x(m, ARG1); m_store(c, ARG0, m); }
-void sdk_8c639f5c(sh4_ctx *c) { HLE_ENTER(0x8c639f5cu, "njRotateY"); float m[16]; m_load(c, ARG0, m); m_rot_y(m, ARG1); m_store(c, ARG0, m); }
-void sdk_8c63a1cc(sh4_ctx *c) { HLE_ENTER(0x8c63a1ccu, "njRotateZ"); float m[16]; m_load(c, ARG0, m); m_rot_z(m, ARG1); m_store(c, ARG0, m); }
+void sdk_8c639ec8(sh4_ctx *c) { HLE_ENTER(0x8c639ec8u, "njRotateX"); m_rot_x(m_wp(c, ARG0), ARG1); }
+void sdk_8c639f5c(sh4_ctx *c) { HLE_ENTER(0x8c639f5cu, "njRotateY"); m_rot_y(m_wp(c, ARG0), ARG1); }
+void sdk_8c63a1cc(sh4_ctx *c) { HLE_ENTER(0x8c63a1ccu, "njRotateZ"); m_rot_z(m_wp(c, ARG0), ARG1); }
 void sdk_8c639cf4(sh4_ctx *c) {         /* njRotateXYZ(m, ax, ay, az): Z, then Y, then X */
     HLE_ENTER(0x8c639cf4u, "njRotateXYZ");
-    float m[16]; m_load(c, ARG0, m);
+    sa1_f32a *m = m_wp(c, ARG0);
     if (ARG3 & 0xFFFF) m_rot_z(m, ARG3);
     if (ARG2 & 0xFFFF) m_rot_y(m, ARG2);
     if (ARG1 & 0xFFFF) m_rot_x(m, ARG1);
-    m_store(c, ARG0, m);
 }
 void sdk_8c63a878(sh4_ctx *c) {         /* njTranslate(m, x, y, z) */
     HLE_ENTER(0x8c63a878u, "njTranslate");
-    float m[16], v[3] = {FARG(0), FARG(1), FARG(2)}; m_load(c, ARG0, m); m_translate(m, v); m_store(c, ARG0, m);
+    float v[3] = {FARG(0), FARG(1), FARG(2)}; m_translate(m_wp(c, ARG0), v);
 }
 void sdk_8c63a804(sh4_ctx *c) {         /* njTranslateV(m, v) */
     HLE_ENTER(0x8c63a804u, "njTranslateV");
-    float m[16], v[3]; m_load(c, ARG0, m); v_load(ARG1, v); m_translate(m, v); m_store(c, ARG0, m);
+    float v[3]; sa1_f32a *m = m_wp(c, ARG0); v_load(ARG1, v); m_translate(m, v);
 }
 void sdk_8c63a69c(sh4_ctx *c) {         /* njScale(m, sx, sy, sz) */
     HLE_ENTER(0x8c63a69cu, "njScale");
-    float m[16], v[3] = {FARG(0), FARG(1), FARG(2)}; m_load(c, ARG0, m); m_scale(m, v); m_store(c, ARG0, m);
+    float v[3] = {FARG(0), FARG(1), FARG(2)}; m_scale(m_wp(c, ARG0), v);
 }
 void sdk_8c63a5ec(sh4_ctx *c) {         /* njScaleV(m, v) */
     HLE_ENTER(0x8c63a5ecu, "njScaleV");
-    float m[16], v[3]; m_load(c, ARG0, m); v_load(ARG1, v); m_scale(m, v); m_store(c, ARG0, m);
+    float v[3]; sa1_f32a *m = m_wp(c, ARG0); v_load(ARG1, v); m_scale(m, v);
 }
 
 /* ---- point and vector transforms ----------------------------------------- */
 void sdk_8c638ecc(sh4_ctx *c) {         /* njCalcPoint(m, vs, vd) */
     HLE_ENTER(0x8c638eccu, "njCalcPoint");
-    float m[16], v[3], o[3]; m_load(c, ARG0, m); v_load(ARG1, v); m_xform(m, v, 1.0f, o); v_store(ARG2, o);
+    float v[3], o[3]; const sa1_f32a *m = m_rp(c, ARG0); v_load(ARG1, v); m_xform(m, v, 1.0f, o); v_store(ARG2, o);
 }
 void sdk_8c638f28(sh4_ctx *c) {         /* njCalcVector(m, vs, vd) */
     HLE_ENTER(0x8c638f28u, "njCalcVector");
-    float m[16], v[3], o[3]; m_load(c, ARG0, m); v_load(ARG1, v); m_xform(m, v, 0.0f, o);
+    float v[3], o[3]; const sa1_f32a *m = m_rp(c, ARG0); v_load(ARG1, v); m_xform(m, v, 0.0f, o);
     if (hle_rd32(G_UNITN)) { float l = v_len(o); if (l != 0.0f) for (int i = 0; i < 3; i++) o[i] /= l; }
     v_store(ARG2, o);
 }
 void sdk_8c639bdc(sh4_ctx *c) {         /* njProjectScreen(m, p3, p2) */
     HLE_ENTER(0x8c639bdcu, "njProjectScreen");
-    float m[16], v[3], q[3]; m_load(c, ARG0, m); v_load(ARG1, v); m_xform(m, v, 1.0f, q);
+    float v[3], q[3]; const sa1_f32a *m = m_rp(c, ARG0); v_load(ARG1, v); m_xform(m, v, 1.0f, q);
     float dist = hle_rdf(G_DIST);
     float z = q[2] != 0.0f ? q[2] : 1.0f;
     hle_wrf(ARG2, dist * q[0] / z * hle_rdf(G_AX) + hle_rdf(G_CX));
