@@ -119,7 +119,21 @@ void fn_8c037990(sh4_ctx *c) {
 TA_PASS(8c037990)
 #undef fn_8c037990
 TA_PASS(8c037c3c)
+/* The near-plane writer and its clipper 0x8C037EE0 the same way
+ * (ta_direct_clip.c); the clipper's own wrapper stays for the traced path. */
+void fn_8c037ccc_orig(sh4_ctx *c);
+void fn_8c037ccc_ta(sh4_ctx *c);
+void fn_8c037ccc(sh4_ctx *c) {
+    if (hle_ta_direct && !kamui_ptr_trace()) {
+        HLE_ENTER(0x8c037cccu, "TA writer fn_8c037ccc");
+        ta_direct_8c037ccc(c);
+        return;
+    }
+    fn_8c037ccc_ta(c);
+}
+#define fn_8c037ccc fn_8c037ccc_ta
 TA_PASS(8c037ccc)
+#undef fn_8c037ccc
 TA_PASS_BANKED(8c037ee0)
 TA_PASS_BANKED(8c038516)
 TA_PASS(8c038668)

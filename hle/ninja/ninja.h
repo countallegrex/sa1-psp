@@ -42,6 +42,7 @@ int kamui_ptr_trace(void);            /* SA1_KAMUI_DUMP: this frame is being tra
  * pointer is good until the next call. */
 draw_vertex *kamui_direct_strip(uint32_t n, uint32_t *first);
 void ta_direct_8c037990(sh4_ctx *c);
+void ta_direct_8c037ccc(sh4_ctx *c);     /* ta_direct_clip.c: the near-plane writer and its clipper */
 void kamui_mark2d_begin(void);
 void kamui_mark2d_end(void);
 int kamui_select_texture(uint32_t n);
