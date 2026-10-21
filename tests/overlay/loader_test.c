@@ -64,7 +64,7 @@ static void expect(const char *what, uint32_t addr, sa1_fn want) {
 
 int main(void) {
     static uint8_t ram[64];
-    sa1_ram = ram;
+    sa1_ram_set(ram);
 
     load("stg01.PRS", 0x8C900000u);
     expect("stage installed", 0x8C900000u, f_stg);

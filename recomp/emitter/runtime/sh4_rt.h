@@ -63,6 +63,25 @@ typedef struct sa1_fn_entry {
  * 0 (0xA0...) is not caught (the game never forms it).  One test and a
  * conditional move per access; constant addresses fold away. */
 #define SA1_NULL_SIZE 0x00200000u
+/* The RAM base.  It is set once, at boot, before any guest code or HLE runs
+ * (sa1_ram_set: backend/psp/main_psp.c, backend/desktop/platform_desktop.c
+ * sa1_plat_ram_alloc, the tests), and never moves after that: a save state
+ * restores the bytes, not the pointer (docs/savestate.md).  So everything
+ * but its definition (sh4_rt.c, SA1_RAM_WRITER) sees a const pointer: every
+ * guest store goes through a may_alias pointer that could, as far as the
+ * compiler knows, overwrite a plain global, and the game code reloaded the
+ * base after each one (4.3 % of the PSP's game-code samples, ~1 ms of a
+ * 53.5 ms frame on the PSP-3001, 2026-10-21; game_007 has 2298 loads of it
+ * without the const, 197 with).  The const/non-const pair across files is
+ * the usual GCC/clang idiom (no LTO in either build); a file that reads the
+ * base in the same function before and after sa1_ram_set would see the old
+ * value, so the setters assign a local first and set the base last. */
+#ifdef SA1_RAM_WRITER
+extern uint8_t *sa1_ram;
+#else
+extern uint8_t *const sa1_ram;
+#endif
+void sa1_ram_set(uint8_t *ram);
 /* The PSP (SA1_COMPACT_RAM, on by default there) cannot spend 14 MB on the
  * unused top of the 32 MB window: it allocates RAM + EXTRA, then the null
  * page, 20 MB in all, and sends every masked offset past RAM + EXTRA (the
@@ -74,7 +93,6 @@ typedef struct sa1_fn_entry {
 #ifdef SA1_COMPACT_RAM
 #define SA1_NULL_OFF  (SA1_RAM_SIZE + SA1_RAM_EXTRA + SA1_RAM_SLACK)
 #define SA1_RAM_ALLOC (SA1_NULL_OFF + SA1_NULL_SIZE + SA1_RAM_SLACK)
-extern uint8_t *sa1_ram;
 /* SA1_OFF_AREA_TEST_ONLY (the PSP's recompiled game code, unless
  * SA1_PSP_GAME_FULL_OFF): area 0 still goes to the null page, but the
  * compare against RAM + EXTRA is left out.  It cost 6.8 ms of a 74 ms
@@ -93,7 +111,6 @@ static inline uint32_t sa1_off(uint32_t a) {
 #else
 #define SA1_NULL_OFF  (2u * SA1_RAM_SIZE)
 #define SA1_RAM_ALLOC (2u * SA1_RAM_SIZE + SA1_NULL_SIZE + SA1_RAM_SLACK)
-extern uint8_t *sa1_ram;
 static inline uint32_t sa1_off(uint32_t a) {
     uint32_t off = a & SA1_RAM_MASK;
     return (a & 0x3E000000u) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;

@@ -68,8 +68,10 @@ int main(int argc, char **argv) {
     int replay = !strcmp(argv[1], "replay");
     for (int i = 3; i < argc; i++)
         if (!input_tape_arg(argc, argv, &i)) { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
-    sa1_ram = calloc(SA1_RAM_ALLOC, 1);
-    if (!sa1_ram || input_tape_start(argv[2]) != 0) return 2;
+    uint8_t *ram = calloc(SA1_RAM_ALLOC, 1);
+    if (!ram) return 2;
+    sa1_ram_set(ram);
+    if (input_tape_start(argv[2]) != 0) return 2;
     if (!hle_strict) { fprintf(stderr, "strict mode not set\n"); return 2; }
     uint32_t end = replay ? input_tape_frames() : FRAMES;
     int bad = 0;

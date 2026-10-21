@@ -867,7 +867,7 @@ static void check_f64(const char *name, const char *what, double got, double wan
     if (got != want) { printf("FAIL %s: %s = %g, want %g\\n", name, what, got, want); failures++; }
 }
 """)
-    L.append("int main(void) {\n    sa1_ram = calloc(SA1_RAM_ALLOC, 1);\n")
+    L.append("int main(void) {\n    sa1_ram_set(calloc(SA1_RAM_ALLOC, 1));\n")
     L.append("    FILE *f = fopen(\"image.bin\", \"rb\"); if (!f) { puts(\"no image\"); return 2; }\n")
     L.append("    fread(sa1_ram + (0x%08xu & SA1_RAM_MASK), 1, %d, f); fclose(f);\n" % (BASE, len(CASES) * STRIDE))
     L.append("    sh4_ctx ctx;\n    int before = failures;\n")

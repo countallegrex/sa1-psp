@@ -603,9 +603,10 @@ int main(int argc, char **argv) {
     sa1_trace_frame = hle_frame_count;
 
     sa1_log("step: guest RAM (%u KB)", SA1_RAM_ALLOC / 1024u);
-    sa1_ram = memalign(64, SA1_RAM_ALLOC);
-    if (!sa1_ram) { sa1_log("cannot allocate %u KB of guest RAM", SA1_RAM_ALLOC / 1024u); plat_log_flush(); sceKernelExitGame(); return 1; }
-    memset(sa1_ram, 0, SA1_RAM_ALLOC);
+    uint8_t *ram = memalign(64, SA1_RAM_ALLOC);
+    if (!ram) { sa1_log("cannot allocate %u KB of guest RAM", SA1_RAM_ALLOC / 1024u); plat_log_flush(); sceKernelExitGame(); return 1; }
+    memset(ram, 0, SA1_RAM_ALLOC);
+    sa1_ram_set(ram);   /* once, before any guest code (sh4_rt.h) */
     sa1_log("guest RAM: %u KB at %p (16 MB + the 2 MB list area + the 2 MB null page)", SA1_RAM_ALLOC / 1024u, (void *)sa1_ram);
     char root[300], bin[320];
     abs_path(root, sizeof root, data_dir);

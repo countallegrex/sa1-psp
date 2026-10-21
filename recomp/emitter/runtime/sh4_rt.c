@@ -1,6 +1,7 @@
 /* sh4_rt.c - the small runtime behind sh4_rt.h: guest RAM, function table
  * dispatch, traps, MMIO logging and the seam stub logger.  Platform-neutral
  * C11; the backends only provide sa1_ram allocation and a log sink. */
+#define SA1_RAM_WRITER 1   /* the one file that sees sa1_ram non-const (sh4_rt.h) */
 #include "sh4_rt.h"
 
 #include <stdarg.h>
@@ -9,6 +10,7 @@
 #include <string.h>
 
 uint8_t *sa1_ram;
+void sa1_ram_set(uint8_t *ram) { sa1_ram = ram; }
 extern uint32_t (*sa1_trace_frame)(void);
 
 static void (*sa1_log_sink)(const char *line);

@@ -118,8 +118,10 @@ void *sa1_plat_fixed_alloc(uint64_t at, size_t n) {
 }
 
 int sa1_plat_ram_alloc(void) {
-    sa1_ram = sa1_plat_fixed_alloc(SA1_FIXED_BASE, SA1_RAM_ALLOC);
-    return sa1_ram ? 0 : -1;
+    uint8_t *ram = sa1_plat_fixed_alloc(SA1_FIXED_BASE, SA1_RAM_ALLOC);
+    if (!ram) return -1;
+    sa1_ram_set(ram);   /* once, before any guest code (sh4_rt.h) */
+    return 0;
 }
 
 /* ---- coroutines: our own stacks at fixed addresses, our own switch ---------
