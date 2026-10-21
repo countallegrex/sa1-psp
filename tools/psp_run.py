@@ -755,13 +755,14 @@ def main() -> int:
                 sess.say("PSPLink was reset by the previous run's exit; no second reset")
             elif not a.no_reset and not reset_psplink(sess, a.wait):
                 raise SetupError(sess.lost or "PSPLink did not come back after the reset")
-            r = sess.command("ls", f"host0:/{STAGE}/", timeout=10)
-            if not r or not any(l.endswith(" sa1psp.prx") or l == "sa1psp.prx" for l in sess.cmd_lines):
-                raise SetupError(f"host0:/{STAGE}/sa1psp.prx not visible on the PSP: the running usbhostfs_pc "
-                                 f"serves another folder (psp_run.py --stop --force wedges a connected PSP: see the top of this script)")
             sess.say(f"starting host0:/{STAGE}/sa1psp.prx")
             r = sess.command("ldstart", f"host0:/{STAGE}/sa1psp.prx", timeout=120)
             if not r or any("Failed to Load/Start" in l or "Error invalid file" in l for l in sess.cmd_lines):
+                # Only now list the stage folder (it holds every run's files, slow to list each run).
+                r2 = sess.command("ls", f"host0:/{STAGE}/", timeout=10)
+                if r2 and not any(l.endswith(" sa1psp.prx") or l == "sa1psp.prx" for l in sess.cmd_lines):
+                    raise SetupError(f"host0:/{STAGE}/sa1psp.prx not visible on the PSP: the running usbhostfs_pc "
+                                     f"serves another folder (psp_run.py --stop --force wedges a connected PSP: see the top of this script)")
                 raise SetupError("ldstart failed" + ("" if r else " (no answer in 120 s)"))
             # From here "Resetting psplink" is the game's exit (psplink.ini resetonexit=1), not
             # the reset this run did before the launch: left set, the exit test below returned

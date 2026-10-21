@@ -34,6 +34,9 @@ static void sha256_block(uint32_t h[8], const uint8_t *p) {
 int sha256_file(const char *path, uint8_t out[32]) {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
+    /* A whole-chunk stdio buffer: the PSP's newlib default (1 KB) made the
+     * 6.7 MB title ~6600 sceIoReads, ~9 s before a tape run's frame 0. */
+    setvbuf(f, NULL, _IOFBF, 1 << 16);
     uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     static uint8_t big[1 << 16];
     uint8_t buf[64];

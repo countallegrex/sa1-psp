@@ -76,6 +76,10 @@ target_compile_options(sa1_backend_psp PRIVATE -O2 -fno-strict-aliasing -Wall -g
 # and newlib members are placed whole (one function per member).  An entry
 # the build no longer has matches nothing; the link never fails on it.
 # Regenerate the list after a new profile (tools/psp_hot_order.py --help).
+# A line "@ADDR" pads so that the next entry lands at ADDR modulo 16 KB:
+# after a listed function changed size, pinning its successor at the old
+# build's address keeps every later entry in its old cache sets, so a bench
+# measures the change and not a new layout.
 # The D-cache is 16 KB, 2-way, 64-byte lines too, and .rodata, .data,
 # .sdata, .sbss and .bss follow .text: 380 bytes of cold code moved every
 # hot table and pool by 380 bytes and Station Square by 2.8 ms (cea4798).
@@ -99,6 +103,8 @@ if(SA1_PSP_HOT_ORDER AND EXISTS "${SA1_PSP_HOT_LIST}")
     string(STRIP "${l}" l)
     if(l STREQUAL "")
       continue()
+    elseif(l MATCHES "^@(0x[0-9a-fA-F]+)$")        # @ADDR: the next entry at ADDR mod 16 KB
+      string(APPEND hot_body "    . = . + ((${CMAKE_MATCH_1} - .) & 0x3fff);\n")
     elseif(l MATCHES "^([^:]+\\.a):([^:]+)$")      # libX.a:member.o, whole
       string(APPEND hot_body "    *${CMAKE_MATCH_1}:${CMAKE_MATCH_2}(.text .text.*)\n")
     elseif(l MATCHES "^([^:]+):([^:]+)$")          # file.c:static_fn

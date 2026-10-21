@@ -505,6 +505,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--gu-split") && i + 1 < args_c) draw_gu_set_split((float)atof(av[++i]));
         else if (!strcmp(av[i], "--gu-lod-bias") && i + 1 < args_c) draw_gu_set_lod_bias((float)atof(av[++i]));
         else if (!strcmp(av[i], "--gu-max-mip") && i + 1 < args_c) draw_gu_set_max_mip(atoi(av[++i]));
+        else if (!strcmp(av[i], "--env") && i + 1 < args_c) {   /* NAME=VALUE, e.g. SA1_COLL_REC=1: a same-binary A/B */
+            char *eq = strchr(av[++i], '=');
+            if (eq) { *eq = 0; setenv(av[i], eq + 1, 1); *eq = '='; }
+        }
         else if (!strcmp(av[i], "--no-ge-pipeline")) draw_gu_set_ge_pipeline(0);
         else if (!strcmp(av[i], "--ge-stall-every") && i + 1 < args_c) draw_gu_set_stall_every(atoi(av[++i]));
         else if (!strcmp(av[i], "--stats") && i + 1 < args_c) stats_every = atoi(av[++i]);
