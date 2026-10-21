@@ -56,6 +56,7 @@ fn_8c029b00                              #  2.66 %   13756 B
 sdk_8c639c70                             #  1.21 %     472 B
 m_load                                   #  2.55 %     136 B
 fn_8c028ec2                              #  1.01 %    4368 B
+@0x10658                                 # the next one where it was before fn_8c028ec2 went native
 fn_8c052518_orig                         #  0.67 %    3520 B
 fn_8c057bc0                              #  0.53 %    3900 B
 sdk_8c6390b0                             #  0.50 %    2200 B
@@ -87,6 +88,7 @@ sdk_8c638f28                             #  0.20 %     332 B
 sa1_call                                 #  0.20 %     128 B
 sa1_fn_lookup                            #  0.24 %     440 B
 fn_8c028d0a                              #  0.95 %    3084 B
+@0x1bc58                                 # the next one where it was before fn_8c028d0a went native
 fn_8c027360                              #  0.19 %     368 B
 sdk_8c638f94                             #  0.19 %     240 B
 fn_8c037108                              #  0.19 %     636 B
@@ -114,6 +116,7 @@ fn_8c09111a                              #  0.21 %     264 B
 game_015.c:sa1_off                       #  0.21 %      36 B
 fn_8c0919cc                              #  0.14 %     168 B
 fn_8c02d2e0                              #  0.97 %    2280 B
+@0x25cc4                                 # the next one where it was before fn_8c02d2e0 went native
 stack_probe                              #  0.61 %     308 B
 fn_8c03718c                              #  0.47 %    1232 B
 sa1_plat_coro_high_water                 #  0.38 %     144 B
