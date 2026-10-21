@@ -28,6 +28,8 @@
  * Without --headless an SDL2 window opens at 480x272 times --scale (2 by
  * default) with an OpenGL 1.x fixed-function context (backend/draw.h), and
  * the controller or keyboard drives the pad whenever no --press is active.
+ * --hidden creates that window hidden, so a scripted screenshot run never
+ * shows a window or takes the focus.
  * --headless keeps the deterministic M1 behaviour for CI.  --screenshot
  * writes the frame buffer after guest frame FRAME; --stats N logs the
  * renderer counters every N frames.
@@ -88,6 +90,7 @@ static const char *trace_path;
 static int no_audio;                  /* --no-audio: the audio core runs, nothing is played */
 static const char *wav_path;          /* --wav FILE: everything the core renders, as a WAV */
 extern int audio_sdl_enabled;         /* audio_sdl.c */
+extern int draw_gl_hidden;            /* draw_gl.c: --hidden */
 int hle_parse_voice(const char *v);   /* hle/settings.c */
 
 static FILE *log_file;
@@ -467,6 +470,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--watch") && i + 1 < argc) { sa1_watch_add(argv[++i]); sa1_watch_addr = 1; }
         else if (!strcmp(argv[i], "--trace-funcs") && i + 1 < argc) trace_path = argv[++i];
         else if (!strcmp(argv[i], "--headless")) headless = 1;
+        else if (!strcmp(argv[i], "--hidden")) draw_gl_hidden = 1;
         else if (!strcmp(argv[i], "--no-pad")) no_pad = 1;
         else if (!strcmp(argv[i], "--no-audio")) no_audio = 1;
         else if (!strcmp(argv[i], "--wav") && i + 1 < argc) wav_path = argv[++i];

@@ -25,9 +25,9 @@ one() {  # TAPE FRAMES...
     for mode in nat rec; do
         local args=()
         for f in "$@"; do args+=(--screenshot "$f:$out/$mode/f$f.ppm"); done
-        if [ $mode = rec ]; then env "$VAR=1" "$EXE" "$DATA/1ST_READ.BIN" "$DATA" --log "$out/$mode.log" --no-audio \
+        if [ $mode = rec ]; then env "$VAR=1" "$EXE" "$DATA/1ST_READ.BIN" "$DATA" --log "$out/$mode.log" --no-audio --hidden \
                 --replay "$ROOT/tests/replay/$tape.tape" --frames $((last + 2)) "${args[@]}" > "$out/$mode.out" 2>&1 &
-        else env -u "$VAR" "$EXE" "$DATA/1ST_READ.BIN" "$DATA" --log "$out/$mode.log" --no-audio \
+        else env -u "$VAR" "$EXE" "$DATA/1ST_READ.BIN" "$DATA" --log "$out/$mode.log" --no-audio --hidden \
                 --replay "$ROOT/tests/replay/$tape.tape" --frames $((last + 2)) "${args[@]}" > "$out/$mode.out" 2>&1 &
         fi
     done

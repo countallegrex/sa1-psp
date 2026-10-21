@@ -71,6 +71,7 @@ static SDL_GameController *pad;
 #define DC_H 480.0f
 
 static int headless = 1, win_w = 480, win_h = 272;
+int draw_gl_hidden;   /* main.c --hidden: the window is created hidden (scripted screenshot runs) */
 static int pace_on;                       /* fixed 60 Hz pacing (draw_gl_pace); off with SA1_NOVSYNC */
 static int title_frame_on;                /* guest frame in the window title; off with SA1_NO_TITLE_FRAME */
 static draw_stats stats;
@@ -269,7 +270,7 @@ int draw_init(int scale, int want_headless) {
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     win_w = 480 * scale; win_h = 272 * scale;
     win = SDL_CreateWindow("sa1-psp (desktop)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                           win_w, win_h, SDL_WINDOW_OPENGL);
+                           win_w, win_h, SDL_WINDOW_OPENGL | (draw_gl_hidden ? SDL_WINDOW_HIDDEN : 0));
     if (!win) { sa1_log("draw: window: %s", SDL_GetError()); return -1; }
     glctx = SDL_GL_CreateContext(win);
     if (!glctx) { sa1_log("draw: GL context: %s", SDL_GetError()); return -1; }
