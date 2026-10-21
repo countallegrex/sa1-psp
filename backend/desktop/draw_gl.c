@@ -420,7 +420,12 @@ void draw_set_state(const draw_state *s) {
     if (s->blend_src == DRAW_BLEND_ONE && s->blend_dst == DRAW_BLEND_ZERO) glDisable(GL_BLEND);
     else { glEnable(GL_BLEND); glBlendFunc(blend_factor(s->blend_src, 0), blend_factor(s->blend_dst, 1)); }
     glDepthFunc(depth_func(s->depth_func));
-    glDepthMask(s->depth_write ? GL_TRUE : GL_FALSE);
+    /* The translucent list is auto-sorted on the console: the ISP orders its
+     * polygons per pixel, so one never hides another by depth whatever its
+     * ISP z-write bit says (Flycast draws the sorted pass with depth writes
+     * off).  Writing them here cut the overlapping headlight pools in Emerald
+     * Coast at each other's edge, a fifth dimmer at the centre. */
+    glDepthMask(s->depth_write && !s->translucent ? GL_TRUE : GL_FALSE);
     if (s->cull == DRAW_CULL_NEGATIVE || s->cull == DRAW_CULL_POSITIVE) {
         glEnable(GL_CULL_FACE);
         /* Screen space has y down, so a positive PowerVR area is a clockwise
