@@ -190,6 +190,11 @@ def port_open(port: int) -> bool:
         return False
 
 
+HOST_TITLE = "SA1 PSP - PSPLink USB host (keep open; closing it disconnects the PSP)"
+HOST_NOTE = ("This window is the PC side of PSPLink for the SA1 PSP port. "
+             "Minimize it; closing it stops the connection to the PSP.")
+
+
 def start_hostfs_wmi(exe: str, root: str, log_path: str) -> None:
     """Windows: usbhostfs_pc started by WMI (Win32_Process.Create), so the
     WMI provider host is its creator and no session's process tree or job
@@ -198,22 +203,21 @@ def start_hostfs_wmi(exe: str, root: str, log_path: str) -> None:
     with it and wedged the connected PSP.  cmd.exe /c does the log
     redirection (Win32_Process.Create has no standard handles).
 
-    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no console at all.  With
-    the hidden console WMI gave the cmd.exe wrapper, a console event killed
-    the host on 2026-10-20 at 09:24 (the log ended in "^C", without the
-    host's own "Exiting" or the wrapper's exit line: both went at once),
-    and another host died unexplained before 11:57 (its log was
-    overwritten by the next start; now kept).  Without a console no Ctrl+C, Ctrl+Break or close
-    event can reach it."""
+    The wrapper's console window opens minimized, titled and with a first
+    line that says what it is: on 2026-10-20 the maintainer closed the empty cmd
+    window twice, not knowing it was the host, and each time the PSP lost
+    its link (the log ended in "^C", the console's close).  The previous
+    host's log is kept (start_hostfs), so a death is named."""
     def ps_str(s: str) -> str:
         return "'" + s.replace("'", "''") + "'"
     # The exit status goes to the end of the log, so the next death is named
     # (a silent SIGPIPE death was the wedge's middle link); /v:on makes
     # !ERRORLEVEL! the status after the host ran, not when the line was parsed.
-    cmdline = (f'cmd.exe /v:on /c ""{exe}" > "{log_path}" 2>&1 & '
+    cmdline = (f'cmd.exe /v:on /c "title {HOST_TITLE} & echo {HOST_NOTE} & echo The log is {log_path} & '
+               f'"{exe}" > "{log_path}" 2>&1 & '
                f'echo usbhostfs_pc exited with status !ERRORLEVEL! at !DATE! !TIME! >> "{log_path}""')
     script = ("$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly "
-              "-Property @{CreateFlags=[uint32]0x208; ShowWindow=[uint16]0}; "      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+              f"-Property @{{Title={ps_str(HOST_TITLE)}; ShowWindow=[uint16]7}}; "      # SW_SHOWMINNOACTIVE
               "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
               f"@{{CommandLine={ps_str(cmdline)}; CurrentDirectory={ps_str(root)}; ProcessStartupInformation=$si}}; "
               "Write-Output \"$($r.ReturnValue) $($r.ProcessId)\"")
