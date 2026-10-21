@@ -4,10 +4,10 @@ TARGET = sa1autolink
 OBJS = sa1autolink.o stubs.o
 BUILD_PRX = 1
 USE_PSPSDK_LIBC = 1
-CFLAGS = -Os -G0 -Wall -Wextra -std=gnu99 -fno-builtin
+CFLAGS = -Os -G0 -Wall -Wextra -std=gnu99 -fno-builtin -fno-tree-loop-distribute-patterns
 ASFLAGS = $(CFLAGS)
 LDFLAGS = -nostartfiles
-LIBS = -lpspusb
+LIBS = -lpspusb -lpsppower
 
 PSPSDK = $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
