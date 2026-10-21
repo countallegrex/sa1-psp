@@ -700,6 +700,42 @@ static int cmp_key(const void *a, const void *b) {
     return ka->i < kb->i ? -1 : ka->i > kb->i ? 1 : 0;
 }
 
+/* cmp_key's order without qsort: the keys arrive in index order, so a
+ * stable LSD radix sort on the depth alone is that order.  The depth bits
+ * become an unsigned key that orders as the floats compare: -0 and
+ * denormals as 0 (they compare equal to it here: the FPU flushes them),
+ * negatives reversed.  Returns 0 (nothing sorted) on a NaN, which only
+ * qsort's comparator defines. */
+static int radix_keys(sort_key *arr, sort_key *tmp, uint32_t n) {
+    uint32_t cnt[4][256];
+    memset(cnt, 0, sizeof cnt);
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t b;
+        memcpy(&b, &arr[i].d, 4);
+        if ((b & 0x7F800000u) == 0x7F800000u && (b & 0x007FFFFFu)) return 0;
+        if ((b & 0x7F800000u) == 0) b = 0;
+        b = (b & 0x80000000u) ? ~b : b | 0x80000000u;
+        memcpy(&arr[i].d, &b, 4);              /* the sortable key, for now */
+        cnt[0][b & 255]++; cnt[1][(b >> 8) & 255]++; cnt[2][(b >> 16) & 255]++; cnt[3][b >> 24]++;
+    }
+    sort_key *src = arr, *dst = tmp;
+    for (int p = 0; p < 4; p++) {
+        uint32_t *c = cnt[p], sum = 0, sh = 8u * (uint32_t)p;
+        uint32_t k0;
+        memcpy(&k0, &src[0].d, 4);
+        if (c[(k0 >> sh) & 255] == n) continue;  /* one value in this byte: the pass keeps the order */
+        for (int v = 0; v < 256; v++) { uint32_t t = c[v]; c[v] = sum; sum += t; }
+        for (uint32_t i = 0; i < n; i++) {
+            uint32_t k;
+            memcpy(&k, &src[i].d, 4);
+            dst[c[(k >> sh) & 255]++] = src[i];
+        }
+        sort_key *t = src; src = dst; dst = t;
+    }
+    if (src != arr) memcpy(arr, src, n * sizeof *arr);
+    return 1;                                  /* .d holds the key now; only .i is read */
+}
+
 /* The host bytes of a TA region in guest RAM (contiguous there: the buffers
  * sit in the 16 MB or the extra area above it), or NULL if it is not. */
 static const uint8_t *ta_host(uint32_t start, uint32_t end) {
@@ -956,10 +992,13 @@ static void render_lists(void) {
     nverts = 0;
     parse_list(2, 1);
     if (nstrips) {
-        sort_key *arr = malloc(nstrips * sizeof *arr);
+        sort_key *arr = malloc(2 * nstrips * sizeof *arr);
         if (arr) {
             for (uint32_t i = 0; i < nstrips; i++) { arr[i].d = strips[i].depth; arr[i].i = i; }
-            qsort(arr, nstrips, sizeof *arr, cmp_key);
+            if (!radix_keys(arr, arr + nstrips, nstrips)) {
+                for (uint32_t i = 0; i < nstrips; i++) { arr[i].d = strips[i].depth; arr[i].i = i; }
+                qsort(arr, nstrips, sizeof *arr, cmp_key);
+            }
             for (uint32_t k = 0; k < nstrips; k++) {
                 uint32_t i = arr[k].i;
                 draw_set_state(&strip_states[i]);

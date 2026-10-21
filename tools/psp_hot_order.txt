@@ -49,6 +49,7 @@ direct_strip                             #  1.97 %     788 B
 parse_region                             #  2.05 %    6900 B
 draw_set_state                           #  1.46 %     544 B
 sdk_8c642440                             #  0.83 %    2348 B
+@0xbf88                                  # the next one where it was before the translucent sort went radix
 sdk_8c639b98                             #  0.89 %     296 B
 sa1_seam_hit_at                          #  0.96 %     360 B
 m_store                                  #  1.85 %     140 B
