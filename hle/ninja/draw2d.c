@@ -58,6 +58,9 @@ static void sprite_quad(int list, float x0, float y0, float x1, float y1, float 
     }
 }
 
+static void clip_emit_quad(int list, const float *qx, const float *qy, const float *qz, const float *us, const float *vs,
+                           float near, float cx, float cy, float dist, float ax, float ay);
+
 static void draw_sprite(sh4_ctx *c, uint32_t sp, uint32_t n, uint32_t attr, float pri, int is3d) {
     uint32_t tlist = hle_rd32(sp + 24), tanim = hle_rd32(sp + 28);
     if (!tanim) return;
@@ -92,25 +95,32 @@ static void draw_sprite(sh4_ctx *c, uint32_t sp, uint32_t n, uint32_t attr, floa
          * ring sparkle (attr 0x29, a 32x32 quad the game scales down) and the
          * rain splashes on the ground (attr 0x22) draw this way.  The SDK draws
          * it unless all four corners are beyond the far clip or all four nearer
-         * than the near clip; corners behind the near plane are skipped here (a
-         * quad that straddles it cannot be projected). */
+         * than the near clip, and clips a quad that straddles the near plane
+         * (0x8C63F610).  The night rain is this case: its 14x14 quads lie
+         * almost along the view direction, so they project to long one-pixel
+         * slivers, and the nearest ones reach behind the near plane. */
         float exs[4] = {ex0, ex0, ex1, ex1}, eys[4] = {ey0, ey1, ey0, ey1};
         float us[4] = {u1, u1, u2, u2}, vs[4] = {v1, v2, v1, v2};
         float qx[4], qy[4], qz[4];
         float pz = hle_rdf(sp + 8);
-        int nfar = 0;
+        int nfar = 0, nnear = 0;
         for (int i = 0; i < 4; i++) {
             float ox = exs[i] * rc - eys[i] * rs, oy = exs[i] * rs + eys[i] * rc;
             float p[3] = {px + ox, py + oy, pz};
             qx[i] = c->xf[0] * p[0] + c->xf[4] * p[1] + c->xf[8] * p[2] + c->xf[12];
             qy[i] = c->xf[1] * p[0] + c->xf[5] * p[1] + c->xf[9] * p[2] + c->xf[13];
             qz[i] = c->xf[2] * p[0] + c->xf[6] * p[1] + c->xf[10] * p[2] + c->xf[14];
-            if (qz[i] <= clipn) return;
             if (qz[i] > clipf) nfar++;
+            if (qz[i] <= clipn) nnear++;
         }
-        if (nfar == 4) return;
+        if (kamui_ptr_trace())
+            sa1_log("  object-space corners (view): (%.1f %.1f %.1f) (%.1f %.1f %.1f) (%.1f %.1f %.1f) (%.1f %.1f %.1f)%s",
+                    qx[0], qy[0], qz[0], qx[1], qy[1], qz[1], qx[2], qy[2], qz[2], qx[3], qy[3], qz[3],
+                    nnear == 4 ? " near: skipped" : nnear ? " near: clipped" : "");
+        if (nfar == 4 || nnear == 4) return;
         int list = kamui_draw_begin(c, (attr & 0x20) ? KM_ATTR_TRANS_INT : KM_ATTR_OPAQUE_INT, mat, tlist ? KM_TEX_NUM : KM_TEX_NONE, texid);
-        for (int i = 0; i < 4; i++) {
+        if (nnear) clip_emit_quad(list, qx, qy, qz, us, vs, clipn, cx, cy, dist, ax, ay);
+        else for (int i = 0; i < 4; i++) {
             float iz = 1.0f / qz[i];
             put_vertex(list, i == 3 ? PCW_VTX_END : PCW_VTX, cx + qx[i] * dist * ax * iz, cy + qy[i] * dist * ay * iz, iz, us[i], vs[i], sh4_f2u(1.0f), sh4_f2u(1.0f));
         }
@@ -202,6 +212,37 @@ static void clip_emit_tri(int list, const cv_t *t0, const cv_t *t1, const cv_t *
         const cv_t *p = &out[order[i]];
         float iz = 1.0f / p->z;
         kamui_put_vertex(list, i + 1 == n ? PCW_VTX_END : PCW_VTX, cx + p->x * dist * ax * iz, cy + p->y * dist * ay * iz, iz, p->u, p->v, cv_pack(p->col), 0);
+    }
+}
+
+/* Clips a sprite quad (corners in strip order: left-top, left-bottom,
+ * right-top, right-bottom, in view space) against z > near and emits the
+ * rest as one strip, white intensity as the unclipped path. */
+static void clip_emit_quad(int list, const float *qx, const float *qy, const float *qz, const float *us, const float *vs,
+                           float near, float cx, float cy, float dist, float ax, float ay) {
+    static const int ring[4] = {0, 1, 3, 2};          /* strip order -> outline order */
+    cv_t in[4], out[8];
+    for (int i = 0; i < 4; i++) {
+        int k = ring[i];
+        in[i].x = qx[k]; in[i].y = qy[k]; in[i].z = qz[k]; in[i].u = us[k]; in[i].v = vs[k];
+        for (int j = 0; j < 4; j++) in[i].col[j] = 0.0f;
+    }
+    int n = 0;
+    for (int i = 0; i < 4; i++) {
+        const cv_t *a = &in[i], *b = &in[(i + 1) % 4];
+        int ain = a->z > near, bin = b->z > near;
+        if (ain) out[n++] = *a;
+        if (ain != bin) cv_lerp(a, b, (near - a->z) / (b->z - a->z), &out[n++]);
+    }
+    if (n < 3) return;
+    int order[8], k = 0, lo = 1, hi = n - 1;          /* polygon -> strip order 0,1,n-1,2,n-2,... */
+    order[k++] = 0;
+    while (lo <= hi) { order[k++] = lo++; if (lo <= hi) order[k++] = hi--; }
+    for (int i = 0; i < n; i++) {
+        const cv_t *p = &out[order[i]];
+        float iz = 1.0f / p->z;
+        put_vertex(list, i + 1 == n ? PCW_VTX_END : PCW_VTX, cx + p->x * dist * ax * iz, cy + p->y * dist * ay * iz, iz, p->u, p->v,
+                   sh4_f2u(1.0f), sh4_f2u(1.0f));
     }
 }
 

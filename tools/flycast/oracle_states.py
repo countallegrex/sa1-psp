@@ -140,6 +140,9 @@ def run_flycast(fexe, gdi, lua, env, timeout, log, extra_config=()):
     """Runs Flycast with the oracle script and the given environment; returns the exit code."""
     shutil.copy2(os.path.join(HERE, "tape_oracle.lua"), os.path.join(os.path.dirname(fexe), "tape_oracle.lua"))
     cfg = "config:LuaFileName=%s,input:device1.1=10,input:device1.2=10" % lua
+    # SA1_FLYCAST_CONFIG: more SECTION:KEY=VALUE pairs, comma-separated, for experiments
+    # (config:Dynarec.Enabled=no makes guest code patched from Lua take effect at once)
+    extra_config = list(extra_config) + [kv for kv in os.environ.get("SA1_FLYCAST_CONFIG", "").split(",") if kv]
     for kv in extra_config:
         cfg += "," + kv
     cmd = [fexe, "-config", cfg, os.path.abspath(gdi)]

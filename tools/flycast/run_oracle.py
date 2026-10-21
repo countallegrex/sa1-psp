@@ -21,6 +21,14 @@ comparison covers the game frames from there.  --until G stops the console
 once the aligned desktop game frame reaches G.  --poke-ec applies the
 scripted route's Emerald Coast poke on the console side.
 
+--shots "name:G,..." pairs screenshots at desktop game frames G: the
+console is held at the first vblank of each (tools/flycast/oracle_shots.lua)
+while tools/flycast/capture_window.ps1 copies Flycast's window (raised on
+top for the copy: keep the screen unlocked), the desktop build replays the
+tape again in a window with --screenshot at the guest frame where the same
+game frame starts, and each pair becomes WORK/shots/name.png, ours left and
+the console right, both 480 high.  Montages are for looking, not checks.
+
 Needs SA1_DUMP (the data and the GD-ROM image) and a desktop build
 (--exe, $SA1_EXE, build-desktop/ or build-tape/).  Outputs go to --work
 (default a temporary directory, printed).  Flycast is GPL and stays
@@ -32,8 +40,11 @@ Part of sa1-psp (MIT).
 import argparse
 import glob
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -52,6 +63,54 @@ def oracle_dir(path):
     return oracle_states.oracle_dir(path)
 
 
+def parse_shots(spec):
+    """'name:G,...' -> [(name, G)]."""
+    out = []
+    for item in (spec or "").split(","):
+        if item.strip():
+            name, g = item.strip().rsplit(":", 1)
+            out.append((name, int(g)))
+    return out
+
+
+def desktop_shots(exe, data, tape, desk, work, shots, a):
+    """Desktop screenshots at the guest frame where each game frame starts, then the montages."""
+    _, rows = tape_diff.read_tsv(desk)
+    start = {}
+    for r in rows:
+        start.setdefault(int(r["game_frame"]), int(r["frame"]))
+    sdir = os.path.join(work, "shots")
+    args, frames = ["--replay", tape], []
+    for name, g in shots:
+        if g not in start:
+            print("shots: the desktop run never reached game frame %d (%s)" % (g, name))
+            continue
+        frames.append(start[g])
+        args += ["--screenshot", "%d:%s" % (start[g], os.path.join(sdir, name + "_ours.ppm"))]
+    if not frames:
+        return
+    args += (replay_test.ROUTE_POKES if a.poke_ec else []) + oracle_states.timing_args(a) + ["--frames", str(max(frames) + 2)]
+    cmd = [os.path.abspath(exe), os.path.join(data, "1ST_READ.BIN"), data, "--log", os.path.join(work, "desktop_shots.log")] + args
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        print("shots: no PIL; the pairs are in %s" % sdir)
+        return
+    for name, g in shots:
+        ours, cons = os.path.join(sdir, name + "_ours.ppm"), os.path.join(sdir, name + ".png")
+        if not (os.path.isfile(ours) and os.path.isfile(cons)):
+            print("shots: %s incomplete (ours %s, console %s)" % (name, os.path.isfile(ours), os.path.isfile(cons)))
+            continue
+        ims = [Image.open(p).convert("RGB") for p in (ours, cons)]
+        ims = [im.resize((im.width * 480 // im.height, 480)) for im in ims]
+        out = Image.new("RGB", (ims[0].width + ims[1].width + 8, 480 + 24))
+        out.paste(ims[0], (0, 0)); out.paste(ims[1], (ims[0].width + 8, 0))
+        ImageDraw.Draw(out).text((6, 486), "%s: desktop game frame %d (guest %d), ours left, console right" % (name, g, start.get(g, -1)), fill=(255, 255, 255))
+        out.save(os.path.join(sdir, name + "_pair.png"))
+        print("shots: %s" % os.path.join(sdir, name + "_pair.png"))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("tape")
@@ -64,6 +123,7 @@ def main(argv=None):
     ap.add_argument("--until", type=int, metavar="G", help="stop the console at desktop game frame G")
     ap.add_argument("--poke-ec", action="store_true", help="the scripted route: --poke 5290 on the desktop replay, the same rewrite on the console when Chaos 0 would load")
     ap.add_argument("--watch", help="watch list for both sides (default tests/replay/watch.txt)")
+    ap.add_argument("--shots", metavar="SPEC", help='"name:G,...": console and desktop screenshots at desktop game frame G, montaged')
     oracle_states.add_timing_args(ap)
     a = ap.parse_args(argv)
     global WATCH
@@ -84,7 +144,10 @@ def main(argv=None):
     work = os.path.abspath(a.work or tempfile.mkdtemp(prefix="sa1-oracle-"))
     os.makedirs(work, exist_ok=True)
     tape = os.path.abspath(a.tape)
-    desk, gpad = oracle_states.desktop_trace(exe, data, tape, work, a.poke_ec, oracle_states.timing_args(a))
+    # --until G: the desktop need not replay past it (a game frame is about two guest frames;
+    # three plus the loads is a safe bound)
+    limit = ["--frames", str(min(tape_io.read(tape).end, 3 * a.until + 600))] if a.until is not None else []
+    desk, gpad = oracle_states.desktop_trace(exe, data, tape, work, a.poke_ec, oracle_states.timing_args(a) + limit)
     fly = os.path.join(work, "flycast.tsv")
 
     fexe = oracle_dir(a.flycast)
@@ -111,7 +174,23 @@ def main(argv=None):
         env.update(oracle_states.stage(entry, fexe, gdi))
         print("oracle: starting the console from state %s (tape frame %d = game frame %d, console vblank %d)"
               % (entry["name"], entry["frame"], entry["game_frame"], entry["vblank"]))
-    code = oracle_states.run_flycast(fexe, gdi, "tape_oracle.lua", env, timeout, os.path.join(work, "flycast.out"), extra)
+    lua, shots, capture = "tape_oracle.lua", parse_shots(a.shots), None
+    if shots:
+        sdir = os.path.join(work, "shots")
+        os.makedirs(sdir, exist_ok=True)
+        for f in glob.glob(os.path.join(sdir, "*")):
+            os.remove(f)
+        lua = "oracle_shots.lua"
+        shutil.copy2(os.path.join(HERE, lua), os.path.join(os.path.dirname(fexe), lua))
+        env.update(SA1_SHOT_SPEC=",".join("%s:%d" % s for s in shots), SA1_SHOTS=sdir)
+        capture = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                    os.path.join(HERE, "capture_window.ps1"), sdir, str(timeout + 60)],
+                                   stdout=open(os.path.join(work, "capture.out"), "w"), stderr=subprocess.STDOUT)
+    code = oracle_states.run_flycast(fexe, gdi, lua, env, timeout, os.path.join(work, "flycast.out"), extra)
+    if capture:
+        open(os.path.join(work, "shots", "STOP"), "w").close()
+        capture.wait(30)
+        desktop_shots(exe, data, tape, desk, work, shots, a)
     if not os.path.isfile(fly):
         sys.exit("Flycast wrote no trace (Lua not loaded? see %s)" % os.path.dirname(fexe))
     print("oracle: traces in %s" % work)
