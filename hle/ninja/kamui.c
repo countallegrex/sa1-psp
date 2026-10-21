@@ -652,7 +652,7 @@ static void flush_strip(parse_ctx *pc, int sorted) {
  * writer's vertex records hold them.  Under the header the writer is made
  * for (packed colour, float UV, offset) the host array is the strip; any
  * other header decodes the same words as parse_region decodes a record. */
-static void direct_strip(parse_ctx *pc, const draw_vertex *sv, uint32_t n, int sorted) {
+static __attribute__((noinline)) void direct_strip(parse_ctx *pc, const draw_vertex *sv, uint32_t n, int sorted) {
     if (!sorted && pc->coltype == 0 && pc->textured && !pc->uv16 && pc->offset) {
         if (n < 3) return;
         draw_set_state(&pc->state);

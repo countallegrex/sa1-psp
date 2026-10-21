@@ -22,7 +22,7 @@
 #include "../hle.h"
 #include "ninja.h"
 
-int hle_ta_direct;
+int hle_ta_direct = 1;              /* --no-ta-direct: the recompiled writers and the TA bytes */
 
 #define TA_MARKER 0xC0000000u          /* parameter type 6: reserved on the TA, never written by the game */
 

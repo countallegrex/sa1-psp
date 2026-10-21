@@ -476,6 +476,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--texdump") && i + 1 < argc) { texdump_dir = argv[++i]; texture_set_dump_dir(texdump_dir, 0); }
         else if (!strcmp(argv[i], "--mark") && i + 1 < argc && nmarks < SHOT_MAX) mark_frames[nmarks++] = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--ta-direct")) hle_ta_direct = 1;   /* docs/ta-direct.md */
+        else if (!strcmp(argv[i], "--no-ta-direct")) hle_ta_direct = 0;
         else if (!strcmp(argv[i], "--aspect") && i + 1 < argc) { const char *a = argv[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; }
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--stats") && i + 1 < argc) stats_every = atoi(argv[++i]);

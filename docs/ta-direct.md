@@ -1,6 +1,6 @@
 # The TA bypass (M5): strips from the game's writers to sceGu without the TA bytes
 
-Status: design note, 2026-10-20; stage 1 behind `--ta-direct`.
+Status: stage 1 is the default (2026-10-20; `--no-ta-direct` turns it off): Station Square 74.40 -> 70.17 ms/frame on the PSP-3001.
 
 ## Where the frame goes
 

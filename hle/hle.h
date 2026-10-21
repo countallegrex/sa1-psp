@@ -78,7 +78,7 @@ extern hle_pad hle_pad_state;
  * screen space), 0 = 4:3.  Set before hle_init; the backend gets the same
  * value through draw_set_aspect. */
 extern int hle_aspect_wide;
-/* --ta-direct: the native TA strip writers (hle/ninja/ta_direct.c, docs/ta-direct.md). */
+/* 1 (default; --no-ta-direct 0): the native TA strip writers (hle/ninja/ta_direct.c, docs/ta-direct.md). */
 extern int hle_ta_direct;
 
 /* ---- what the backend drives -------------------------------------------- */
