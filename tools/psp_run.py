@@ -524,6 +524,35 @@ def wait_exit_reset(sess: Session, seconds: float) -> bool:
     return sess.booted
 
 
+# The previous run's exit reset, when it brought PSPLink back to its prompt:
+# a run starting soon after skips its own reset.  On 2026-10-20 23:49 a reset
+# sent seconds after the game's exit reset never came back (the PSP left the
+# bus; PSPLink had quit to the XMB), so one fresh reset per run is enough.
+FRESH_MARK = "psp_run.fresh"
+FRESH_SECONDS = 120
+
+
+def mark_fresh(stage: str) -> None:
+    try:
+        with open(os.path.join(stage, FRESH_MARK), "w") as f:
+            f.write(f"{time.time():.0f}\n")
+    except OSError:
+        pass
+
+
+def take_fresh(stage: str) -> bool:
+    """True when the last run left PSPLink freshly reset less than
+    FRESH_SECONDS ago; the mark is used up either way."""
+    path = os.path.join(stage, FRESH_MARK)
+    try:
+        with open(path) as f:
+            t = float(f.read().strip() or 0)
+        os.remove(path)
+    except (OSError, ValueError):
+        return False
+    return 0 <= time.time() - t < FRESH_SECONDS
+
+
 def link_address(symbol: str, elf: str, distro: str) -> int | None:
     """symbol's address in the ELF (psp-nm, through WSL on Windows)."""
     if os.name == "nt":
@@ -721,7 +750,10 @@ def main() -> int:
             sess.say("waiting for PSPLink")
             if not wait_psplink(sess, a.wait):
                 raise SetupError(sess.lost or "PSPLink did not answer")
-            if not a.no_reset and not reset_psplink(sess, a.wait):
+            fresh = take_fresh(stage)
+            if fresh and not a.no_reset:
+                sess.say("PSPLink was reset by the previous run's exit; no second reset")
+            elif not a.no_reset and not reset_psplink(sess, a.wait):
                 raise SetupError(sess.lost or "PSPLink did not come back after the reset")
             r = sess.command("ls", f"host0:/{STAGE}/", timeout=10)
             if not r or not any(l.endswith(" sa1psp.prx") or l == "sa1psp.prx" for l in sess.cmd_lines):
@@ -761,7 +793,8 @@ def main() -> int:
                 if sess.exit_line and (sess.resetting or now - sess.last_data > a.linger
                                        or now - sess.exit_at > 10 * a.linger):
                     sess.say("exit line seen: " + sess.exit_line.split("] exit: ", 1)[1])
-                    wait_exit_reset(sess, 30)
+                    if wait_exit_reset(sess, 30):
+                        mark_fresh(stage)
                     return EXIT_OK
                 if now - t0 > a.timeout:
                     sess.say(f"timeout after {a.timeout:g} s; resetting PSPLink so the game stops writing "
