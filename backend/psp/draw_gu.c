@@ -77,6 +77,10 @@ static struct { uint32_t list_high, pool_high, pool_full, dropped, offscreen, mi
                 uint32_t flush_state, flush_proj, flush_offset, last_strips, last_draws, last_states;
                 float zmin_frame, zmin_win, zmin_last; uint32_t znear_verts[4];   /* nearest 3D z; vertices with z < 2, 4, 8, 16 */
                 uint64_t gpu_wait_us, swap_wait_us, replay_us, frame_us_sum, frame_us_max, last_end; } gs;
+/* The largest strip w folded into gs.zmin_frame since it was last reset: a
+ * strip whose w is no larger cannot lower it (1/w falls as w grows), so
+ * strip_emit divides only for a new largest w. */
+static float zmin_wmax;
 
 typedef struct { float u, v; uint32_t color; float x, y, z; } gu_vtx;
 #define VTX_FMT (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
@@ -114,9 +118,14 @@ enum { PROJ_3D = 0, PROJ_2D, PROJ_FULL, PROJ_N };
 enum { PASS_FAR = 0, PASS_NEAR = 1, PASSES };
 static ScePspFMatrix4 proj[PASSES][PROJ_N];
 static float depth_split = 16.0f;
+static float depth_ws = 0.0625f;             /* 1 / depth_split (0 without a split), divided once here, not per run */
 static const float depth_zn = 1.0f;          /* nearer vertices (the 2D layer's) draw at z = 1, the front */
 static void build_projs(void);
-void draw_gu_set_split(float z) { depth_split = z > 1.0f ? z : 0.0f; build_projs(); }
+void draw_gu_set_split(float z) {
+    depth_split = z > 1.0f ? z : 0.0f;
+    depth_ws = depth_split ? 1.0f / depth_split : 0.0f;
+    build_projs();
+}
 static int cur_proj = -1;
 /* x in 640-space from left to right -> NDC [lo, hi]; y 0..480 -> 1..-1; the
  * vertex is (x*z, y*z, -z) and clip w = z.  Depth: clip z = a z + b gives
@@ -521,7 +530,7 @@ static uint32_t abgr(uint32_t argb) { return (argb & 0xFF00FF00u) | ((argb >> 16
 
 int draw_init(int scale, int want_headless) {
     (void)scale;
-    gs.zmin_frame = gs.zmin_win = 1e30f; gs.zmin_last = 1.0f;
+    gs.zmin_frame = gs.zmin_win = 1e30f; gs.zmin_last = 1.0f; zmin_wmax = 0.0f;
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     build_projs();
@@ -672,7 +681,7 @@ void draw_end_frame(void) {
     gs.last_strips = stats.strips; gs.last_draws = stats.draw_calls; gs.last_states = stats.state_changes;
     if (gs.zmin_frame < gs.zmin_win) gs.zmin_win = gs.zmin_frame;
     gs.zmin_last = gs.zmin_frame < 1e29f ? gs.zmin_frame : 1.0f;   /* no 3D this frame: the full range */
-    gs.zmin_frame = 1e30f;
+    gs.zmin_frame = 1e30f; zmin_wmax = 0.0f;
     list_open = 0;
     for (unsigned i = 0; i < nfree_later; i++) texture_release(free_later[i]);
     nfree_later = 0;
@@ -986,12 +995,29 @@ static inline int conv_mode(void) {
     int alpha = cur.use_alpha && !(cur.texture && cur.shade == DRAW_SHADE_DECAL && cur.ignore_tex_alpha);
     return (alpha ? CONV_ALPHA : 0) | (cur.texture ? 0 : CONV_ADD_OFFSET);
 }
+/* One vertex in the GE's layout.  zu is z's bits (o->z = -z by its sign
+ * bit), aor 0xFF000000 when the alpha is forced to 1 (no CONV_ALPHA), add
+ * CONV_ADD_OFFSET.  ARGB to ABGR is a byte reverse and a rotate (wsbw, ror:
+ * the alpha byte stays, R and B trade places).  Everything is loaded before
+ * anything is stored: with -fno-strict-aliasing a store into o would
+ * otherwise order every later load of v behind it. */
+static inline uint32_t argb_abgr(uint32_t c) { c = __builtin_bswap32(c); return c >> 8 | c << 24; }
+static inline __attribute__((always_inline)) void conv_vtx(gu_vtx *o, const draw_vertex *v, uint32_t zu, uint32_t aor, int add) {
+    union { uint32_t u; float f; } z = { zu };
+    const uint32_t *vw = (const uint32_t *)v;     /* u, v as words: copied, not converted */
+    uint32_t *ow = (uint32_t *)o;
+    uint32_t tu = vw[3], tv = vw[4], c = v->color;
+    float x = v->x * z.f, y = v->y * z.f;
+    uint32_t t = c | aor;
+    if (add) t = (t & 0xFF000000u) | sat_add(c, v->ocolor);
+    t = argb_abgr(t);
+    ow[0] = tu; ow[1] = tv;
+    o->color = t; o->x = x; o->y = y;
+    ow[5] = zu ^ 0x80000000u;
+}
 static inline void conv(gu_vtx *o, const draw_vertex *v, float z, int mode) {
-    o->u = v->u; o->v = v->v;
-    o->x = v->x * z; o->y = v->y * z; o->z = -z;
-    uint32_t c = v->color, a = (mode & CONV_ALPHA) ? c >> 24 : 255u;
-    if (mode & CONV_ADD_OFFSET) c = sat_add(c, v->ocolor);
-    o->color = a << 24 | (c & 0xFF00u) | ((c >> 16) & 255u) | ((c & 255u) << 16);
+    union { float f; uint32_t u; } zb = { z };
+    conv_vtx(o, v, zb.u, (mode & CONV_ALPHA) ? 0u : 0xFF000000u, mode & CONV_ADD_OFFSET);
 }
 
 static int list_full(void) {
@@ -1012,6 +1038,26 @@ static inline void conv_offset(gu_ovtx *o, const draw_vertex *v, float z, int sc
     if (scale) { unsigned a = (v->color >> 24) & 255; r = mul255(r, a); g = mul255(g, a); b = mul255(b, a); }
     o->x = v->x * z; o->y = v->y * z; o->z = -z;
     o->color = 0xFF000000u | b << 16 | g << 8 | r;
+}
+/* conv_vtx (textured, so never CONV_ADD_OFFSET) and conv_offset of one
+ * vertex together: the two share the vertex's loads and its x * z, y * z. */
+static inline __attribute__((always_inline)) void conv_pair(gu_vtx *o, gu_ovtx *p, const draw_vertex *v, uint32_t zu, uint32_t aor, int scale) {
+    union { uint32_t u; float f; } z = { zu };
+    const uint32_t *vw = (const uint32_t *)v;
+    uint32_t *ow = (uint32_t *)o, *pw = (uint32_t *)p;
+    uint32_t tu = vw[3], tv = vw[4], c = v->color, oc = v->ocolor;
+    float x = v->x * z.f, y = v->y * z.f;
+    uint32_t t = argb_abgr(c | aor), ot;
+    if (scale) {
+        unsigned a = c >> 24, r = mul255((oc >> 16) & 255, a), g = mul255((oc >> 8) & 255, a), b = mul255(oc & 255, a);
+        ot = 0xFF000000u | b << 16 | g << 8 | r;
+    } else ot = argb_abgr(oc | 0xFF000000u);
+    uint32_t nz = zu ^ 0x80000000u;
+    ow[0] = tu; ow[1] = tv;
+    o->color = t; o->x = x; o->y = y;
+    ow[5] = nz;
+    p->color = ot; p->x = x; p->y = y;
+    pw[3] = nz;
 }
 
 /* ---- the GE's guard band -------------------------------------------------
@@ -1093,7 +1139,7 @@ static void poly_emit(int pass, const draw_vertex *poly, int k) {
 /* Which pass a run of vertices belongs to: -1 when it spans the split. */
 static int pass_of(const draw_vertex *v, int n) {
     if (!depth_split || (cur.layer == DRAW_LAYER_2D && v[0].w >= 1.0f)) return PASS_NEAR;
-    float ws = 1.0f / depth_split;
+    float ws = depth_ws;
     int near = 0, far = 0;
     for (int i = 0; i < n; i++) { if (v[i].w > ws) near = 1; else far = 1; }
     return near && far ? -1 : near ? PASS_NEAR : PASS_FAR;
@@ -1122,7 +1168,7 @@ static void substrip_emit(int pass, const draw_vertex *v, int i, int j) {
  * strips a frame in Station Square most triangles are inside. */
 static void strip_split(const draw_vertex *v, int n, int guard) {
     if (guard) gs.offscreen++;
-    float ws = depth_split ? 1.0f / depth_split : 0.0f;
+    float ws = depth_ws;
     for (int i = 0; i + 2 < n; i++) {
         if (n - i - 2 > 1) {
             int j = i, pass = -2;
@@ -1214,7 +1260,27 @@ static float strip_zs(const draw_vertex *v, int n, float *z) {
         "mtv %1, S030\n mtv %1, S031\n mtv %1, S032\n mtv %1, S033\n"
         : : "r"(lo.u), "r"(hi.u));
     const draw_vertex *last = &v[n - 1];
-    for (int i = 0; i < n; i += 4, z += 4) {
+    int i = 0;
+    /* Two groups at a time (C000, C010) so each one's vmin/vmax/vrcp runs in
+     * the other's latency; C100 still takes the groups in order. */
+    for (; i + 4 < n; i += 8, z += 8) {
+        const draw_vertex *a = &v[i], *e = a + 4, *f = i + 5 < n ? a + 5 : last, *g = i + 6 < n ? a + 6 : last, *h = i + 7 < n ? a + 7 : last;
+        __asm__ volatile(
+            "lv.s S000, 8(%1)\n lv.s S001, 36(%1)\n lv.s S002, 64(%1)\n lv.s S003, 92(%1)\n"
+            "lv.s S010, 8(%2)\n lv.s S011, 8(%3)\n lv.s S012, 8(%4)\n lv.s S013, 8(%5)\n"
+            "vmax.q C100, C100, C000\n"
+            "vmin.q C000, C000, C030\n"
+            "vmax.q C100, C100, C010\n"
+            "vmin.q C010, C010, C030\n"
+            "vmax.q C000, C000, C020\n"
+            "vmax.q C010, C010, C020\n"
+            "vrcp.q C000, C000\n"
+            "vrcp.q C010, C010\n"
+            "sv.q C000, 0(%0)\n"
+            "sv.q C010, 16(%0)\n"
+            : : "r"(z), "r"(a), "r"(e), "r"(f), "r"(g), "r"(h) : "memory");
+    }
+    if (i < n) {
         const draw_vertex *a = &v[i], *b = i + 1 < n ? a + 1 : last, *c = i + 2 < n ? a + 2 : last, *d = i + 3 < n ? a + 3 : last;
         __asm__ volatile(
             "lv.s S000, 8(%1)\n lv.s S001, 8(%2)\n lv.s S002, 8(%3)\n lv.s S003, 8(%4)\n"
@@ -1254,44 +1320,63 @@ static void strip_emit(int pass, const draw_vertex *v, int n) {
     int nb = nbatch[pass], no = nobatch[pass];
     uint8_t *vl = vline[pass], *ol = oline[pass];
     int scale = cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA, mode = conv_mode();
-    const float *zs = strip_z;
-    float wmax = strip_zs(v, n, strip_z), z0 = zs[0];
+    const uint32_t *zs = (const uint32_t *)strip_z;   /* z's bits: conv_vtx takes -z by the sign */
+    float wmax = strip_zs(v, n, strip_z);
+    uint32_t aor = (mode & CONV_ALPHA) ? 0u : 0xFF000000u;
+    int add = mode & CONV_ADD_OFFSET;
     if (nb) {                         /* degenerate joint; keep the next strip's winding parity */
         vl = claim_lines(vl, b + 3);
         gu_vtx last = b[-1];
         *b++ = last;
         if (nb & 1) *b++ = last;
-        conv(b++, &v[0], z0, mode);
+        conv_vtx(b++, &v[0], zs[0], aor, add);
     }
     if (has_offset && no) {
         ol = claim_lines(ol, o + 3);
         gu_ovtx last = o[-1];
         *o++ = last;
         if (no & 1) *o++ = last;
-        conv_offset(o++, &v[0], z0, scale);
+        conv_offset(o++, &v[0], strip_z[0], scale);
     }
+    /* The lines of EMIT_BLOCK vertices are claimed ahead, so the cache op
+     * (an asm with a memory clobber) leaves the inner loop.  A claimed line
+     * holds nothing written yet (claims start at the first unclaimed line);
+     * the lines claimed are those the per-vertex claims took, a few vertices
+     * sooner.  The loop is split by has_offset and add (has_offset needs a
+     * texture, add its absence, so never both). */
+#define EMIT_BLOCK 8
     if (has_offset) {
-        for (int i = 0; i < n; i++) {
-            float z = zs[i];
-            vl = claim_lines(vl, b + 1);
-            conv(b++, &v[i], z, mode);
-            ol = claim_lines(ol, o + 1);
-            conv_offset(o++, &v[i], z, scale);
+        for (int i = 0; i < n; ) {
+            int e = n - i > EMIT_BLOCK ? i + EMIT_BLOCK : n;
+            vl = claim_lines(vl, b + (e - i));
+            ol = claim_lines(ol, o + (e - i));
+            for (; i < e; i++) conv_pair(b++, o++, &v[i], zs[i], aor, scale);
+        }
+    } else if (add) {
+        for (int i = 0; i < n; ) {
+            int e = n - i > EMIT_BLOCK ? i + EMIT_BLOCK : n;
+            vl = claim_lines(vl, b + (e - i));
+            for (; i < e; i++) conv_vtx(b++, &v[i], zs[i], aor, 1);
         }
     } else {
-        for (int i = 0; i < n; i++) {
-            vl = claim_lines(vl, b + 1);
-            conv(b++, &v[i], zs[i], mode);
+        for (int i = 0; i < n; ) {
+            int e = n - i > EMIT_BLOCK ? i + EMIT_BLOCK : n;
+            vl = claim_lines(vl, b + (e - i));
+            for (; i < e; i++) conv_vtx(b++, &v[i], zs[i], aor, 0);
         }
     }
-    nbatch[pass] = (int)(b - batch[pass]);
-    nobatch[pass] = (int)(o - obatch[pass]);
+#undef EMIT_BLOCK
+    nbatch[pass] = nb + (nb ? 2 + (nb & 1) : 0) + n;               /* b - batch[pass], without the divide by 24 */
+    if (has_offset) nobatch[pass] = no + (no ? 2 + (no & 1) : 0) + n;
     vline[pass] = vl; oline[pass] = ol;
     /* the nearest z (the next frame's depth range), and for --stats the vertices
      * nearer than z 2, 4, 8, 16 (w > 1/2 ...) */
     if (cur.layer != DRAW_LAYER_2D && wmax > 0.0f) {
-        float zmin = 1.0f / wmax;
-        if (zmin < gs.zmin_frame) gs.zmin_frame = zmin;
+        if (wmax > zmin_wmax) {       /* else 1/wmax >= 1/zmin_wmax >= gs.zmin_frame: no change */
+            float zmin = 1.0f / wmax;
+            zmin_wmax = wmax;
+            if (zmin < gs.zmin_frame) gs.zmin_frame = zmin;
+        }
         if (wmax > 0.0625f) {
             for (int i = 0; i < n; i++) {
                 float w = v[i].w;
