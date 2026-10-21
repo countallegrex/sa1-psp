@@ -22,6 +22,10 @@
  *   --no-ta-direct  the recompiled TA strip writers instead of the native ones (docs/ta-direct.md)
  *   --gu-split Z    the depth passes' split (draw_gu.c, default 16; 0: one pass)
  *   --gu-debug N    renderer bisection switches (draw_gu.c)
+ *   --no-ge-pipeline  wait for the GE at the end of each frame (default: it
+ *                   draws frame N while the game runs N+1; draw_gu.c)
+ *   --ge-stall-every N  move the GE's stall address every N draws (default
+ *                   8; 0: after each, through sceGuDrawArray)
  *   --no-crash-screen  do not load sa1exc.prx: under psplink, whose own
  *                   exception handler keeps the console on and the USB link
  *                   up (ours would replace it and stop at a red screen)
@@ -87,6 +91,8 @@ void draw_gu_set_debug(int flags);
 void draw_gu_set_split(float z);
 void draw_gu_set_lod_bias(float b);
 void draw_gu_set_max_mip(int n);
+void draw_gu_set_ge_pipeline(int on);
+void draw_gu_set_stall_every(int n);
 uint32_t hle_task_running(void);
 
 static char base_dir[256] = "ms0:/PSP/GAME/SA1PSP";
@@ -499,6 +505,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--gu-split") && i + 1 < args_c) draw_gu_set_split((float)atof(av[++i]));
         else if (!strcmp(av[i], "--gu-lod-bias") && i + 1 < args_c) draw_gu_set_lod_bias((float)atof(av[++i]));
         else if (!strcmp(av[i], "--gu-max-mip") && i + 1 < args_c) draw_gu_set_max_mip(atoi(av[++i]));
+        else if (!strcmp(av[i], "--no-ge-pipeline")) draw_gu_set_ge_pipeline(0);
+        else if (!strcmp(av[i], "--ge-stall-every") && i + 1 < args_c) draw_gu_set_stall_every(atoi(av[++i]));
         else if (!strcmp(av[i], "--stats") && i + 1 < args_c) stats_every = atoi(av[++i]);
         else if (!strcmp(av[i], "--mem") && i + 1 < args_c && nmem < 16) mem_frames[nmem++] = (uint32_t)strtoul(av[++i], NULL, 0);
         else if (!strcmp(av[i], "--aspect") && i + 1 < args_c) { const char *a = av[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; aspect_given = 1; }

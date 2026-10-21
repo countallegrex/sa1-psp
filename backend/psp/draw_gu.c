@@ -6,9 +6,13 @@
  *  - Frame: one display list per frame (GU_DIRECT, so the GE starts on it
  *    while the CPU is still parsing the TA lists), two 480x272 RGB565 frame
  *    buffers and a 16-bit Z buffer in EDRAM (0.80 MB of the 2 MB), the list
- *    in main RAM through its uncached alias.  draw_end_frame waits for the
- *    GE and swaps at the next vblank; main_psp.c paces guest frames to the
- *    vblank count.
+ *    in main RAM through its uncached alias.  draw_end_frame hands the list
+ *    to the GE and returns: the GE draws frame N while the game runs frame
+ *    N+1, as the PowerVR does (a helper thread swaps when the GE is done,
+ *    at the next vblank; the next draw_begin_frame waits for it before the
+ *    list, the vertex pool or a released texture is reused).
+ *    --no-ge-pipeline: wait and swap in draw_end_frame, as before.
+ *    main_psp.c paces guest frames to the vblank count.
  *  - Vertices: the game's screen-space x, y and w = 1/z become the GE vertex
  *    (x*z, y*z, -z) under a projection whose clip w is z again, so the GE's
  *    own divide gives perspective-correct texturing, and its clip z is
@@ -67,8 +71,8 @@ static draw_stats stats;
 static draw_state cur;
 static int cur_valid;
 static uint32_t draw_fb;                      /* EDRAM offset of the buffer being drawn */
-static int swap_pending;
-static unsigned swap_vcount;
+static volatile int swap_pending;             /* written by ge_swap_thread when pipelined */
+static volatile unsigned swap_vcount;
 static const char *shot_path;
 static int cull_flip;                         /* --cull-flip (main_psp.c): the other winding convention */
 
@@ -96,6 +100,16 @@ static float lod_bias;
 void draw_gu_set_lod_bias(float b) { lod_bias = b; }
 static int max_levels = TEX_LEVELS_DEFAULT;
 void draw_gu_set_max_mip(int n) { max_levels = n < 0 ? 1 : n + 1 > 8 ? 8 : n + 1; }
+/* --no-ge-pipeline (main_psp.c): draw_end_frame waits for the GE (the old
+ * behaviour).  --ge-stall-every N: replay() moves the GE's stall address
+ * every N draws instead of after each (sceGuDrawArray's syscall, with
+ * interrupts off); 0 = sceGuDrawArray as before.  The commands are the same
+ * words either way. */
+static int ge_pipeline = 1, ge_stall_every = 8;
+void draw_gu_set_ge_pipeline(int on) { ge_pipeline = on; }
+void draw_gu_set_stall_every(int n) { ge_stall_every = n < 0 ? 0 : n; }
+static int ge_inflight;                       /* a finished list the GE may still be running (pipelined) */
+static void ge_wait(void);
 
 /* ---- projection --------------------------------------------------------------- */
 enum { PROJ_3D = 0, PROJ_2D, PROJ_FULL, PROJ_N };
@@ -432,7 +446,9 @@ static void texture_release(uint32_t h) {
 
 void draw_texture_destroy(uint32_t handle) {
     if (handle == 0 || handle >= TEX_MAX || texs[handle].w == 0 || texs[handle].hidden || texs[handle].dying) return;
-    if (list_open && nfree_later < TEX_MAX) { free_later[nfree_later++] = handle; texs[handle].dying = 1; return; }   /* the GE may still read it this frame */
+    /* the GE may still read it: this frame's list, or the last one still running (pipelined) */
+    if ((list_open || ge_inflight) && nfree_later < TEX_MAX) { free_later[nfree_later++] = handle; texs[handle].dying = 1; return; }
+    ge_wait();
     texture_release(handle);
     cur_valid = 0;
 }
@@ -451,6 +467,7 @@ void draw_gu_texture_state(hle_state_io *io) {
     hle_state_blob(io, "textures", &count, sizeof count);
     if (hle_state_loading(io)) {
         if (hle_state_error(io)) return;
+        ge_wait();                    /* nothing is freed under a running list */
         for (int i = 1; i < TEX_MAX; i++) if (texs[i].mem && !texs[i].hidden) texture_release((uint32_t)i);
         for (int i = 1; i < TEX_MAX; i++) if (texs[i].mem) texture_release((uint32_t)i);
         nfree_later = 0; bound_tex = 0; cur_valid = 0;
@@ -528,6 +545,53 @@ static uint32_t fog_color = 0xFF808080u;
 static float fog_near = 1.0f, fog_far = 1000.0f;
 static uint32_t abgr(uint32_t argb) { return (argb & 0xFF00FF00u) | ((argb >> 16) & 255u) | ((argb & 255u) << 16); }
 
+/* ---- the GE pipeline -----------------------------------------------------------
+ * draw_end_frame posts ge_go after sceGuFinish; this thread (above the main
+ * thread's priority, asleep otherwise) waits for the GE, swaps as
+ * draw_end_frame did (pspsdk's sceGuSwapBuffers, NEXTFRAME) and posts
+ * ge_done.  The main thread makes no sceGu call between the two (the list is
+ * closed: draw_set_fog, draw_strip and draw_set_state record nothing), so
+ * pspsdk's buffer pointers change under nobody.  ge_wait is the main
+ * thread's side: before the next list (draw_begin_frame), before a texture
+ * is freed, a state is loaded or the GE stopped. */
+static SceUID ge_go = -1, ge_done = -1;
+static int ge_swap_thread(SceSize args, void *argp) {
+    (void)args; (void)argp;
+    for (;;) {
+        if (sceKernelWaitSema(ge_go, 1, NULL) < 0) return 0;
+        sceGuSync(0, 0);
+        sceGuSwapBuffers();
+        swap_vcount = sceDisplayGetVcount();
+        swap_pending = 1;
+        sceKernelSignalSema(ge_done, 1);
+    }
+}
+/* What waits for the GE to finish a frame: the textures destroyed while it
+ * might still read them. */
+static void ge_retire(void) {
+    for (unsigned i = 0; i < nfree_later; i++) texture_release(free_later[i]);
+    nfree_later = 0;
+}
+static void ge_wait(void) {
+    if (!ge_inflight) return;
+    uint64_t t = sa1_plat_time_us();
+    sceKernelWaitSema(ge_done, 1, NULL);
+    gs.gpu_wait_us += sa1_plat_time_us() - t;
+    ge_inflight = 0;
+    ge_retire();
+}
+static void ge_pipeline_start(void) {
+    ge_go = sceKernelCreateSema("sa1_ge_go", 0, 0, 1, NULL);
+    ge_done = sceKernelCreateSema("sa1_ge_done", 0, 0, 1, NULL);
+    SceUID th = ge_go >= 0 && ge_done >= 0 ? sceKernelCreateThread("sa1_geswap", ge_swap_thread, 0x12, 0x2000, 0, NULL) : -1;
+    if (th < 0 || sceKernelStartThread(th, 0, NULL) < 0) {
+        sa1_log("draw: no GE pipeline thread (0x%08x): waiting for the GE every frame", (unsigned)th);
+        if (ge_go >= 0) sceKernelDeleteSema(ge_go);
+        if (ge_done >= 0) sceKernelDeleteSema(ge_done);
+        ge_go = ge_done = -1;
+    }
+}
+
 int draw_init(int scale, int want_headless) {
     (void)scale;
     gs.zmin_frame = gs.zmin_win = 1e30f; gs.zmin_last = 1.0f; zmin_wmax = 0.0f;
@@ -579,12 +643,15 @@ int draw_init(int scale, int want_headless) {
     sceDisplayWaitVblankStart();
     sceGuDisplay(GU_TRUE);
     headless = 0;
-    sa1_log("draw: sceGu, 480x272 RGB565 x2 + 16-bit Z in EDRAM (%u KB), display list %u KB", 3u * FB_BYTES / 1024u, LIST_BYTES / 1024u);
+    if (ge_pipeline) ge_pipeline_start();
+    sa1_log("draw: sceGu, 480x272 RGB565 x2 + 16-bit Z in EDRAM (%u KB), display list %u KB; GE pipeline %s, stall address every %d draws (0: each, sceGuDrawArray)",
+            3u * FB_BYTES / 1024u, LIST_BYTES / 1024u, ge_go >= 0 ? "on" : "off", ge_stall_every);
     return 0;
 }
 
 void draw_shutdown(void) {
     if (headless) return;
+    ge_wait();
     sceGuSync(0, 0);                    /* let the GE finish the last list */
     sceGuDisplay(GU_FALSE);
     sceGuTerm();
@@ -604,6 +671,7 @@ static void rec_reset(void);
 static void replay(void);
 
 void draw_begin_frame(uint32_t clear_argb) {
+    ge_wait();                        /* the last frame's list, vertices and textures are free again */
     stats.draw_calls = stats.triangles = stats.strips = stats.state_changes = 0;
     cur_valid = 0; cur_proj = -1; bound_tex = 0;
     rec_reset();
@@ -667,10 +735,21 @@ void draw_end_frame(void) {
     uint32_t used = (uint32_t)sceGuCheckList();
     if (used > gs.list_high) gs.list_high = used;
     sceGuFinish();
-    uint64_t t = sa1_plat_time_us();
-    sceGuSync(0, 0);
-    uint64_t now = sa1_plat_time_us();
-    gs.gpu_wait_us += now - t;
+    uint64_t now;
+    /* Pipelined: the GE finishes and ge_swap_thread swaps while the game
+     * runs the next frame.  A screenshot frame waits here as before, so
+     * the shot is the finished frame. */
+    int pipelined = ge_go >= 0 && !shot_path;
+    if (pipelined) {
+        sceKernelSignalSema(ge_go, 1);
+        ge_inflight = 1;
+        now = sa1_plat_time_us();
+    } else {
+        uint64_t t = sa1_plat_time_us();
+        sceGuSync(0, 0);
+        now = sa1_plat_time_us();
+        gs.gpu_wait_us += now - t;
+    }
     if (gs.last_end) {
         uint64_t ft = now - gs.last_end;
         gs.frame_us_sum += ft;
@@ -683,8 +762,8 @@ void draw_end_frame(void) {
     gs.zmin_last = gs.zmin_frame < 1e29f ? gs.zmin_frame : 1.0f;   /* no 3D this frame: the full range */
     gs.zmin_frame = 1e30f; zmin_wmax = 0.0f;
     list_open = 0;
-    for (unsigned i = 0; i < nfree_later; i++) texture_release(free_later[i]);
-    nfree_later = 0;
+    if (pipelined) { draw_fb ^= FB_BYTES; return; }
+    ge_retire();
     if (shot_path) { write_shot(); shot_path = NULL; }
     sceGuSwapBuffers();
     draw_fb ^= FB_BYTES;
@@ -847,8 +926,8 @@ static int nitems[PASSES];
  * shares differ from scene to scene (the far pass took 760 KB of vertices
  * and over 256 KB of offset vertices late in title_menu.tape, the near pass
  * 20 KB).  draw_end_frame writes the cache back before replay() hands the
- * runs to the GE, and the frame ends with sceGuSync, so the pool restarts at
- * every frame. */
+ * runs to the GE, and the next draw_begin_frame waits for the GE (ge_wait)
+ * before anything is written, so the pool restarts at every frame. */
 #define VPOOL_BYTES (1792u << 10)
 static uint8_t vpool[VPOOL_BYTES] __attribute__((aligned(64)));
 static uint32_t vpool_top;
@@ -942,9 +1021,36 @@ static void set_proj(int pass, int p) {
     }
 }
 
+/* sceGuDrawArray(prim, vtype, count, NULL, v) as pspsdk writes it (VTYPE,
+ * BASE, VADDR, PRIM: the same four words), without its
+ * sceGeListUpdateStallAddr after every draw: the stall address moves every
+ * ge_stall_every draws here, and sceGuClear, sceGuGetMemory and sceGuFinish
+ * move it to the end of what is written as before.  pspsdk's own state
+ * (src/gu/guInternal.h): gu_list is the open list, ge_list_executed[0] the
+ * GU_DIRECT list's queue id; replay() only runs in that context. */
+typedef struct { unsigned int *start, *current; int parent_context; } pspsdk_gu_list;
+extern pspsdk_gu_list *gu_list;
+extern int ge_list_executed[2];
+static int ge_draws_unstalled;
+static inline void ge_draw(int prim, int vtype, int count, const void *v) {
+    if (!ge_stall_every) { sceGuDrawArray(prim, vtype, count, 0, v); return; }
+    unsigned int *c = gu_list->current;
+    uint32_t a = (uint32_t)(uintptr_t)v;
+    c[0] = (0x12u << 24) | ((uint32_t)vtype & 0xFFFFFFu);
+    c[1] = (0x10u << 24) | ((a >> 8) & 0xF0000u);
+    c[2] = (0x01u << 24) | (a & 0xFFFFFFu);
+    c[3] = (0x04u << 24) | ((((uint32_t)prim << 16) | (uint32_t)count) & 0xFFFFFFu);
+    gu_list->current = c + 4;
+    if (++ge_draws_unstalled >= ge_stall_every) {
+        ge_draws_unstalled = 0;
+        sceGeListUpdateStallAddr(ge_list_executed[0], gu_list->current);
+    }
+}
+
 /* Draws what the frame recorded: the far pass, a depth clear, the near pass. */
 static void replay(void) {
     batch_flush();
+    ge_draws_unstalled = 0;
     frame_clear();
     for (int pass = 0; pass < PASSES; pass++) {
         if (!nitems[pass]) continue;
@@ -961,14 +1067,14 @@ static void replay(void) {
             const draw_state *s = &rstates[it->state];
             if (it->state != st) { apply_state(s); st = it->state; }
             if (it->proj != pj) { set_proj(pass, it->proj); pj = it->proj; }
-            sceGuDrawArray(it->prim, VTX_FMT, it->n, 0, it->v);
+            ge_draw(it->prim, VTX_FMT, it->n, it->v);
             stats.draw_calls++;
             if (it->on) {                 /* the offset colour: additive, untextured, at equal depth */
                 sceGuDisable(GU_TEXTURE_2D);
                 sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
                 sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
                 sceGuDisable(GU_ALPHA_TEST);
-                sceGuDrawArray(GU_TRIANGLE_STRIP, OVTX_FMT, it->on, 0, it->ov);
+                ge_draw(GU_TRIANGLE_STRIP, OVTX_FMT, it->on, it->ov);
                 stats.draw_calls++;
                 apply_blend_depth(s);     /* the texture stays bound; only its enable changed */
             }
