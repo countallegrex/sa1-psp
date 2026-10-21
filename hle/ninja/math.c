@@ -48,17 +48,24 @@ static const float TURN = (float)(6.283185307179586 / 65536.0);
 static inline float ang_rad(uint32_t a) { return (float)(a & 0xFFFFu) * TURN; }
 static inline uint32_t rad_ang(float r) { return (uint32_t)(int32_t)(r * (65536.0f / 6.2831853f)) & 0xFFFFu; }
 
-/* ---- matrix access: XMTRX or guest memory --------------------------------- */
+/* ---- matrix access: XMTRX or guest memory ---------------------------------
+ * Each guest block (a 64-byte matrix, a 12-byte vector) is resolved to a host
+ * pointer once and then indexed: RAMP masks the base and adds the
+ * displacement after, so RAMP(a, 0) + 4 * i is the byte RDF(a, 4 * i) reads,
+ * for every address (the null page included), without the area test per
+ * float.  Debug builds (SA1_RAM_CHECK) check the base only. */
+static inline const sa1_f32a *g_rd(uint32_t addr) { return (const sa1_f32a *)(const void *)RAMP(addr, 0); }
+static inline sa1_f32a *g_wr(uint32_t addr) { return (sa1_f32a *)(void *)RAMPW(addr, 0); }
 static void m_load(sh4_ctx *c, uint32_t addr, float *m) {
     if (addr == 0) for (int i = 0; i < 16; i++) m[i] = c->xf[i];
-    else for (int i = 0; i < 16; i++) m[i] = RDF(addr, 4 * i);
+    else { const sa1_f32a *p = g_rd(addr); for (int i = 0; i < 16; i++) m[i] = p[i]; }
 }
 static void m_store(sh4_ctx *c, uint32_t addr, const float *m) {
     if (addr == 0) for (int i = 0; i < 16; i++) c->xf[i] = m[i];
-    else for (int i = 0; i < 16; i++) WRF(addr, 4 * i, m[i]);
+    else { sa1_f32a *p = g_wr(addr); for (int i = 0; i < 16; i++) p[i] = m[i]; }
 }
-static void v_load(uint32_t addr, float *v) { for (int i = 0; i < 3; i++) v[i] = RDF(addr, 4 * i); }
-static void v_store(uint32_t addr, const float *v) { for (int i = 0; i < 3; i++) WRF(addr, 4 * i, v[i]); }
+static void v_load(uint32_t addr, float *v) { const sa1_f32a *p = g_rd(addr); for (int i = 0; i < 3; i++) v[i] = p[i]; }
+static void v_store(uint32_t addr, const float *v) { sa1_f32a *p = g_wr(addr); for (int i = 0; i < 3; i++) p[i] = v[i]; }
 
 static void m_unit(float *m) { for (int i = 0; i < 16; i++) m[i] = (i % 5 == 0) ? 1.0f : 0.0f; }
 /* d = a * b */
