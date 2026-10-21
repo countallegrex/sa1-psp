@@ -25,6 +25,7 @@
 #include <psprtc.h>
 
 #include <stdio.h>
+#include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -40,7 +41,7 @@ static void full_path(char *out, unsigned n, const char *rel) {
     for (char *p = out; *p; p++) if (*p == '\\') *p = '/';
 }
 
-static struct { uint64_t open_us, read_us, read_bytes; uint32_t opens, reads; } io;
+static struct { uint64_t open_us, read_us, read_bytes, ra_wait_us; uint32_t opens, reads, ra_hits, ra_misses, ra_fetches; } io;
 
 /* ---- the pack (tools/convert_assets.py writes it) ---------------------------
  * "SA1PAK" 0 1, u32 count, u32 index bytes, then count entries of
@@ -115,7 +116,10 @@ static int read_at(SceUID fd, uint32_t pos, void *dst, uint32_t n) {
 static struct { char path[160]; SceUID fd; uint32_t size, used; } fds[FD_CACHE];
 static uint32_t fd_tick;
 
+static void ra_close_all(void);
+
 void plat_files_close_all(void) {
+    ra_close_all();
     for (int i = 0; i < FD_CACHE; i++) if (fds[i].path[0]) { sceIoClose(fds[i].fd); fds[i].path[0] = 0; }
     if (pak_fd >= 0) { sceIoClose(pak_fd); pak_fd = -1; }
     free(pak); pak = NULL; npak = 0; pak_tried = 0;
@@ -156,6 +160,138 @@ int sa1_plat_file_size(const char *path, uint32_t *size) {
     return fd_get(path, size) < 0 ? -1 : 0;
 }
 
+/* ---- read-ahead for the sound streams ---------------------------------------
+ * The feeder (hle/sound/snd_host.c, feed_stream) tops each ADX ring up every
+ * frame, a couple of KB at a time, and every read waited ~3 ms on the Memory
+ * Stick on the main thread: 54 reads, 170 ms over 75 frames in Station
+ * Square, 2.3 ms a frame.  Each stream path keeps a window of its file here,
+ * topped up RA_STEP bytes at a time by sceIoReadAsync on a descriptor of its
+ * own while the frame runs; a request inside the window is a memcpy.  The
+ * bytes handed out are the file's, on the frame they are asked for, as with
+ * a plain read: only when the Memory Stick does the work changes.  A request
+ * outside the window (a loop back, a new stream) is read at once, and the
+ * window restarts after it.  Window offsets and fetch sizes stay multiples
+ * of 64, so a fetch never shares a cache line with bytes the CPU wrote. */
+#define RA_SLOTS 2
+#define RA_BYTES (32u << 10)
+#define RA_STEP  (16u << 10)
+typedef struct {
+    uint8_t buf[RA_BYTES];          /* first: 64-byte aligned with the struct */
+    char path[160];
+    SceUID fd;
+    uint32_t base, size;            /* where the path's bytes start in fd, and how many */
+    uint32_t off, len;              /* the window: path bytes [off, off + len) at buf */
+    uint32_t pend;                  /* a fetch in flight into buf + len, this many bytes */
+    uint32_t used;
+} ra_slot;
+static ra_slot *ra[RA_SLOTS];
+static uint32_t ra_tick;
+
+/* Ends the fetch in flight; wait 0 only polls (1 when it is still running). */
+static int ra_finish(ra_slot *s, int wait) {
+    if (!s->pend) return 0;
+    SceInt64 got = 0;
+    if (!wait) {
+        int r = sceIoPollAsync(s->fd, &got);
+        if (r == 1) return 1;
+        if (r < 0) got = 0;
+    } else {
+        uint64_t t0 = sa1_plat_time_us();
+        if (sceIoWaitAsync(s->fd, &got) < 0) got = 0;
+        io.ra_wait_us += sa1_plat_time_us() - t0;
+    }
+    if (got > 0) s->len += (uint32_t)got > s->pend ? s->pend : (uint32_t)got;
+    s->pend = 0;
+    return 0;
+}
+
+static void ra_close(ra_slot *s) {
+    ra_finish(s, 1);
+    sceIoClose(s->fd);
+    s->path[0] = 0;
+}
+
+static void ra_close_all(void) {
+    for (int i = 0; i < RA_SLOTS; i++) if (ra[i] && ra[i]->path[0]) ra_close(ra[i]);
+}
+
+/* Starts the next fetch, first dropping what the reader is past (whole
+ * lines below pos) when the window has no room for a step. */
+static void ra_advance(ra_slot *s, uint32_t pos) {
+    if (s->pend) return;
+    uint32_t at = s->off + s->len;
+    if (at >= s->size || (s->len & 63u)) return;
+    if (RA_BYTES - s->len < RA_STEP) {
+        uint32_t drop = pos > s->off ? (pos - s->off) & ~63u : 0;
+        if (drop > s->len) drop = s->len;
+        if (RA_BYTES - s->len + drop < RA_STEP) return;
+        memmove(s->buf, s->buf + drop, s->len - drop);
+        s->off += drop; s->len -= drop;
+    }
+    uint32_t n = s->size - at < RA_STEP ? s->size - at : RA_STEP;
+    sceKernelDcacheWritebackInvalidateRange(s->buf + s->len, RA_STEP);
+    if (sceIoLseek(s->fd, (SceOff)(s->base + at), PSP_SEEK_SET) < 0) return;
+    if (sceIoReadAsync(s->fd, s->buf + s->len, n) < 0) return;
+    s->pend = n;
+    io.ra_fetches++;
+}
+
+/* The slot of path, opened on a descriptor of its own; NULL when it cannot be. */
+static ra_slot *ra_get(const char *path) {
+    int victim = -1;
+    for (int i = 0; i < RA_SLOTS; i++) {
+        if (ra[i] && ra[i]->path[0] && strcmp(ra[i]->path, path) == 0) { ra[i]->used = ++ra_tick; return ra[i]; }
+        if (victim < 0 || !ra[i] || !ra[i]->path[0] || (ra[victim] && ra[victim]->path[0] && ra[i]->used < ra[victim]->used)) victim = i;
+    }
+    if (strlen(path) >= sizeof ra[0]->path) return NULL;
+    uint32_t base = 0, size = 0;
+    char full[300];
+    if (pak_covers(path)) {
+        const pak_ent *e = pak_find(path);
+        if (!e) return NULL;
+        base = e->off; size = e->size;
+        full_path(full, sizeof full, "SONICADV.PAK");
+    } else full_path(full, sizeof full, path);
+    if (!ra[victim] && !(ra[victim] = memalign(64, sizeof *ra[victim]))) return NULL;
+    ra_slot *s = ra[victim];
+    if (s->path[0]) ra_close(s);
+    SceUID fd = sceIoOpen(full, PSP_O_RDONLY, 0);
+    if (fd < 0) return NULL;
+    if (!base) {
+        SceOff end = sceIoLseek(fd, 0, PSP_SEEK_END);
+        if (end < 0) { sceIoClose(fd); return NULL; }
+        size = (uint32_t)end;
+    }
+    snprintf(s->path, sizeof s->path, "%s", path);
+    s->fd = fd; s->base = base; s->size = size;
+    s->off = s->len = s->pend = 0;
+    s->used = ++ra_tick;
+    return s;
+}
+
+int sa1_plat_file_read_stream(const char *path, uint32_t off, void *dst, uint32_t n) {
+    ra_slot *s = ra_get(path);
+    if (!s) return sa1_plat_file_read(path, off, dst, n);
+    if (off > s->size) return -1;
+    if (n > s->size - off) n = s->size - off;
+    ra_finish(s, 0);
+    if (off >= s->off && off + n > s->off + s->len && off + n <= s->off + s->len + s->pend) ra_finish(s, 1);
+    if (off >= s->off && off + n <= s->off + s->len) {
+        memcpy(dst, s->buf + (off - s->off), n);
+        io.ra_hits++;
+    } else {
+        ra_finish(s, 1);
+        int got = read_at(s->fd, s->base + off, dst, n);
+        io.ra_misses++;
+        if (got < 0) return got;
+        n = (uint32_t)got;
+        s->off = (off + n) & ~63u;           /* the window restarts at the reader's line (re-fetching its head) */
+        s->len = 0;
+    }
+    ra_advance(s, off + n);
+    return (int)n;
+}
+
 int sa1_plat_file_read(const char *path, uint32_t off, void *dst, uint32_t n) {
     if (pak_covers(path)) {
         const pak_ent *e = pak_find(path);
@@ -169,10 +305,14 @@ int sa1_plat_file_read(const char *path, uint32_t off, void *dst, uint32_t n) {
 }
 
 void plat_io_report(void) {
-    if (!io.opens && !io.reads) return;
-    sa1_log("io: %u opens %.1f ms (%.1f ms each), %u reads %.1f ms, %u KB (%.0f KB/s)", io.opens, io.open_us / 1000.0,
+    if (!io.opens && !io.reads && !io.ra_hits && !io.ra_misses) return;
+    if (io.opens || io.reads)
+        sa1_log("io: %u opens %.1f ms (%.1f ms each), %u reads %.1f ms, %u KB (%.0f KB/s)", io.opens, io.open_us / 1000.0,
             io.opens ? io.open_us / 1000.0 / io.opens : 0.0, io.reads, io.read_us / 1000.0, (unsigned)(io.read_bytes / 1024u),
             io.read_us ? io.read_bytes / 1024.0 / (io.read_us / 1e6) : 0.0);
+    if (io.ra_hits || io.ra_misses)
+        sa1_log("io: stream read-ahead %u hits, %u misses, %u fetches, %.1f ms waited", io.ra_hits, io.ra_misses,
+                io.ra_fetches, io.ra_wait_us / 1000.0);
     memset(&io, 0, sizeof io);
 }
 

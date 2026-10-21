@@ -48,6 +48,10 @@ uint64_t sa1_plat_time_us(void);              /* monotonic microseconds */
 int sa1_plat_file_size(const char *path, uint32_t *size);
 /* Reads n bytes at byte offset off into dst; returns bytes read or -1. */
 int sa1_plat_file_read(const char *path, uint32_t off, void *dst, uint32_t n);
+/* The same read for a reader that comes back for what follows (the sound
+ * streams' feeder): the bytes are the file's, as sa1_plat_file_read gives
+ * them, but the backend may fetch ahead in the background (the PSP does). */
+int sa1_plat_file_read_stream(const char *path, uint32_t off, void *dst, uint32_t n);
 /* Lists the names of the files in a directory of the data root (upper case
  * as on the disc), one callback per entry.  Returns 0 on success. */
 int sa1_plat_dir_list(const char *dir, void (*cb)(const char *name, uint32_t size, void *arg), void *arg);

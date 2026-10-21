@@ -61,6 +61,10 @@ int sa1_plat_file_read(const char *path, uint32_t off, void *dst, uint32_t n) {
     return (int)got;
 }
 
+int sa1_plat_file_read_stream(const char *path, uint32_t off, void *dst, uint32_t n) {
+    return sa1_plat_file_read(path, off, dst, n);
+}
+
 int sa1_plat_dir_list(const char *dir, void (*cb)(const char *name, uint32_t size, void *arg), void *arg) {
     char full[1200];
     full_path(full, sizeof full, dir);

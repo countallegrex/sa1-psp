@@ -108,7 +108,7 @@ static void feed_stream(int si) {
         }
         if (!n) return;
         uint32_t off = f->base + f->info.data_off + g0 * gb;
-        int got = sa1_plat_file_read(f->path, off, buf, n * gb);
+        int got = sa1_plat_file_read_stream(f->path, off, buf, n * gb);
         if (got < (int)(n * gb)) {                  /* short file: pad with silence blocks */
             if (got < 0) got = 0;
             memset(buf + got, 0, n * gb - (uint32_t)got);
