@@ -27,6 +27,7 @@ const sa1_fn_entry sa1_seam_table[] = {{0x0C5FA000u, NULL}};
 const uint32_t sa1_seam_count = 0;
 hle_pad hle_pad_state;
 int hle_strict;
+int hle_aspect_wide = 1;   /* input_tape.c writes it into a recording (kamui.c owns it in the build) */
 int64_t hle_rtc_epoch;
 static uint32_t frame_now;
 uint32_t hle_frame_count(void) { return frame_now; }
