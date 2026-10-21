@@ -169,14 +169,26 @@ static inline uint8_t *sa1_ramp_checked(uint32_t a, int32_t d, int write) {
  * where the base is provably a RAM address, which today means R15.  The
  * stack pointer is set in RAM at boot (backend main) and by the task
  * switcher (hle/game/tasks.c), and the game only moves it by frame sizes.
- * For a RAM base sa1_off(a) is a & SA1_RAM_MASK in every layout, so the
- * area test and the null-page select are left out.  Debug builds
- * (SA1_RAM_CHECK) keep the checked path, so a bad R15 is still caught. */
+ * Every R15 the game forms is a P1 address (0x8C000000 + off: boot, the
+ * task tops, which tasks.c folds to P1, and the longjmp at 0x8C1108E0,
+ * which restores a saved R15), and for those sa1_off(a) is a - 0x8C000000
+ * in every layout.  So the host address is a fixed bias plus the guest
+ * address, with no mask: the compiler sees r15 -= 4 move the host address
+ * by 4 and folds a frame's accesses into one base register plus immediate
+ * offsets, where the mask made it form (and keep live across the body) one
+ * host address per stack slot.  -13 % code in a push-heavy function, a
+ * 40-byte smaller host frame.  Debug builds (SA1_RAM_CHECK) take the same
+ * path and report any base outside P1 RAM, so a bad R15 is still caught. */
+#define SA1_RAMK_BIAS 0x8C000000u
 #ifdef SA1_RAM_CHECK
-#define RAMK(a, d)   sa1_ramp_checked((uint32_t)(a), (int32_t)(d), 0)
-#define RAMKW(a, d)  sa1_ramp_checked((uint32_t)(a), (int32_t)(d), 1)
+static inline uint8_t *sa1_ramk_checked(uint32_t a, int32_t d, int write) {
+    if (__builtin_expect(a - SA1_RAMK_BIAS >= SA1_RAM_SIZE + SA1_RAM_EXTRA, 0)) sa1_ram_badaddr(a, (uint32_t)d, write);
+    return (uint8_t *)((uintptr_t)sa1_ram - SA1_RAMK_BIAS + a + (uintptr_t)d);
+}
+#define RAMK(a, d)   sa1_ramk_checked((uint32_t)(a), (int32_t)(d), 0)
+#define RAMKW(a, d)  sa1_ramk_checked((uint32_t)(a), (int32_t)(d), 1)
 #else
-#define RAMK(a, d)   (sa1_ram + (((uint32_t)(a) & SA1_RAM_MASK) + (d)))
+#define RAMK(a, d)   ((uint8_t *)((uintptr_t)sa1_ram - SA1_RAMK_BIAS + (uint32_t)(a) + (d)))
 #define RAMKW(a, d)  RAMK(a, d)
 #endif
 #define RK8(a, d)    ((uint32_t)*(const sa1_u8a *)RAMK(a, d))

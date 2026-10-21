@@ -875,6 +875,9 @@ static void check_f64(const char *name, const char *what, double got, double wan
         name = c["name"]
         L.append("    /* ---- %s ---- */\n    memset(&ctx, 0, sizeof ctx); before = failures;\n" % name)
         L.append("    memset(sa1_ram + (0x%08xu & SA1_RAM_MASK), 0, 0x1000);\n" % DATA)
+        # R15 is always a P1 RAM address in the game (runtime/sh4_rt.h RAMK),
+        # so every case gets a stack at the top of the scratch page.
+        L.append("    ctx.r[15] = 0x%08xu;\n" % (DATA + 0xFF0))
         for k, v in c["setup"].items():
             L.append("    " + setup_stmt(k, v) + "\n")
         L.append("    %s(&ctx);\n" % prog.fn_name(BASE + i * STRIDE + c["entry"]))
