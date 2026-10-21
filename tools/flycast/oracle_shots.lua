@@ -5,6 +5,14 @@
 --   SA1_SHOTS      directory for the requests
 --
 --   SA1_SHOT_FB    1: read the frame from emulated VRAM (run_oracle's default)
+--   SA1_SHOT_LAG   game frames to wait past a spec's frame (default 2)
+--
+-- The console displays a game frame's image 2 game frames after the aligned
+-- counter reaches it (rain4, 2026-10-21: the Chaos 0 drops and camera in RAM
+-- are identical on both sides at game frame 2557, and the console's image at
+-- 2557 is the desktop's state at 2555; the searchlight and Emerald Coast shots
+-- were off by the same 4 vblanks), so each shot waits SA1_SHOT_LAG game
+-- frames to pair the image with the desktop's shot of the same frame.
 --
 -- With SA1_SHOT_FB, when the aligned game frame first reaches a spec's
 -- frame the script writes the frame the console is displaying to NAME.ppm
@@ -75,13 +83,14 @@ local function fb_dump(path)
 end
 
 local FB = os.getenv("SA1_SHOT_FB") == "1"
+local LAG = tonumber(os.getenv("SA1_SHOT_LAG") or "2")
 local n = 0
 flycast_callbacks.vblank = function()
   inner()
   n = n + 1
   local g = sa1_oracle_aligned_g and sa1_oracle_aligned_g() or -1
   for _, s in ipairs(specs) do
-    if not s.done and g >= s.g then
+    if not s.done and g >= s.g + LAG then
       s.done = true
       if FB then
         local w, h, depth, il = fb_dump(SHOTS .. "/" .. s.name .. ".ppm")
