@@ -54,6 +54,7 @@ sdk_8c639b98                             #  0.89 %     296 B
 sa1_seam_hit_at                          #  0.96 %     360 B
 m_store                                  #  1.85 %     140 B
 fn_8c029b00                              #  2.66 %   13756 B
+@0x132f4                                 # the next one where it was before fn_8c029b00 went native
 sdk_8c639c70                             #  1.21 %     472 B
 m_load                                   #  2.55 %     136 B
 fn_8c028ec2                              #  1.01 %    4368 B

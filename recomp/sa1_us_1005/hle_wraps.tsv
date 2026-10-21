@@ -20,6 +20,7 @@ address	hle	what
 8c028d0a	hle/game/collision.c	collision list: the sphere/broad-phase tail of 0x8C028BFE (native)
 8c028ec2	hle/game/collision.c	collision list builder (native)
 8c02d2e0	hle/game/collision.c	collision list: the per-object candidate walk (native)
+8c029b00	hle/game/sphere_sweep.c	sphere swept against the collision hits of one object: contacts and the averaged contact (native)
 8c037294	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
 8c037350	hle/ninja/ta_stubs.c	model lighting stage (ta_xform.c)
 8c037460	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
