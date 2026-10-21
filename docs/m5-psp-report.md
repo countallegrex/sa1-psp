@@ -132,8 +132,40 @@ Station Square, `psp_bench.py --runs 2`, same sources (2026-10-21):
 | ON + the same function | 64.62 (-0.06) |
 
 With ON the hot functions keep their addresses byte for byte when code
-is added elsewhere. `.rodata`, `.data` and `.bss` still move with the
-code size (the D-cache is 16 KB, 2-way too).
+is added elsewhere. That was not enough: cea4798 added 380 bytes of cold
+code (`input_tape.c`) and Station Square went from 59.11 to 61.92 ms.
+The rest of the image still moved with it: every data section (the
+D-cache is 16 KB, 2-way, 64-byte lines too: what matters is an address
+modulo 8 KB), and the code after the hot list, where the libraries come
+last (the `sceGu*` calls `draw_end_frame` makes per item that are not
+in the list: the frame's "list replay" moved by 0.55 ms). Since then
+(`SA1_PSP_DATA_ALIGN`, default ON, the same ordering file):
+
+- `.rodata`, `.data`, `.sdata`, `.sbss` and `.bss` each start on an
+  8 KB boundary;
+- in each, the game chunks' data goes first (`sa1_fn_table`, the overlay
+  tables: they change only with the recompiler's output), then the
+  libraries', then the HLE's and the backend's; strings and literal pools
+  (`.rodata.str*`, `.rodata.cst*`, merged where their first input lands)
+  go last, so a new log string moves nothing;
+- in `.text`, after the hot list: the rest of the libraries, then of the
+  game chunks, then the HLE and the backend.
+
+A code or data change now moves only the HLE and backend code and data
+linked after it. Cost: under 8 KB of padding per section, 18.4 KB of RAM
+in this build (12.4 KB of it in the file). Same sources, the A/B pair
+differing only by cea4798's `input_tape.c` change (`psp_bench.py --runs
+2`, 2026-10-21):
+
+| Variant | Frame (median) |
+|---|---|
+| without, with the change | 57.64 |
+| without, without the change | 58.22 (+0.58) |
+| with, with the change | 57.29 |
+| with, without the change | 57.41 (+0.12) |
+
+The two builds differ now only by `input_tape.c`'s own code and
+statics and the backend code linked after it.
 
 The placement fixes the layout; it does not make it a good one. The hot
 set is 9x the cache, so the hot functions still evict each other, and
