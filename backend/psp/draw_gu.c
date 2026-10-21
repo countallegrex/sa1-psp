@@ -793,8 +793,18 @@ static void apply_state(const draw_state *s) {
 static void batch_flush(void);
 static int rec_state(const draw_state *s);
 
+/* memcmp's equality, padding included, a word at a time: newlib's memcmp
+ * went byte by byte here (0.9 % of the frame, once per strip). */
+_Static_assert(sizeof(draw_state) % 4 == 0 && _Alignof(draw_state) >= 4, "draw_state compares as words");
+static inline int state_eq(const draw_state *a, const draw_state *b) {
+    const uint32_t *x = (const uint32_t *)a, *y = (const uint32_t *)b;
+    uint32_t d = 0;
+    for (unsigned i = 0; i < sizeof *a / 4; i++) d |= x[i] ^ y[i];
+    return d == 0;
+}
+
 void draw_set_state(const draw_state *s) {
-    if (cur_valid && memcmp(s, &cur, sizeof cur) == 0) return;
+    if (cur_valid && state_eq(s, &cur)) return;
     if (!headless && list_open) batch_flush();
     cur = *s; cur_valid = 1;
     stats.state_changes++;
