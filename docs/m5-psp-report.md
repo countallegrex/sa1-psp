@@ -104,3 +104,43 @@ the text at 0.00002, and the HUD at 1) skip the write.
 - The load stalls (loose files): 4 s character select -> Station Square,
   8.5 s at the Chaos 0 transition; `SONICADV.PAK` on the card is
   the maintainer's to deploy (USB mass storage ends PSPLink).
+
+## 5. Hot-code placement
+
+The PSP-3001's I-cache is 16 KB, 2-way, 64-byte lines, and the hot code
+is far larger (the functions holding 90 % of the Station Square samples
+take 145 KB), so which hot functions evict each other depended on
+everything linked before them: one 9.5 KB function added in `hle/` moved
+the frame by 1.1 ms with the same work in every function.
+`SA1_PSP_HOT_ORDER` (PSP build, default ON) compiles the HLE, the
+backend and the game chunks with `-ffunction-sections` and passes the
+linker `--section-ordering-file`, generated at configure time from the
+checked-in `tools/psp_hot_order.txt`: those functions go first in
+`.text`, 64-byte aligned at the image's start, callers next to their
+callees; pspsdk and newlib members (`sceGu*`, `qsort`, libm) are placed
+whole. `tools/psp_hot_order.py` writes the list from a `--prof` run
+(`--pcs`, `--log`, `--elf`, `--cover 0.9`); a name the build no longer
+has matches nothing. Regenerate it when the hot set changes.
+
+Station Square, `psp_bench.py --runs 2`, same sources (2026-10-21):
+
+| Variant | Frame (median) |
+|---|---|
+| OFF | 66.86 |
+| OFF + a cold 9.9 KB function in `hle/` | 66.25 (-0.61) |
+| ON | 64.68 (-2.18) |
+| ON + the same function | 64.62 (-0.06) |
+
+With ON the hot functions keep their addresses byte for byte when code
+is added elsewhere. `.rodata`, `.data` and `.bss` still move with the
+code size (the D-cache is 16 KB, 2-way too).
+
+The placement fixes the layout; it does not make it a good one. The hot
+set is 9x the cache, so the hot functions still evict each other, and
+which ones do is set by the list. Without the native near-plane writer
+(49bd093, whose own list comes from its own profile) ON is 1.67 ms
+slower than OFF (67.42 against 65.75, `--runs 3`); the list checked in
+with that writer gives 64.67. So a hot-path change still moves the frame
+by up to ~2 ms of layout on top of its own cost: judge one by its
+`psp_prof` share as well as by `psp_bench`, and regenerate the list with
+it.

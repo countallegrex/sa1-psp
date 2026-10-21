@@ -47,6 +47,54 @@ add_library(sa1_backend_psp OBJECT
 target_link_libraries(sa1_backend_psp PUBLIC sa1_hle_psp)
 target_compile_options(sa1_backend_psp PRIVATE -O2 -fno-strict-aliasing -Wall -g)
 
+# Hot-code placement.  The PSP-3001's I-cache is 16 KB, 2-way, 64-byte
+# lines: where a function lands decides which functions it evicts, and code
+# added anywhere moved Station Square by 1-5 ms a frame (2026-10-21: one
+# 9.5 KB function slowed strip_emit, draw_strip, sceGuShadeModel ... with
+# the same work).  ON compiles every function into its own section and
+# hands the linker tools/psp_hot_order.txt (tools/psp_hot_order.py, from a
+# console profile) as a --section-ordering-file: the listed functions go
+# first in .text, in that order (callers next to their callees), at the
+# image's start, 64-byte aligned (the PRX at its 16 KB aligned load
+# address, the EBOOT one line later at 0x08804040: the same conflicts),
+# and their cache sets no longer depend on the rest of the code.  Data
+# (.rodata, .data, .bss) still moves with the code size.  pspsdk and
+# newlib members are placed whole (one function per member).  An entry the
+# build no longer has matches nothing; the link never fails on it.
+# Regenerate the list after a new profile (tools/psp_hot_order.py --help).
+option(SA1_PSP_HOT_ORDER "Place the profile's hot functions first in .text (tools/psp_hot_order.txt)" ON)
+set(SA1_PSP_HOT_LIST "${CMAKE_SOURCE_DIR}/tools/psp_hot_order.txt")
+set(SA1_PSP_HOT_LD "")
+if(SA1_PSP_HOT_ORDER AND EXISTS "${SA1_PSP_HOT_LIST}")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SA1_PSP_HOT_LIST}")
+  file(STRINGS "${SA1_PSP_HOT_LIST}" hot_lines)
+  set(hot_body "")
+  foreach(l IN LISTS hot_lines)
+    string(REGEX REPLACE "#.*" "" l "${l}")
+    string(STRIP "${l}" l)
+    if(l STREQUAL "")
+      continue()
+    elseif(l MATCHES "^([^:]+\\.a):([^:]+)$")      # libX.a:member.o, whole
+      string(APPEND hot_body "    *${CMAKE_MATCH_1}:${CMAKE_MATCH_2}(.text .text.*)\n")
+    elseif(l MATCHES "^([^:]+):([^:]+)$")          # file.c:static_fn
+      string(APPEND hot_body "    */${CMAKE_MATCH_1}.o*(.text.${CMAKE_MATCH_2})\n")
+    else()
+      string(APPEND hot_body "    *(.text.${l})\n")
+    endif()
+  endforeach()
+  # Written only when it changes (configure_file), so a re-configure does
+  # not relink.
+  file(WRITE "${CMAKE_BINARY_DIR}/sa1_hot_order.ld.in"
+    "/* Generated from tools/psp_hot_order.txt (backend/psp/CMakeLists.txt). */\n"
+    ".text : {\n    . = ALIGN(64);\n${hot_body}    . = ALIGN(64);\n}\n")
+  configure_file("${CMAKE_BINARY_DIR}/sa1_hot_order.ld.in" "${CMAKE_BINARY_DIR}/sa1_hot_order.ld" COPYONLY)
+  set(SA1_PSP_HOT_LD "${CMAKE_BINARY_DIR}/sa1_hot_order.ld")
+  target_compile_options(sa1_hle_psp PRIVATE -ffunction-sections)
+  target_compile_options(sa1_backend_psp PRIVATE -ffunction-sections)
+elseif(SA1_PSP_HOT_ORDER)
+  message(WARNING "SA1_PSP_HOT_ORDER: no ${SA1_PSP_HOT_LIST}, default code placement")
+endif()
+
 # sa1exc.prx: the kernel-mode crash screen the EBOOT loads through kubridge
 # (exc/sa1exc.c).  Kernel modules link without libc, so it is built by
 # pspsdk's own makefile, in a copy under the build tree.
@@ -108,14 +156,26 @@ if(SA1_GAME_SRCS)
     ${CMAKE_SOURCE_DIR}/hle ${CMAKE_SOURCE_DIR}/backend)
   target_compile_options(sa1_game_psp PRIVATE ${SA1_PSP_GAME_OPT} -fno-strict-aliasing -ffp-contract=off -Wall
     -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable -Wno-parentheses)
+  if(SA1_PSP_HOT_LD)
+    # Hot game functions (and their chunk's out-of-line sa1_off) are listed
+    # too; per-function sections cost nothing in the image (no padding: the
+    # sections keep the functions' own 4-byte alignment).
+    target_compile_options(sa1_game_psp PRIVATE -ffunction-sections)
+  endif()
   # Object libraries, not static ones: the weak stubs in hle/seam_stubs.c
   # must see every strong HLE body at link time (as on the desktop).
   set(SA1_PSP_OBJS $<TARGET_OBJECTS:sa1_hle_psp> $<TARGET_OBJECTS:sa1_backend_psp> $<TARGET_OBJECTS:sa1_game_psp>)
   set(SA1_PSP_LIBS pspgu pspge pspdisplay pspctrl psppower psprtc pspdebug pspkubridge)
+  if(SA1_PSP_HOT_LD)
+    set(SA1_PSP_LINK_ORDER "-Wl,--section-ordering-file=${SA1_PSP_HOT_LD}")
+  else()
+    set(SA1_PSP_LINK_ORDER "")
+  endif()
 
   # 1. The EBOOT the XMB runs: a static ELF at 0x08804000.
   add_executable(sa1psp ${SA1_PSP_OBJS})
   target_link_libraries(sa1psp PRIVATE ${SA1_PSP_LIBS})
+  target_link_options(sa1psp PRIVATE ${SA1_PSP_LINK_ORDER})
   add_dependencies(sa1psp sa1exc)
   # Keep the linked ELF with its symbols for tools/psp_addr2line.sh, and put
   # a stripped copy in the EBOOT (these run before create_pbp_file's own
@@ -142,7 +202,10 @@ if(SA1_GAME_SRCS)
   target_link_libraries(sa1psp_prx PRIVATE ${SA1_PSP_LIBS})
   target_link_options(sa1psp_prx PRIVATE
     -specs=$ENV{PSPDEV}/psp/sdk/lib/prxspecs -Wl,-q,-T$ENV{PSPDEV}/psp/sdk/lib/linkfile.prx
-    $ENV{PSPDEV}/psp/sdk/lib/prxexports.o)
+    $ENV{PSPDEV}/psp/sdk/lib/prxexports.o ${SA1_PSP_LINK_ORDER})
+  if(SA1_PSP_HOT_LD)
+    set_target_properties(sa1psp sa1psp_prx PROPERTIES LINK_DEPENDS "${SA1_PSP_HOT_LD}")
+  endif()
   add_custom_command(TARGET sa1psp_prx POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/sa1psp
     COMMAND $ENV{PSPDEV}/bin/psp-fixup-imports $<TARGET_FILE:sa1psp_prx>
