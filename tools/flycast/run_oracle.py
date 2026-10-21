@@ -92,7 +92,7 @@ def desktop_shots(exe, data, tape, desk, work, shots, a):
     if not frames:
         return
     args += (replay_test.ROUTE_POKES if a.poke_ec else []) + oracle_states.timing_args(a) + ["--frames", str(max(frames) + 2)]
-    cmd = [os.path.abspath(exe), os.path.join(data, "1ST_READ.BIN"), data, "--log", os.path.join(work, "desktop_shots.log")] + args
+    cmd = [os.path.abspath(exe), os.path.join(data, "1ST_READ.BIN"), data, "--hidden", "--log", os.path.join(work, "desktop_shots.log")] + args
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         from PIL import Image, ImageDraw
