@@ -93,6 +93,17 @@ if(SA1_GAME_SRCS)
   # The runtime header first: the emitter leaves a copy of sh4_rt.h next to
   # its output, which must not shadow the one in the tree.
   target_include_directories(sa1_game_psp BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime)
+  # A quoted #include searches the including file's folder before any -I, so
+  # the copy next to the generated sources won anyway (the game code built
+  # against a stale runtime until 2026-10-21): the tree's header is included
+  # first, and its guard turns the copy's #include into nothing.
+  target_compile_options(sa1_game_psp BEFORE PRIVATE "SHELL:-include \"${CMAKE_SOURCE_DIR}/recomp/emitter/runtime/sh4_rt.h\"")
+  # sh4_rt.h sa1_off: the game code tests the area only (-6.8 ms a frame in
+  # Station Square); ON adds the RAM + EXTRA bound the HLE has.
+  option(SA1_PSP_GAME_FULL_OFF "Game code checks every guest offset against RAM + EXTRA (sh4_rt.h sa1_off)" OFF)
+  if(NOT SA1_PSP_GAME_FULL_OFF)
+    target_compile_definitions(sa1_game_psp PRIVATE SA1_OFF_AREA_TEST_ONLY)
+  endif()
   target_include_directories(sa1_game_psp PRIVATE ${SA1_RECOMP_OUT}/emitter
     ${CMAKE_SOURCE_DIR}/hle ${CMAKE_SOURCE_DIR}/backend)
   target_compile_options(sa1_game_psp PRIVATE ${SA1_PSP_GAME_OPT} -fno-strict-aliasing -ffp-contract=off -Wall

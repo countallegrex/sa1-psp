@@ -75,9 +75,20 @@ typedef struct sa1_fn_entry {
 #define SA1_NULL_OFF  (SA1_RAM_SIZE + SA1_RAM_EXTRA + SA1_RAM_SLACK)
 #define SA1_RAM_ALLOC (SA1_NULL_OFF + SA1_NULL_SIZE + SA1_RAM_SLACK)
 extern uint8_t *sa1_ram;
+/* SA1_OFF_AREA_TEST_ONLY (the PSP's recompiled game code, unless
+ * SA1_PSP_GAME_FULL_OFF): area 0 still goes to the null page, but the
+ * compare against RAM + EXTRA is left out.  It cost 6.8 ms of a 74 ms
+ * Station Square frame on the PSP-3001 (2026-10-21), and the game code
+ * never had it before then (it built against a stale copy of this header):
+ * a masked offset past RAM + EXTRA, which no run has shown, would land past
+ * the allocation, as it always did there. */
 static inline uint32_t sa1_off(uint32_t a) {
     uint32_t off = a & SA1_RAM_MASK;
+#ifdef SA1_OFF_AREA_TEST_ONLY
+    return (a & 0x3E000000u) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;
+#else
     return ((a & 0x3E000000u) && off < SA1_RAM_SIZE + SA1_RAM_EXTRA) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;
+#endif
 }
 #else
 #define SA1_NULL_OFF  (2u * SA1_RAM_SIZE)
