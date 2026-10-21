@@ -100,6 +100,7 @@ static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
 static sh4_ctx ctx;
 static int headless, scale = 2, stats_every, no_pad;   /* --no-pad: ignore the controller and keyboard (scripted runs) */
+static int aspect_given;                               /* --aspect given: it overrides the tape's aspect line */
 #define SHOT_MAX 64
 static struct { uint32_t frame; const char *path; } shots[SHOT_MAX], dumps[SHOT_MAX];
 static int nshots, ndumps;
@@ -477,7 +478,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--mark") && i + 1 < argc && nmarks < SHOT_MAX) mark_frames[nmarks++] = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--ta-direct")) hle_ta_direct = 1;   /* docs/ta-direct.md */
         else if (!strcmp(argv[i], "--no-ta-direct")) hle_ta_direct = 0;
-        else if (!strcmp(argv[i], "--aspect") && i + 1 < argc) { const char *a = argv[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; }
+        else if (!strcmp(argv[i], "--aspect") && i + 1 < argc) { const char *a = argv[++i]; hle_aspect_wide = strcmp(a, "4:3") != 0 && strcmp(a, "4x3") != 0; aspect_given = 1; }
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--stats") && i + 1 < argc) stats_every = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--poke") && i + 1 < argc && npokes < SHOT_MAX) {   /* FRAME:ADDR:VALUE[:SIZE] */
@@ -565,6 +566,7 @@ int main(int argc, char **argv) {
     if (input_tape_start(bin) != 0) return 2;
     if (load_path && input_tape_recording()) { fprintf(stderr, "--record cannot start from a loaded state (a tape starts at frame 1)\n"); return 2; }
     if (!frame_limit) frame_limit = input_tape_frames();
+    if (!aspect_given && input_tape_aspect_wide() >= 0) hle_aspect_wide = input_tape_aspect_wide();
     plat_set_data_root(root);
     if (headless || no_audio) audio_sdl_enabled = 0;
     if (input_tape_sound_timing() >= 0) snd_guest_timing = input_tape_sound_timing();

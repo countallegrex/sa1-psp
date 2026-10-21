@@ -30,3 +30,7 @@ int input_tape_sound_timing(void);
 /* The host FPU rounding the run must use: 1 toward zero (the console's),
  * 0 to nearest (a tape recorded before 2026-10-19), -1 not given. */
 int input_tape_fpu_zero(void);
+/* The replayed tape's aspect line: 1 wide, 0 4:3, -1 none.  The aspect is
+ * game logic (the clip rectangle the game culls by), so a replay without
+ * --aspect takes it. */
+int input_tape_aspect_wide(void);

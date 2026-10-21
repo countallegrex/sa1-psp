@@ -147,6 +147,7 @@ epoch 946684800                 # RTC start, Unix seconds
 tool sa1psp input_tape 1
 sound-timing real               # M3 and later; absent = none
 fpu-round zero                  # 2026-10-19 and later; absent = nearest
+aspect 4:3                      # 2026-10-21 and later; absent = wide
 # FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]
 1 0 0 0 0 0 499
 500 8 0 0 0 0 4
@@ -197,9 +198,13 @@ The aspect is game logic too. The wide default widens the clip rectangle
 the game's own culling tests (0x8C88F600, `hle/ninja/kamui.c`), and some
 objects update only while that test passes: Emerald Coast's 0x8C0FDCE0
 blends its animation only on screen, which moves its `rand()` calls and,
-through them, the Egg Keeper's turns. The oracle tools therefore replay
-the desktop side with `--aspect 4:3` (their `--aspect` option, default
-4:3); the tapes' own checks stay wide. The oracle also copies the
+through them, the Egg Keeper's turns. So a tape carries its aspect: the
+`aspect` line, which `--record` writes and a replay without `--aspect`
+takes (absent: wide, what every tape before 2026-10-21 was recorded
+with). `ec_scripted` says `4:3`, the console's, so the oracle compares it
+like for like; `sonic_ec1` and `sonic_to_ec1_start` say `wide`: the maintainer
+played them wide, and at 4:3 the route leaves his inputs (it traps at
+guest frame 31310). The oracle tools' `--aspect` overrides the line. The oracle also copies the
 desktop's `rand()` seed into the console at each game-mode change
 (`tools/flycast/tape_oracle.lua`): a load lets vblanks pass on the console
 and the adventure field then runs catch-up updates, a few more `rand()`

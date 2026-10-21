@@ -2,6 +2,7 @@ sa1psp-tape 1
 title-sha256 45bc5d3c25dcfe2cc2c5701311d46783f33e4daa44a951cd9896724d66f0367a
 epoch 946684800
 tool sa1psp input_tape 1
+aspect wide
 # FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]
 1 0 0 0 0 0 197
 198 8 0 0 0 0 2
