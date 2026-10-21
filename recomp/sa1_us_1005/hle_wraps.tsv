@@ -23,6 +23,7 @@ address	hle	what
 8c0374d4	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
 8c037538	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
 8c0375b0	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c0376d0	hle/ninja/ta_stubs.c	model mesh-set loop (ta_mesh.c)
 8c037990	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
 8c037c3c	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
 8c037ccc	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op

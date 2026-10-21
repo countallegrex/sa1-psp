@@ -45,6 +45,7 @@ void ta_direct_8c037990(sh4_ctx *c);
 void ta_direct_8c037ccc(sh4_ctx *c);     /* ta_direct_clip.c: the near-plane writer and its clipper */
 void ta_xform_8c037294(sh4_ctx *c);      /* ta_xform.c: the model renderer's vertex transform */
 void ta_xform_8c037350(sh4_ctx *c);      /* ta_xform.c: its lighting */
+void ta_mesh_8c0376d0(sh4_ctx *c);       /* ta_mesh.c: the mesh-set loop that drives the writers */
 void kamui_mark2d_begin(void);
 void kamui_mark2d_end(void);
 int kamui_select_texture(uint32_t n);

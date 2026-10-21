@@ -127,6 +127,20 @@ TA_PASS(8c037460)
 TA_PASS(8c0374d4)
 TA_PASS(8c037538)
 TA_PASS(8c0375b0)
+/* 0x8C0376D0, the mesh-set loop (ta_mesh.c), natively with --ta-direct
+ * once hle_wraps.tsv's entry is in the emitted code (as 0x8C037350).
+ * SA1_MESH_REC=1 runs the recompiled body instead (native vs recompiled
+ * comparisons). */
+#ifdef SA1_WRAP_8C0376D0
+void fn_8c0376d0_orig(sh4_ctx *c);
+static int mesh_rec = -1;
+void fn_8c0376d0(sh4_ctx *c) {
+    HLE_ENTER(0x8c0376d0u, "model mesh-set loop fn_8c0376d0");
+    if (mesh_rec < 0) mesh_rec = getenv("SA1_MESH_REC") != NULL;
+    if (hle_ta_direct && !mesh_rec && !kamui_ptr_trace()) ta_mesh_8c0376d0(c);
+    else fn_8c0376d0_orig(c);
+}
+#endif
 /* With --ta-direct the native body (ta_direct.c) writes the strips into
  * kamui's host store; a traced frame keeps the TA bytes for the dump. */
 void fn_8c037990_orig(sh4_ctx *c);

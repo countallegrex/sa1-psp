@@ -57,6 +57,11 @@ if(EXISTS "${SA1_RECOMP_OUT}/emitter/game.h")
   if(_sa1_wrap350)
     target_compile_definitions(sa1_hle PRIVATE SA1_WRAP_8C037350)
   endif()
+  # 0x8C0376D0 (the mesh-set loop, hle/ninja/ta_mesh.c) the same way.
+  file(STRINGS "${SA1_RECOMP_OUT}/emitter/game.h" _sa1_wrap6d0 REGEX "fn_8c0376d0_orig" LIMIT_COUNT 1)
+  if(_sa1_wrap6d0)
+    target_compile_definitions(sa1_hle PRIVATE SA1_WRAP_8C0376D0)
+  endif()
 endif()
 target_include_directories(sa1_hle PUBLIC
   ${CMAKE_SOURCE_DIR}/hle
