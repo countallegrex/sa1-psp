@@ -21,10 +21,12 @@ comparison covers the game frames from there.  --until G stops the console
 once the aligned desktop game frame reaches G.  --poke-ec applies the
 scripted route's Emerald Coast poke on the console side.
 
---shots "name:G,..." pairs screenshots at desktop game frames G: the
-console is held at the first vblank of each (tools/flycast/oracle_shots.lua)
-while tools/flycast/capture_window.ps1 copies Flycast's window (raised on
-top for the copy: keep the screen unlocked), the desktop build replays the
+--shots "name:G,..." pairs screenshots at desktop game frames G: at the
+first vblank of each, tools/flycast/oracle_shots.lua writes the frame the
+console displays from emulated VRAM (Flycast runs with
+rend.EmulateFramebuffer, minimized, and never takes the focus;
+--shot-window copies the window from the screen instead, raising it, as
+before), the desktop build replays the
 tape again in a window with --screenshot at the guest frame where the same
 game frame starts, and each pair becomes WORK/shots/name.png, ours left and
 the console right, both 480 high.  Montages are for looking, not checks.
@@ -99,6 +101,8 @@ def desktop_shots(exe, data, tape, desk, work, shots, a):
         return
     for name, g in shots:
         ours, cons = os.path.join(sdir, name + "_ours.ppm"), os.path.join(sdir, name + ".png")
+        if not os.path.isfile(cons) and os.path.isfile(os.path.join(sdir, name + ".ppm")):
+            Image.open(os.path.join(sdir, name + ".ppm")).save(cons)
         if not (os.path.isfile(ours) and os.path.isfile(cons)):
             print("shots: %s incomplete (ours %s, console %s)" % (name, os.path.isfile(ours), os.path.isfile(cons)))
             continue
@@ -124,6 +128,8 @@ def main(argv=None):
     ap.add_argument("--poke-ec", action="store_true", help="the scripted route: --poke 5290 on the desktop replay, the same rewrite on the console when Chaos 0 would load")
     ap.add_argument("--watch", help="watch list for both sides (default tests/replay/watch.txt)")
     ap.add_argument("--shots", metavar="SPEC", help='"name:G,...": console and desktop screenshots at desktop game frame G, montaged')
+    ap.add_argument("--shot-window", action="store_true",
+                    help="console shots copied from Flycast's window on screen (raises it) instead of read from emulated VRAM")
     oracle_states.add_timing_args(ap)
     a = ap.parse_args(argv)
     global WATCH
@@ -183,13 +189,18 @@ def main(argv=None):
         lua = "oracle_shots.lua"
         shutil.copy2(os.path.join(HERE, lua), os.path.join(os.path.dirname(fexe), lua))
         env.update(SA1_SHOT_SPEC=",".join("%s:%d" % s for s in shots), SA1_SHOTS=sdir)
-        capture = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                                    os.path.join(HERE, "capture_window.ps1"), sdir, str(timeout + 60)],
-                                   stdout=open(os.path.join(work, "capture.out"), "w"), stderr=subprocess.STDOUT)
+        if not a.shot_window:
+            env.update(SA1_SHOT_FB="1")
+            extra.append("config:rend.EmulateFramebuffer=yes")
+        else:
+            capture = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                        os.path.join(HERE, "capture_window.ps1"), sdir, str(timeout + 60)],
+                                       stdout=open(os.path.join(work, "capture.out"), "w"), stderr=subprocess.STDOUT)
     code = oracle_states.run_flycast(fexe, gdi, lua, env, timeout, os.path.join(work, "flycast.out"), extra)
     if capture:
         open(os.path.join(work, "shots", "STOP"), "w").close()
         capture.wait(30)
+    if shots:
         desktop_shots(exe, data, tape, desk, work, shots, a)
     if not os.path.isfile(fly):
         sys.exit("Flycast wrote no trace (Lua not loaded? see %s)" % os.path.dirname(fexe))

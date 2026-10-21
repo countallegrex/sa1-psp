@@ -136,6 +136,18 @@ def slot_file(fexe, gdi, slot):
     return os.path.join(os.path.dirname(fexe), "data", name)
 
 
+def quiet_window():
+    """Windows: start Flycast minimized without activating it (SW_SHOWMINNOACTIVE through
+    STARTUPINFO, which the first ShowWindow of the process takes), so an oracle run never
+    takes the focus or covers the screen; it keeps emulating while minimized."""
+    if os.name != "nt":
+        return None
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 7    # SW_SHOWMINNOACTIVE
+    return si
+
+
 def run_flycast(fexe, gdi, lua, env, timeout, log, extra_config=()):
     """Runs Flycast with the oracle script and the given environment; returns the exit code."""
     shutil.copy2(os.path.join(HERE, "tape_oracle.lua"), os.path.join(os.path.dirname(fexe), "tape_oracle.lua"))
@@ -150,7 +162,8 @@ def run_flycast(fexe, gdi, lua, env, timeout, log, extra_config=()):
     t0 = time.time()
     with open(log, "w") as out:
         try:
-            p = subprocess.run(cmd, env=env, cwd=os.path.dirname(fexe), timeout=timeout, stdout=out, stderr=subprocess.STDOUT)
+            p = subprocess.run(cmd, env=env, cwd=os.path.dirname(fexe), timeout=timeout, stdout=out, stderr=subprocess.STDOUT,
+                               startupinfo=quiet_window())
             code = p.returncode
         except subprocess.TimeoutExpired:
             print("oracle: Flycast did not exit in %d s" % timeout)
