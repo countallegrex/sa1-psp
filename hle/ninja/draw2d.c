@@ -23,8 +23,8 @@
  *   the points are a strip as given.  The event scripts draw the letterbox
  *   bars and fades with 0x20; the message renderer draws each subtitle
  *   line as a textured quad (texture.c, the texinfo form).
- *   njDrawPolygon3D (0x8C63CE24): NJS_POINT3COL through XMTRX, attr 0x40
- *   translucent, 0x80000000 textured.
+ *   njDrawLine3D (0x8C63CE24): NJS_POINT3COL through XMTRX, one screen-space
+ *   quad per line (below).
  *
  * Part of sa1-psp (MIT). */
 #include "ninja.h"
@@ -181,7 +181,7 @@ void sdk_8c63ed08(sh4_ctx *c) {
     kamui_mark2d_end();
 }
 
-/* ---- 3D point lists: transform, clip each triangle to the near plane, emit --- */
+/* ---- clip-space vertices (sprite near clipping, 3D lines) ------------------- */
 typedef struct { float x, y, z, u, v; float col[4]; } cv_t;
 static void cv_lerp(const cv_t *a, const cv_t *b, float t, cv_t *o) {
     o->x = a->x + (b->x - a->x) * t; o->y = a->y + (b->y - a->y) * t; o->z = a->z + (b->z - a->z) * t;
@@ -193,28 +193,6 @@ static uint32_t cv_pack(const float *c) {
     for (int i = 0; i < 4; i++) { int k = (int)(c[i] + 0.5f); if (k < 0) k = 0; if (k > 255) k = 255; r |= (uint32_t)k << (24 - 8 * i); }
     return r;
 }
-/* Clips one triangle against z > near; emits the resulting polygon as a strip. */
-static void clip_emit_tri(int list, const cv_t *t0, const cv_t *t1, const cv_t *t2, float near, float cx, float cy, float dist, float ax, float ay) {
-    const cv_t *in[3] = {t0, t1, t2};
-    cv_t out[6]; int n = 0;
-    for (int i = 0; i < 3; i++) {
-        const cv_t *a = in[i], *b = in[(i + 1) % 3];
-        int ain = a->z > near, bin = b->z > near;
-        if (ain) out[n++] = *a;
-        if (ain != bin) { float t = (near - a->z) / (b->z - a->z); cv_lerp(a, b, t, &out[n++]); }
-    }
-    if (n < 3) return;
-    /* polygon -> strip order 0,1,n-1,2,n-2,... */
-    int order[6], k = 0, lo = 1, hi = n - 1;
-    order[k++] = 0;
-    while (lo <= hi) { order[k++] = lo++; if (lo <= hi) order[k++] = hi--; }
-    for (int i = 0; i < n; i++) {
-        const cv_t *p = &out[order[i]];
-        float iz = 1.0f / p->z;
-        kamui_put_vertex(list, i + 1 == n ? PCW_VTX_END : PCW_VTX, cx + p->x * dist * ax * iz, cy + p->y * dist * ay * iz, iz, p->u, p->v, cv_pack(p->col), 0);
-    }
-}
-
 /* Clips a sprite quad (corners in strip order: left-top, left-bottom,
  * right-top, right-bottom, in view space) against z > near and emits the
  * rest as one strip, white intensity as the unclipped path. */
@@ -247,49 +225,27 @@ static void clip_emit_quad(int list, const float *qx, const float *qy, const flo
 }
 
 /* ---- njDrawPolygon2D(p, n, pri, attr) and the line family ------------------- */
-static void point_list(sh4_ctx *c, uint32_t pl, uint32_t n, float z, uint32_t attr, int is3d, int lines) {
+static void point_list(sh4_ctx *c, uint32_t pl, uint32_t n, float z, uint32_t attr, int lines) {
     if (!pl) return;
     uint32_t pts = hle_rd32(pl), cols = hle_rd32(pl + 4), texs = hle_rd32(pl + 8), num = hle_rd32(pl + 12);
     if (!num || num > 4096) num = n;
     if (!pts || num < (lines ? 2u : 3u)) return;
     int textured = (attr & 0x80000000u) && texs != 0;
     int trans = (attr & 0x40) != 0;
-    int ring = !is3d && !lines && (attr & 0x20);   /* outline order -> strip, as 0x8C63E834 */
+    int ring = !lines && (attr & 0x20);   /* outline order -> strip, as 0x8C63E834 */
     uint32_t a = textured ? (trans ? KM_ATTR_TRANS_TEX : KM_ATTR_OPAQUE_TEX) : (trans ? KM_ATTR_TRANS_FLAT : KM_ATTR_OPAQUE_FLAT);
     int list = kamui_draw_begin(c, a, 0, KM_TEX_NONE, 0);
     if (kamui_ptr_trace()) {
         char td[64] = "";
         if (textured) texture_describe(hle_rd32(KM_CTX_TCW) & 0x1FFFFFu, td, sizeof td);
-        sa1_log("njDrawPolygon%s: %u points attr 0x%08x z %g textured %d trans %d ring %d -> list %d, tcw 0x%08x [%s] tsp 0x%08x; p0 (%g, %g) col 0x%08x uv (%g, %g); p2 (%g, %g) uv (%g, %g)",
-                is3d ? "3D" : lines ? "2D lines" : "2D", num, attr, z, textured, trans, ring, list, hle_rd32(KM_CTX_TCW), td, hle_rd32(KM_CTX_TSP),
-                hle_rdf(pts), hle_rdf(pts + 4), cols ? hle_rd32(cols) : 0xFFFFFFFFu, texs ? (is3d ? hle_rdf(texs) : hle_rd16(texs) / 256.0f) : 0.0f, texs ? (is3d ? hle_rdf(texs + 4) : hle_rd16(texs + 2) / 256.0f) : 0.0f,
-                num > 2 ? hle_rdf(pts + 2 * (is3d ? 12 : 8)) : 0.0f, num > 2 ? hle_rdf(pts + 2 * (is3d ? 12 : 8) + 4) : 0.0f,
-                texs && num > 2 ? (is3d ? hle_rdf(texs + 16) : hle_rd16(texs + 8) / 256.0f) : 0.0f, texs && num > 2 ? (is3d ? hle_rdf(texs + 20) : hle_rd16(texs + 10) / 256.0f) : 0.0f);
+        sa1_log("njDrawPolygon2D%s: %u points attr 0x%08x z %g textured %d trans %d ring %d -> list %d, tcw 0x%08x [%s] tsp 0x%08x; p0 (%g, %g) col 0x%08x uv (%g, %g); p2 (%g, %g) uv (%g, %g)",
+                lines ? " lines" : "", num, attr, z, textured, trans, ring, list, hle_rd32(KM_CTX_TCW), td, hle_rd32(KM_CTX_TSP),
+                hle_rdf(pts), hle_rdf(pts + 4), cols ? hle_rd32(cols) : 0xFFFFFFFFu, texs ? hle_rd16(texs) / 256.0f : 0.0f, texs ? hle_rd16(texs + 2) / 256.0f : 0.0f,
+                num > 2 ? hle_rdf(pts + 16) : 0.0f, num > 2 ? hle_rdf(pts + 20) : 0.0f,
+                texs && num > 2 ? hle_rd16(texs + 8) / 256.0f : 0.0f, texs && num > 2 ? hle_rd16(texs + 10) / 256.0f : 0.0f);
     }
-    float dist = hle_rdf(NJ_G_DIST), cx = hle_rdf(NJ_G_CX), cy = hle_rdf(NJ_G_CY), ax = hle_rdf(NJ_G_AX), ay = hle_rdf(NJ_G_AY), clipn = hle_rdf(NJ_G_CLIPN);
-    uint32_t stride = is3d ? 12 : 8;
+    uint32_t stride = 8;
     float px = 0, py = 0, pz = z;
-    if (is3d) {
-        /* through XMTRX into the game's camera space (z grows away from the
-         * eye there, as the game's own writer projects it), then clip every
-         * triangle of the strip to the near plane */
-        cv_t prev[2]; int have = 0;
-        for (uint32_t i = 0; i < num; i++) {
-            cv_t v;
-            float p[3] = {hle_rdf(pts + i * stride), hle_rdf(pts + i * stride + 4), hle_rdf(pts + i * stride + 8)};
-            for (int j = 0; j < 3; j++) (&v.x)[j] = c->xf[j] * p[0] + c->xf[4 + j] * p[1] + c->xf[8 + j] * p[2] + c->xf[12 + j];
-            v.u = textured ? hle_rdf(texs + i * 8) : 0; v.v = textured ? hle_rdf(texs + i * 8 + 4) : 0;
-            uint32_t col = cols ? hle_rd32(cols + i * 4) : 0xFFFFFFFFu;
-            v.col[0] = (float)(col >> 24); v.col[1] = (float)((col >> 16) & 255); v.col[2] = (float)((col >> 8) & 255); v.col[3] = (float)(col & 255);
-            if (have >= 2) {
-                if (i & 1) clip_emit_tri(list, &prev[1], &prev[0], &v, clipn, cx, cy, dist, ax, ay);
-                else clip_emit_tri(list, &prev[0], &prev[1], &v, clipn, cx, cy, dist, ax, ay);
-            }
-            prev[0] = prev[1]; prev[1] = v; if (have < 2) have++;
-        }
-        kamui_draw_end(c);
-        return;
-    }
     for (uint32_t i = 0; i < num; i++) {
         uint32_t k = i;
         if (ring) k = (i & 1) ? num - 1 - i / 2 : i / 2;   /* 0, n-1, 1, n-2, 2, ... */
@@ -314,6 +270,66 @@ static void point_list(sh4_ctx *c, uint32_t pl, uint32_t n, float z, uint32_t at
     }
     kamui_draw_end(c);
 }
-void sdk_8c63ebc8(sh4_ctx *c) { HLE_ENTER(0x8c63ebc8u, "njDrawPolygon2D"); kamui_mark2d_begin(); point_list(c, ARG0, ARG1, pri_to_z(FARG(0)), ARG2, 0, 0); kamui_mark2d_end(); }
-void sdk_8c63e1d4(sh4_ctx *c) { HLE_ENTER(0x8c63e1d4u, "njDrawLine2D"); kamui_mark2d_begin(); point_list(c, ARG0, ARG1, pri_to_z(FARG(0)), ARG2, 0, 1); kamui_mark2d_end(); }
-void sdk_8c63ce24(sh4_ctx *c) { HLE_ENTER(0x8c63ce24u, "njDrawPolygon3D"); point_list(c, ARG0, ARG1, 1.0f, ARG2, 1, 0); }
+void sdk_8c63ebc8(sh4_ctx *c) { HLE_ENTER(0x8c63ebc8u, "njDrawPolygon2D"); kamui_mark2d_begin(); point_list(c, ARG0, ARG1, pri_to_z(FARG(0)), ARG2, 0); kamui_mark2d_end(); }
+void sdk_8c63e1d4(sh4_ctx *c) { HLE_ENTER(0x8c63e1d4u, "njDrawLine2D"); kamui_mark2d_begin(); point_list(c, ARG0, ARG1, pri_to_z(FARG(0)), ARG2, 1); kamui_mark2d_end(); }
+/* ---- njDrawLine3D(p, n, attr) (0x8C63CE24) -----------------------------------
+ * n lines from one NJS_POINT3COL (num is not read): pairs p[2i], p[2i+1] when
+ * attr & 0xF is 0, else the strip p[i], p[i+1].  Each end goes through XMTRX;
+ * the line is dropped if an end lies beyond the far clip and clipped to the
+ * near plane, then drawn as its own 4-vertex strip offset across the screen
+ * direction from -0.525 to +1.05 px (0x3F066666 at 0x8C63CF8C; vertex writes
+ * 0x8C63D12E..).  attr 0x40 translucent, 0x80000000 textured; otherwise an
+ * opaque Gouraud line (header 0x8C605E68).  The Chaos 0 rain is n 1, attr 0,
+ * (0,0,0)-(0,6,0) in grey. */
+void sdk_8c63ce24(sh4_ctx *c) {
+    HLE_ENTER(0x8c63ce24u, "njDrawLine3D");
+    uint32_t pl = ARG0, n = ARG1, attr = ARG2;
+    if (!pl || !n || n > 4096) return;
+    uint32_t pts = hle_rd32(pl), cols = hle_rd32(pl + 4), texs = hle_rd32(pl + 8);
+    if (!pts) return;
+    int textured = (attr & 0x80000000u) && texs != 0, trans = (attr & 0x40) != 0;
+    uint32_t step = (attr & 0xF) ? 1 : 2;
+    float dist = hle_rdf(NJ_G_DIST), cx = hle_rdf(NJ_G_CX), cy = hle_rdf(NJ_G_CY), ax = hle_rdf(NJ_G_AX), ay = hle_rdf(NJ_G_AY);
+    float clipn = hle_rdf(NJ_G_CLIPN), clipf = hle_rdf(NJ_G_CLIPF);
+    int list = -1;
+    for (uint32_t l = 0; l < n; l++) {
+        cv_t e[2];
+        int nnear = 0, far = 0;
+        for (int k = 0; k < 2; k++) {
+            uint32_t idx = l * step + (uint32_t)k;
+            float p[3] = {hle_rdf(pts + idx * 12), hle_rdf(pts + idx * 12 + 4), hle_rdf(pts + idx * 12 + 8)};
+            for (int j = 0; j < 3; j++) (&e[k].x)[j] = c->xf[j] * p[0] + c->xf[4 + j] * p[1] + c->xf[8 + j] * p[2] + c->xf[12 + j];
+            e[k].u = textured ? (float)(int16_t)hle_rd16(texs + idx * 4) / 256.0f : 0;
+            e[k].v = textured ? (float)(int16_t)hle_rd16(texs + idx * 4 + 2) / 256.0f : 0;
+            uint32_t col = cols ? hle_rd32(cols + idx * 4) : 0xFFFFFFFFu;
+            e[k].col[0] = (float)(col >> 24); e[k].col[1] = (float)((col >> 16) & 255); e[k].col[2] = (float)((col >> 8) & 255); e[k].col[3] = (float)(col & 255);
+            if (e[k].z > clipf) far = 1;
+            if (e[k].z < clipn) nnear++;
+        }
+        if (far || nnear == 2) continue;
+        if (nnear) {
+            int k = e[0].z < clipn ? 0 : 1;
+            cv_lerp(&e[k], &e[1 - k], (clipn - e[k].z) / (e[1 - k].z - e[k].z), &e[k]);
+        }
+        float sx[2], sy[2], iz[2];
+        for (int k = 0; k < 2; k++) {
+            iz[k] = 1.0f / e[k].z;
+            sx[k] = cx + e[k].x * dist * ax * iz[k];
+            sy[k] = cy + e[k].y * dist * ay * iz[k];
+        }
+        float dx = sx[0] - sx[1], dy = sy[0] - sy[1], len = sqrtf(dx * dx + dy * dy);
+        float nx = len > 0 ? 0.525f * dy / len : 0, ny = len > 0 ? -0.525f * dx / len : 0;
+        if (list < 0) {
+            uint32_t a = textured ? (trans ? KM_ATTR_TRANS_TEX : KM_ATTR_OPAQUE_TEX) : (trans ? KM_ATTR_TRANS_FLAT : KM_ATTR_OPAQUE_FLAT);
+            list = kamui_draw_begin(c, a, 0, KM_TEX_NONE, 0);
+        }
+        static const int end[4] = {0, 1, 0, 1};
+        static const float off[4] = {-1.0f, -1.0f, 2.0f, 2.0f};
+        for (int i = 0; i < 4; i++) {
+            const cv_t *p = &e[end[i]];
+            kamui_put_vertex(list, i == 3 ? PCW_VTX_END : PCW_VTX, sx[end[i]] + off[i] * nx, sy[end[i]] + off[i] * ny, iz[end[i]],
+                             p->u, p->v, cv_pack(p->col), 0);
+        }
+    }
+    if (list >= 0) kamui_draw_end(c);
+}
