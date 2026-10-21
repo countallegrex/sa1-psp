@@ -147,6 +147,32 @@ static inline uint8_t *sa1_ramp_checked(uint32_t a, int32_t d, int write) {
 #define WR32(a, d, v) (*(sa1_u32a *)RAMPW(a, d) = (uint32_t)(v))
 #define WRF(a, d, v)  (*(sa1_f32a *)RAMPW(a, d) = (v))
 
+/* Known-RAM forms (RK8 .. RKF, WK8 .. WKF; the same length as RD and WR so
+ * the emitter's size-based chunking does not move): the emitter writes them
+ * where the base is provably a RAM address, which today means R15.  The
+ * stack pointer is set in RAM at boot (backend main) and by the task
+ * switcher (hle/game/tasks.c), and the game only moves it by frame sizes.
+ * For a RAM base sa1_off(a) is a & SA1_RAM_MASK in every layout, so the
+ * area test and the null-page select are left out.  Debug builds
+ * (SA1_RAM_CHECK) keep the checked path, so a bad R15 is still caught. */
+#ifdef SA1_RAM_CHECK
+#define RAMK(a, d)   sa1_ramp_checked((uint32_t)(a), (int32_t)(d), 0)
+#define RAMKW(a, d)  sa1_ramp_checked((uint32_t)(a), (int32_t)(d), 1)
+#else
+#define RAMK(a, d)   (sa1_ram + (((uint32_t)(a) & SA1_RAM_MASK) + (d)))
+#define RAMKW(a, d)  RAMK(a, d)
+#endif
+#define RK8(a, d)    ((uint32_t)*(const sa1_u8a *)RAMK(a, d))
+#define RK8S(a, d)   ((uint32_t)(int32_t)(int8_t)*(const sa1_u8a *)RAMK(a, d))
+#define RK16(a, d)   ((uint32_t)*(const sa1_u16a *)RAMK(a, d))
+#define RK16S(a, d)  ((uint32_t)(int32_t)(int16_t)*(const sa1_u16a *)RAMK(a, d))
+#define RK32(a, d)   (*(const sa1_u32a *)RAMK(a, d))
+#define RKF(a, d)    (*(const sa1_f32a *)RAMK(a, d))
+#define WK8(a, d, v)  (*(sa1_u8a *)RAMKW(a, d) = (uint8_t)(v))
+#define WK16(a, d, v) (*(sa1_u16a *)RAMKW(a, d) = (uint16_t)(v))
+#define WK32(a, d, v) (*(sa1_u32a *)RAMKW(a, d) = (uint32_t)(v))
+#define WKF(a, d, v)  (*(sa1_f32a *)RAMKW(a, d) = (v))
+
 /* Accesses whose address is a compile-time constant outside RAM (hardware
  * registers the A-tail Katana pieces and the 8 TA-writing functions touch). */
 uint32_t sa1_mmio_rd(uint32_t addr, int size);

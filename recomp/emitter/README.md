@@ -208,6 +208,7 @@ Generated from `LOWERING_DOC` in `sh4emit/lower.py`.
 | mov.w @(disp,pc),Rn | folded sign-extended word, same rule |
 | mova @(disp,pc),r0 | `r0 = <address>;` |
 | mov.{b,w,l} loads | `rn = RD8S/RD16S/RD32(base, disp);` (byte/word sign-extend); `@Rm+` adds the size after (not when n == m) |
+| any access based on r15 | `RK*/WK*` instead of `RD*/WR*`: the stack pointer is RAM, so the area test is left out |
 | mov.{b,w,l} stores | `WR8/16/32(base, disp, rm);`; `@-Rn` decrements first |
 | constant address outside RAM | `sa1_mmio_rd(addr, size)` / `sa1_mmio_wr(addr, size, v)` (hardware registers) |
 | swap.b / swap.w / xtrct | shift-and-mask expressions |

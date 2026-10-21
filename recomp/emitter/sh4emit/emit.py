@@ -360,6 +360,8 @@ class FunctionEmitter:
         self.count("blocks", len(cfg.blocks))
         self.count("rt_pr", self.lw.rt_pr)
         self.count("rt_sz", self.lw.rt_sz)
+        for k, v in self.lw.mem.items():
+            self.count(k, v)
         self.count("fr_unknown", fa.fr_unknown)
         self.count("nonreset_calls", fa.nonreset_calls)
         if fa.fpscr_ret != IDENTITY:

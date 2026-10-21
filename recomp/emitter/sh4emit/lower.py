@@ -14,6 +14,12 @@ from . import regs
 
 RAM_RANGES = ((0x0C000000, 0x10000000),)   # physical: main RAM and its mirrors
 
+# Base expressions that are provably RAM addresses: accesses through them use
+# the known-RAM macros (RK*/WK*, runtime/sh4_rt.h), which skip the area test.
+# R15 only: the stack pointer always points into RAM.  GBR is not here (it is
+# loaded from memory and crosses calls through c->gbr), nor r0 + r15.
+KNOWN_RAM_BASES = frozenset(("r15",))
+
 
 def is_ram_const(addr):
     a = phys(addr)
@@ -29,6 +35,19 @@ class Lowerer:
         self.notes = notes
         self.rt_pr = 0   # runtime-branched FP ops emitted
         self.rt_sz = 0
+        self.mem = {"mem_r15": 0, "mem_gbr": 0, "mem_const": 0, "mem_other": 0}
+
+    def mem_class(self, base):
+        if isinstance(base, int):
+            k = "mem_const"
+        elif base in KNOWN_RAM_BASES:
+            k = "mem_r15"
+        elif base == "gbr":
+            k = "mem_gbr"
+        else:
+            k = "mem_other"
+        self.mem[k] += 1
+        return k == "mem_r15"
 
     # ---- register naming ------------------------------------------------
     def F(self, n):
@@ -61,6 +80,8 @@ class Lowerer:
         macro = {1: "RD8", 2: "RD16", 4: "RD32", "f": "RDF"}[size]
         if signed:
             macro += "S"
+        if self.mem_class(base):
+            macro = "RK" + macro[2:]
         if isinstance(base, int):
             addr = (base + disp) & 0xFFFFFFFF
             if not is_ram_const(addr):
@@ -73,6 +94,8 @@ class Lowerer:
 
     def wr(self, size, base, disp, value):
         macro = {1: "WR8", 2: "WR16", 4: "WR32", "f": "WRF"}[size]
+        if self.mem_class(base):
+            macro = "WK" + macro[2:]
         if isinstance(base, int):
             addr = (base + disp) & 0xFFFFFFFF
             if not is_ram_const(addr):
@@ -238,6 +261,7 @@ class Lowerer:
         elif op == "AND_I":
             E("r0 &= 0x%02xu;" % ins.i)
         elif op == "AND_B_G":
+            self.mem["mem_gbr"] += 2
             E("WR8(gbr, r0, RD8(gbr, r0) & 0x%02xu);" % ins.i)
         elif op == "NOT":
             E("%s = ~%s;" % (rn, rm))
@@ -246,20 +270,28 @@ class Lowerer:
         elif op == "OR_I":
             E("r0 |= 0x%02xu;" % ins.i)
         elif op == "OR_B_G":
+            self.mem["mem_gbr"] += 2
             E("WR8(gbr, r0, RD8(gbr, r0) | 0x%02xu);" % ins.i)
         elif op == "TAS_B":
+            self.mem_class(rn)
+            self.mem_class(rn)
+            if rn in KNOWN_RAM_BASES:
+                E("{ uint32_t b_ = RK8(%s, 0); t = b_ == 0; WK8(%s, 0, b_ | 0x80); }" % (rn, rn))
+                return out
             E("{ uint32_t b_ = RD8(%s, 0); t = b_ == 0; WR8(%s, 0, b_ | 0x80); }" % (rn, rn))
         elif op == "TST":
             E("t = (%s & %s) == 0;" % (rn, rm))
         elif op == "TST_I":
             E("t = (r0 & 0x%02xu) == 0;" % ins.i)
         elif op == "TST_B_G":
+            self.mem["mem_gbr"] += 1
             E("t = (RD8(gbr, r0) & 0x%02xu) == 0;" % ins.i)
         elif op == "XOR":
             E("%s ^= %s;" % (rn, rm))
         elif op == "XOR_I":
             E("r0 ^= 0x%02xu;" % ins.i)
         elif op == "XOR_B_G":
+            self.mem["mem_gbr"] += 2
             E("WR8(gbr, r0, RD8(gbr, r0) ^ 0x%02xu);" % ins.i)
         # ------------------------------------------------ shifts
         elif op == "ROTL":
@@ -492,6 +524,7 @@ LOWERING_DOC = [
     ("mov.w @(disp,pc),Rn", "folded sign-extended word, same rule"),
     ("mova @(disp,pc),r0", "`r0 = <address>;`"),
     ("mov.{b,w,l} loads", "`rn = RD8S/RD16S/RD32(base, disp);` (byte/word sign-extend); `@Rm+` adds the size after (not when n == m)"),
+    ("any access based on r15", "`RK*/WK*` instead of `RD*/WR*`: the stack pointer is RAM, so the area test is left out"),
     ("mov.{b,w,l} stores", "`WR8/16/32(base, disp, rm);`; `@-Rn` decrements first"),
     ("constant address outside RAM", "`sa1_mmio_rd(addr, size)` / `sa1_mmio_wr(addr, size, v)` (hardware registers)"),
     ("swap.b / swap.w / xtrct", "shift-and-mask expressions"),
