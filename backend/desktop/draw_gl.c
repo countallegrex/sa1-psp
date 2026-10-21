@@ -38,6 +38,9 @@
 #ifndef GL_UNSIGNED_SHORT_4_4_4_4_REV
 #define GL_UNSIGNED_SHORT_4_4_4_4_REV 0x8365
 #endif
+#ifndef GL_TEXTURE_LOD_BIAS
+#define GL_TEXTURE_LOD_BIAS 0x8501
+#endif
 /* GL 1.3 texture combiners (the PowerVR shading instructions need an alpha
  * rule the four classic env modes cannot express) */
 #ifndef GL_COMBINE
@@ -180,10 +183,16 @@ static uint32_t texture_create_at(int slot, int width, int height, int fmt, cons
         }
         /* Mip levels: the PowerVR samples them (sky domes and far ground
          * minify heavily; without levels they alias into a dot mosaic).  GL
-         * 1.4 generates them; the GE takes levels built at load. */
+         * 1.4 generates them; the GE takes levels built at load.  The oracle
+         * (Flycast's DX11 renderer) samples trilinear with a fixed LOD bias of
+         * -1.5, which leaves far ground much sharper than GL's own choice: at
+         * 640x480, pixel-aligned with its frames, -1.5 is the best bias (sea
+         * MAE 6.3 -> 4.9, high-frequency energy 0.77 -> 0.95 of the console's;
+         * -1.75 and -2 are worse, as is the nearest level). */
         glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
         glTexImage2D(GL_TEXTURE_2D, 0, ifmt, width, height, 0, gfmt, gtype, data);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -1.5f);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         free(tmp);
         texs[slot].gl = id;
