@@ -47,16 +47,17 @@ typedef struct voice {
     uint8_t ad_saved;
     int32_t eg;                     /* attenuation, Q16 units of ATT (0 loudest) */
     int32_t eg_ar, eg_d1, eg_d2, eg_rr, eg_dl;   /* per-sample steps (Q16 att units), DL in att units */
-    int32_t att_static;             /* TL + direct send level + base pan (both sides) */
+    int32_t att_static;             /* TL + direct send level + velocity (both sides) */
     int32_t base_cents;             /* key - base key + fine tune */
     uint8_t bend_range;             /* semitones */
+    uint8_t span;                   /* the split's own pan on the CC 10 scale (DIPAN x 4) */
     uint32_t delay;                 /* output samples before the voice starts (layer delay) */
     uint16_t pitch_reg;             /* the split's OCT/FNS word */
     uint8_t bank, prog;             /* what started it (the solo debug filter) */
 } voice;
 
 typedef struct chan {
-    uint8_t bank, prog, vol, pan, expr, mod;
+    uint8_t bank, prog, vol, pan, expr, mod;   /* pan bit 7: no CC 10 yet, the split's own pan */
     int16_t bend;                   /* -8192 .. 8191 */
 } chan;
 
@@ -88,7 +89,7 @@ struct snd_core {
 /* Tables, built once (snd_core_init; identical on every run). */
 static int32_t gain_q15[ATT_MAX + 1];   /* Q15, 32768 = unity */
 static uint16_t vol_att[128];       /* MIDI volume / expression: 40 log10(v/127) dB */
-static uint16_t pan_att[128];       /* attenuation of the far side for CC 10 */
+static uint16_t pan_att[128];       /* attenuation of the far side for pan 0..127 (DIPAN steps) */
 static uint32_t cents_q16[1200];    /* 2^(c/1200), Q16 */
 static int32_t eg_rate_step[64];    /* Q16 att units per sample for a full-range decay at effective rate r */
 static int tables_ready;
@@ -101,11 +102,12 @@ static void build_tables(void) {
         double db = v ? -40.0 * log10(v / 127.0) : 96.0;
         int a = ATT_DB(db); vol_att[v] = (uint16_t)(a > ATT_MAX ? ATT_MAX : a);
     }
+    /* The driver (MASARU.DRV, key-on and CC 10) sets DIPAN from pan >> 2:
+     * below 16 the right side drops by 15 - q steps, from 16 the left by
+     * q - 16; a step is 3 dB and step 15 mutes (AICA send levels). */
     for (int p = 0; p < 128; p++) {
-        int d = p > 64 ? p - 64 : 64 - p;           /* distance from the centre */
-        double g = 1.0 - d / 64.0;
-        double db = g > 0.0 ? -20.0 * log10(g) : 96.0;
-        int a = ATT_DB(db); pan_att[p] = (uint16_t)(a > ATT_MAX ? ATT_MAX : a);
+        int q = p >> 2, d = q < 16 ? 15 - q : q - 16;
+        pan_att[p] = (uint16_t)(d >= 15 ? ATT_MAX : d * 32);
     }
     for (int c = 0; c < 1200; c++) cents_q16[c] = (uint32_t)(65536.0 * pow(2.0, c / 1200.0) + 0.5);
     /* Envelope rates: a full 96 dB decay takes about 118 s at effective
@@ -282,7 +284,9 @@ static void note_on(snd_core *k, int port, int c, int key, int vel) {
         v->eg = v->eg_ar < 0 ? 0 : ATT_MAX << 16;
         v->eg_stage = v->eg_ar < 0 ? EG_DECAY1 : EG_ATTACK;
         uint32_t send = ram16(k, p + 18), tlq = ram16(k, p + 20);
-        uint32_t disdl = (send >> 8) & 15, tl = tlq >> 8;
+        uint32_t disdl = (send >> 8) & 15, tl = tlq >> 8, dipan = send & 31;
+        /* the split's DIPAN on the pan scale, as the driver converts it */
+        v->span = (uint8_t)(dipan == 0x10 ? 64 : dipan & 0x10 ? (15 - (dipan & 15)) * 4 : (dipan + 16) * 4);
         int32_t att = (int32_t)tl * 4 + (disdl ? (int32_t)(15 - disdl) * 32 : ATT_MAX);
         att += level_att(k, bank_curve(k, ch->bank), (uint32_t)vel);
         v->att_static = att;
@@ -308,7 +312,7 @@ static void note_off(snd_core *k, int port, int c, int key) {
     }
 }
 
-static void chan_reset(chan *ch) { ch->vol = 100; ch->pan = 64; ch->expr = 127; ch->mod = 0; ch->bend = 0; }
+static void chan_reset(chan *ch) { ch->vol = 100; ch->pan = 0xC0; ch->expr = 127; ch->mod = 0; ch->bend = 0; }
 
 static void midi(snd_core *k, int port, int st, int d1, int d2) {
     if (port < 0 || port >= SND_PORTS) return;
@@ -361,8 +365,9 @@ static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
      * the game sets on the MIDI ports, and the level matches without it */
     uint32_t curve = bank_curve(k, v->bank);
     int32_t att = v->att_static + level_att(k, curve, ch->vol) + level_att(k, curve, ch->expr);
-    int32_t att_l = att + (ch->pan > 64 ? pan_att[ch->pan] : 0);
-    int32_t att_r = att + (ch->pan < 64 ? pan_att[ch->pan] : 0);
+    int pan = ch->pan & 0x80 ? v->span : ch->pan;
+    int32_t att_l = att + (pan >= 64 ? pan_att[pan] : 0);
+    int32_t att_r = att + (pan < 64 ? pan_att[pan] : 0);
     uint32_t step = v->step;
     if (ch->bend) step = pitch_step(v->base_cents + ch->bend * v->bend_range * 100 / 8192, v->pitch_reg);
     uint32_t i = 0;

@@ -257,9 +257,14 @@ off` in `sa1psp.ini` removes the cost without changing the game.
 
 - The tone level law (§6) is measured for CC 7 only; velocity and
   expression are 127 on the whole route and are taken to follow the same
-  curve. Pan, unchecked: the console's rings carry DIPAN 7 / 0x17 (far side
-  about 21 dB down); ours, at the CC 10 of 34 / 94 seen in another run,
-  lower the far side by 5.5 dB.
+  curve.
+- Pan follows the driver (MASARU.DRV key-on and CC 10 code): q = pan >> 2;
+  below 16 the right side drops by 15 - q DIPAN steps, from 16 the left by
+  q - 16, 3 dB a step, step 15 mutes. A channel without a CC 10 since its
+  reset (the driver stores 0xC0) plays each split at the split's own DIPAN.
+  The rings' CC 10 of 34 / 94 give DIPAN 0x17 / 7 (far side 21 dB down), as
+  logged on the console; we lowered it by 5.5 dB before. The per-port pan
+  offset the driver also adds (default 0x80, none) is not modelled.
 - The console's per-line stream start-up (a few frames, §5) and music
   start-up (80-140 ms) are not emulated.
 - DSP reverb (`SFPB`/`SFOB`) not rendered; sequence banks not played (none
