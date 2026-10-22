@@ -45,6 +45,8 @@ typedef struct voice {
     int32_t ad_ls, ad_lq;           /* ADPCM state saved at the loop start */
     uint32_t ad_next;               /* index of the next sample the ADPCM decoder produces */
     uint8_t ad_saved;
+    uint8_t lfo_state;              /* LFO phase, 0..255 (fills the padding after ad_saved) */
+    uint16_t lfo_reg;               /* the split's LFO word (AICA +1C), depths before CC 1 */
     int32_t eg;                     /* attenuation, Q16 units of ATT (0 loudest) */
     int32_t eg_ar, eg_d1, eg_d2, eg_rr, eg_dl;   /* per-sample steps (Q16 att units), DL in att units */
     int32_t att_static;             /* direct send level (both sides) */
@@ -53,7 +55,8 @@ typedef struct voice {
     uint8_t span;                   /* the split's own pan on the CC 10 scale (DIPAN x 4) */
     uint8_t tl;                     /* the split's TL */
     uint8_t vlev;                   /* velocity curve value (0..255) */
-    uint32_t delay;                 /* output samples before the voice starts (layer delay) */
+    uint16_t delay;                 /* output samples before the voice starts (layer delay, <= 11220) */
+    uint16_t lfo_count;             /* samples until the LFO phase steps */
     uint16_t pitch_reg;             /* the split's OCT/FNS word */
     uint8_t bank, prog;             /* what started it (the solo debug filter) */
 } voice;
@@ -93,6 +96,7 @@ static int32_t gain_q15[ATT_MAX + 1];   /* Q15, 32768 = unity */
 static uint16_t pan_att[128];       /* attenuation of the far side for pan 0..127 (DIPAN steps) */
 static uint32_t cents_q16[1200];    /* 2^(c/1200), Q16 */
 static int32_t eg_rate_step[64];    /* Q16 att units per sample for a full-range decay at effective rate r */
+static uint16_t plfo_q10[8][256];   /* pitch LFO factor per PLFOS and wave value, Q10 */
 static int tables_ready;
 
 static void build_tables(void) {
@@ -116,6 +120,12 @@ static void build_tables(void) {
         eg_rate_step[r] = (int32_t)(ATT_MAX * 65536.0 / (t * SND_RATE) + 0.5);
         if (eg_rate_step[r] < 1) eg_rate_step[r] = 1;
     }
+    /* Pitch LFO depth per PLFOS, cents either way (Flycast's table: wave
+     * value 128 is the note's pitch, 0 and 255 the ends). */
+    static const double plfos_cents[8] = { 0, 3.61, 7.22, 14.44, 28.88, 57.75, 115.5, 231 };
+    for (int d = 0; d < 8; d++)
+        for (int i = 0; i < 256; i++)
+            plfo_q10[d][i] = (uint16_t)(1024.0 * pow(2.0, plfos_cents[d] * (i - 128) / 128.0 / 1200.0));
     tables_ready = 1;
 }
 
@@ -242,6 +252,29 @@ static int find_splits(snd_core *k, uint32_t bank, uint32_t prog, uint32_t key, 
     return n;
 }
 
+/* ---- the LFO (AICA +1C: RE, LFOF, PLFOWS, PLFOS, ALFOWS, ALFOS) ---------- */
+/* Samples per LFO phase step; 256 steps make a period (172 Hz at LFOF 31,
+ * 0.17 Hz at 0).  With both waves noise the phase steps every sample. */
+static uint32_t lfo_period(uint32_t reg) {
+    if (((reg >> 8) & 3) == 3 && ((reg >> 3) & 3) == 3) return 1;
+    uint32_t n = (reg >> 10) & 31, s = n >> 2, m = ~n & 3, g = 128u >> s;
+    return ((g - 1) << 2) + g * (m + 1);
+}
+
+/* The wave at phase st, 0..255: saw, square, triangle, noise (Flycast's). */
+static uint32_t lfo_wave(uint32_t type, uint32_t st) {
+    switch (type) {
+    case 0: return st;
+    case 1: return st & 0x80 ? 255 : 0;
+    case 2: return ((st & 0x7f) ^ (st & 0x80 ? 0x7f : 0)) << 1;
+    default: return (st * 0x41c64e6du + 0x3039u) & 0xff;
+    }
+}
+
+/* The depth the driver writes for the channel's CC 1 (key-on, MASARU.DRV
+ * 0x0d50, and CC 1, 0x1a60, alike): CC 1 127 keeps the split's, 0 clears it. */
+static inline uint32_t lfo_depth(uint32_t d, uint32_t mod) { return (((mod + 1) * (d + 1) - 1) >> 7) & 7; }
+
 /* ---- voices ---------------------------------------------------------------- */
 static voice *alloc_voice(snd_core *k) {
     voice *best = NULL;
@@ -310,9 +343,11 @@ static void note_on(snd_core *k, int port, int c, int key, int vel) {
         int32_t base = (int32_t)ram8(k, p + 38), fine = (int8_t)ram8(k, p + 39);
         v->base_cents = (key - base) * 100 + fine;
         v->pitch_reg = (uint16_t)ram16(k, p + 12);
+        v->lfo_reg = (uint16_t)ram16(k, p + 14);
+        v->lfo_count = (uint16_t)lfo_period(v->lfo_reg);   /* phase 0, as after LFORE */
         v->step = pitch_step(v->base_cents, v->pitch_reg);
         v->bend_range = sp[l].bend ? sp[l].bend : 2;
-        v->delay = (uint32_t)sp[l].delay * (SND_RATE / 1000);
+        v->delay = (uint16_t)(sp[l].delay * (SND_RATE / 1000));
         v->age = ++k->age;
         v->pos = 0; v->frac = 0; v->ad_next = 0; v->ad_q = 127;
         v->cur = tone_sample(k, v, 0);
@@ -384,6 +419,15 @@ static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
     int32_t att_r = att + (pan < 64 ? pan_att[pan] : 0);
     uint32_t step = v->step;
     if (ch->bend) step = pitch_step(v->base_cents + ch->bend * v->bend_range * 100 / 8192, v->pitch_reg);
+    /* LFO: the amplitude wave adds up to 255 >> (8 - ALFOS) TL steps
+     * (0.375 dB), the pitch wave scales the step; both change only when
+     * the phase steps, which can be every sample. */
+    uint32_t reg = v->lfo_reg, lfo_n = reg ? lfo_period(reg) : 0;
+    uint32_t pd = lfo_depth((reg >> 5) & 7, ch->mod), ad = lfo_depth(reg & 7, ch->mod);
+    uint32_t pw = (reg >> 8) & 3, aw = (reg >> 3) & 3;
+    if (lfo_n && (v->lfo_count == 0 || v->lfo_count > lfo_n)) v->lfo_count = (uint16_t)lfo_n;
+    int32_t alfo = ad ? (int32_t)(lfo_wave(aw, v->lfo_state) >> (8 - ad)) * 4 : 0;
+    uint32_t vstep = pd ? (uint32_t)(((uint64_t)step * plfo_q10[pd][lfo_wave(pw, v->lfo_state)]) >> 10) : step;
     uint32_t i = 0;
     if (v->delay) {
         uint32_t d = v->delay < n ? v->delay : n;
@@ -393,12 +437,21 @@ static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
         uint32_t m = n - i < EG_CHUNK ? n - i : EG_CHUNK;
         if (!eg_advance(v, (int32_t)m)) { v->on = 0; return; }
         int32_t e = v->eg >> 16;
-        int32_t gl = gain_q15[clamp_att(att_l + e)], gr = gain_q15[clamp_att(att_r + e)];
+        int32_t gl = gain_q15[clamp_att(att_l + e + alfo)], gr = gain_q15[clamp_att(att_r + e + alfo)];
         for (uint32_t j = 0; j < m; j++, i++) {
             int32_t s = v->cur + (((v->nxt - v->cur) * (int32_t)(v->frac >> 1)) >> 15);
             acc[2 * i] += (s * gl) >> 15;
             acc[2 * i + 1] += (s * gr) >> 15;
-            v->frac += step;
+            v->frac += vstep;
+            if (lfo_n && --v->lfo_count == 0) {
+                v->lfo_count = (uint16_t)lfo_n;
+                v->lfo_state++;
+                if (ad) {
+                    alfo = (int32_t)(lfo_wave(aw, v->lfo_state) >> (8 - ad)) * 4;
+                    gl = gain_q15[clamp_att(att_l + e + alfo)]; gr = gain_q15[clamp_att(att_r + e + alfo)];
+                }
+                if (pd) vstep = (uint32_t)(((uint64_t)step * plfo_q10[pd][lfo_wave(pw, v->lfo_state)]) >> 10);
+            }
             while (v->frac >= 0x10000u) {
                 v->frac -= 0x10000u;
                 int64_t nx = tone_next(v, v->pos);
