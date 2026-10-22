@@ -54,7 +54,7 @@ enum { SND_MUTE_FX = 1, SND_MUTE_MUSIC = 2, SND_MUTE_VOICE = 4 };
 enum {
     SND_CMD_MIDI = 1,                   /* a = port, b..c and x&0xFF: status, d1, d2 */
     SND_CMD_MIDI_RESET,                 /* every voice off, channels to defaults */
-    SND_CMD_PORT_VOL,                   /* a = group (0..3), x = level in 1/8 dB (0 = unity) */
+    SND_CMD_UNUSED3,                    /* was the group level (sdSysSetVolume); slot kept */
     SND_CMD_STREAM_START,               /* a = stream, x = ring position of its first byte, y = generation; info in snd_shared */
     SND_CMD_STREAM_STOP,                /* a = stream */
     SND_CMD_STREAM_VOL,                 /* a = stream, x = level in 0.1 dB (0 = unity, -960 = off) */
