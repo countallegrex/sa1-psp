@@ -24,12 +24,9 @@
 
 /* Console calibration (docs/m3-audio-report.md section 6: our stems
  * fitted against Flycast captures of the same game frames): music 0.6 dB
- * lower, effects 0.7 dB higher, and ADPCM tones a further 4.2 dB higher
- * (three ADPCM effects measured 4.2-4.9 dB low against 0.7 dB for a PCM
- * one; the decode is the same, the cause is open).  Voices matched. */
+ * lower.  Voices matched; tones follow the driver's level law (level_att)
+ * and need no trim. */
 #define TRIM_MUSIC_ATT ATT_DB(0.6)
-#define TRIM_FX_GAIN ATT_DB(0.7)
-#define TRIM_ADPCM_GAIN ATT_DB(4.2)
 
 enum { EG_OFF = 0, EG_ATTACK, EG_DECAY1, EG_DECAY2, EG_RELEASE };
 enum { FMT_PCM16 = 0, FMT_PCM8 = 1, FMT_ADPCM = 2 };
@@ -177,6 +174,25 @@ static inline int64_t tone_next(const voice *v, uint32_t i) {
 typedef struct split_ref { uint32_t sp, bank_base; uint8_t bend; uint8_t delay; } split_ref;
 #define MAX_SPLITS 8
 
+/* The bank's level curve (header +0x18, 128 bytes, 127 -> 127), 0 if none. */
+static uint32_t bank_curve(const snd_core *k, uint32_t bank) {
+    if (bank >= 16 || !k->sh->bank_size[bank]) return 0;
+    uint32_t B = k->sh->bank_addr[bank], t = ram32(k, B + 0x18);
+    return t && t < 0x10000 ? B + t : 0;
+}
+
+/* Attenuation for a velocity, channel volume or expression v: the driver
+ * writes TL = split TL + 2 x (127 - curve[v]), 0.75 dB per curve step
+ * (Flycast's AICA registers against the game's CC 7 over the Chaos 0
+ * cutscene fades and the Emerald Coast ring: within 0.5 dB rms; the law is
+ * about 57 log10, steeper than MIDI's 40 log10).  Velocity and expression
+ * are always 127 on the route, so their law is taken to be the same. */
+static inline int32_t level_att(const snd_core *k, uint32_t curve, uint32_t v) {
+    if (!curve) return vol_att[v & 127];
+    int32_t c = (int32_t)ram8(k, curve + (v & 127));
+    return c >= 127 ? 0 : 8 * (127 - c);
+}
+
 /* The splits a note-on starts: in every layer, each split whose key range
  * holds the key (a layer may stack two tones on one range).  Returns the
  * count, at most MAX_SPLITS. */
@@ -268,12 +284,7 @@ static void note_on(snd_core *k, int port, int c, int key, int vel) {
         uint32_t send = ram16(k, p + 18), tlq = ram16(k, p + 20);
         uint32_t disdl = (send >> 8) & 15, tl = tlq >> 8;
         int32_t att = (int32_t)tl * 4 + (disdl ? (int32_t)(15 - disdl) * 32 : ATT_MAX);
-        /* the bank's velocity curve (header +0x18; 127 -> 127), then the
-         * same 40 log10 law as the channel volume */
-        uint32_t vtab = ram32(k, sp[l].bank_base + 0x18);
-        int32_t velc = vtab && vtab < 0x10000 ? (int32_t)ram8(k, sp[l].bank_base + vtab + (uint32_t)(vel & 127)) : vel;
-        att += vol_att[velc & 127];
-        att -= TRIM_FX_GAIN + (v->fmt == FMT_ADPCM ? TRIM_ADPCM_GAIN : 0);
+        att += level_att(k, bank_curve(k, ch->bank), (uint32_t)vel);
         v->att_static = att;
         int32_t base = (int32_t)ram8(k, p + 38), fine = (int8_t)ram8(k, p + 39);
         v->base_cents = (key - base) * 100 + fine;
@@ -346,7 +357,10 @@ static int eg_advance(voice *v, int32_t n) {
  * product fits in 32 bits (the PSP has no cheap 64-bit multiply). */
 static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
     chan *ch = &k->ch[v->port][v->ch];
-    int32_t att = v->att_static + vol_att[ch->vol] + vol_att[ch->expr] + k->port_att[v->port & 3];
+    /* no group level (port_att): the console's TL never carries the -6 dB
+     * the game sets on the MIDI ports, and the level matches without it */
+    uint32_t curve = bank_curve(k, v->bank);
+    int32_t att = v->att_static + level_att(k, curve, ch->vol) + level_att(k, curve, ch->expr);
     int32_t att_l = att + (ch->pan > 64 ? pan_att[ch->pan] : 0);
     int32_t att_r = att + (ch->pan < 64 ? pan_att[ch->pan] : 0);
     uint32_t step = v->step;

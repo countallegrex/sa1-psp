@@ -212,10 +212,19 @@ alignment by cross-correlation), before calibration:
 
 Spectral envelopes agree (menu effect 0.9999, voices 0.996, ambience
 0.99), so the ADPCM decode (low nibble first) is right; the ADPCM level
-gap has the same decode step as Flycast's and an open cause (§8). The
-core now applies the measured trims (`snd_core.c`: music -0.6 dB, effects
-+0.7 dB, ADPCM tones +4.2 dB more); the route still passes its check with
-them. Timing against the console's game-frame map: rings -6 to -3 ms,
+gap has the same decode step as Flycast's. Its cause was the level law,
+not the format: Flycast's AICA channel registers (TL, DISDL, DIPAN) logged
+over the Chaos 0 cutscene fades and the Emerald Coast rings show the driver
+writing TL = split TL + 2 x (127 - curve[CC 7]), with the bank's 128-byte
+curve (header +0x18), about 57 log10 against our 40 log10 (64 fade samples
+within 1.3 TL steps rms), and no trace of the -6 dB group level the game
+sets on MIDI ports 0 and 1. The ADPCM tones sat at middling volumes on
+ports 0/1, where the two errors added up. `snd_core.c` uses that law now,
+with no group level and no effect trims, only music -0.6 dB. Effects energy
+over the music-subtracted console capture: Emerald Coast rings +0.3 dB (with
+the old trims -2.1), Chaos 0 ambience -1.6 dB (+0.7). Part of the ambience
+residual is a DSP-only voice (DISDL 0) that Flycast, with its DSP off,
+plays from the send level and we leave silent. Timing against the console's game-frame map: rings -6 to -3 ms,
 menu effects +46 ms, music 79-142 ms late on the console (its stream
 start-up), voice lines as in §5.
 
@@ -246,9 +255,11 @@ off` in `sa1psp.ini` removes the cost without changing the game.
 
 ## 8. Open items
 
-- ADPCM tones play 4.2-4.9 dB quieter than on the console with the same
-  decode step as Flycast's: calibrated by a fixed trim, cause open
-  (output scaling of ADPCM in the AICA, or something per program).
+- The tone level law (§6) is measured for CC 7 only; velocity and
+  expression are 127 on the whole route and are taken to follow the same
+  curve. Pan, unchecked: the console's rings carry DIPAN 7 / 0x17 (far side
+  about 21 dB down); ours, at the CC 10 of 34 / 94 seen in another run,
+  lower the far side by 5.5 dB.
 - The console's per-line stream start-up (a few frames, §5) and music
   start-up (80-140 ms) are not emulated.
 - DSP reverb (`SFPB`/`SFOB`) not rendered; sequence banks not played (none
