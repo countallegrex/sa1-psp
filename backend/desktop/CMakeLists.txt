@@ -103,7 +103,7 @@ if(SA1_GAME_SRCS)
   # Object libraries, not static ones: the weak stubs in hle/seam_stubs.c
   # must see every strong HLE body at link time, as in M1.
   add_executable(sa1psp
-    main.c input_tape.c savestate.c sha256.c
+    main.c input_tape.c savestate.c sha256.c vmu_store_desktop.c
     $<TARGET_OBJECTS:sa1_hle> $<TARGET_OBJECTS:sa1_backend_desktop>
     ${SA1_GAME_SRCS}
     ${SA1_RECOMP_OUT}/emitter/game_table.c

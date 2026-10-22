@@ -37,6 +37,8 @@
  * --trace-funcs writes, at exit, every host function that ran with the frame
  * it first ran in (needs a build with -DSA1_TRACE_FUNCS=ON).
  *
+ * --no-vmu: no VMU in port A1 (strict runs never have one); --vmu-dir DIR:
+ * keep the VMU's files in DIR (default "vmu" beside the executable).
  * --strict, --record FILE, --replay FILE, --check FILE, --expect-frame N
  * and --epoch S: deterministic runs, input tapes and state checks
  * (input_tape.c, tests/replay/README.md).
@@ -461,6 +463,11 @@ static int load_image(const char *path) {
     return 0;
 }
 
+void vmu_store_desktop_init(const char *dir);   /* vmu_store_desktop.c */
+const char *vmu_store_desktop_dir(void);
+static int vmu_mode;               /* -1 --no-vmu, 1 --vmu-dir, 0 default */
+static const char *vmu_dir;
+
 int main(int argc, char **argv) {
     const char *bin = NULL, *root = NULL;
     for (int i = 1; i < argc; i++) {
@@ -472,6 +479,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--headless")) headless = 1;
         else if (!strcmp(argv[i], "--hidden")) draw_gl_hidden = 1;
         else if (!strcmp(argv[i], "--no-pad")) no_pad = 1;
+        else if (!strcmp(argv[i], "--no-vmu")) vmu_mode = -1;
+        else if (!strcmp(argv[i], "--vmu-dir") && i + 1 < argc) { vmu_dir = argv[++i]; vmu_mode = 1; }
         else if (!strcmp(argv[i], "--no-audio")) no_audio = 1;
         else if (!strcmp(argv[i], "--wav") && i + 1 < argc) wav_path = argv[++i];
         else if (!strcmp(argv[i], "--voice") && i + 1 < argc) {
@@ -580,6 +589,12 @@ int main(int argc, char **argv) {
     if (headless || no_audio) audio_sdl_enabled = 0;
     if (input_tape_sound_timing() >= 0) snd_guest_timing = input_tape_sound_timing();
     if (wav_path) snd_host_set_wav(wav_path);
+    /* VMU in port A1 (hle/shinobi/vmu_store.h): on unless --no-vmu or a
+     * strict run (tapes, the oracle), which keep "no VMU"; --vmu-dir forces it. */
+    if (vmu_mode > 0 || (vmu_mode == 0 && !hle_strict)) {
+        vmu_store_desktop_init(vmu_dir);
+        sa1_log("VMU A1: %s", vmu_store_desktop_dir());
+    }
     hle_init();
     if (draw_init(scale, headless) != 0 && !headless) { sa1_log("no window; running headless"); headless = 1; }
     draw_set_aspect(hle_aspect_wide);
