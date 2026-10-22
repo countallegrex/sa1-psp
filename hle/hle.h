@@ -100,5 +100,8 @@ uint32_t hle_frame_count(void);
  * the guest time.  Off by default; set before hle_init. */
 extern int hle_strict;
 extern int64_t hle_rtc_epoch;
+/* START skips a story event (hle/game/event_skip.c; never in strict runs). */
+extern int hle_event_skip, hle_event_skip_cli;
+void hle_event_skip_poll(sh4_ctx *c);
 /* Runs a guest function from native code (callbacks): r4..r7 = a0..a3. */
 void hle_call_guest(sh4_ctx *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);

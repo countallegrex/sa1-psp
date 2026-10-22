@@ -8,6 +8,8 @@
  *   audio = on | off           off: no decoding or mixing (profiling); the
  *                              game behaves the same, voice lines still
  *                              take their length
+ *   event_skip = on | off      on (default): START skips a story event
+ *                              (hle/game/event_skip.c; never in strict runs)
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
@@ -53,6 +55,9 @@ void hle_settings_load(void) {
             } else if (!strcmp(k, "audio")) {
                 snd_audio_enabled = strcmp(v, "off") != 0 && strcmp(v, "0") != 0;
                 sa1_log("settings: audio %s", snd_audio_enabled ? "on" : "off");
+            } else if (!strcmp(k, "event_skip")) {
+                hle_event_skip = strcmp(v, "off") != 0 && strcmp(v, "0") != 0;
+                sa1_log("settings: event_skip %s", hle_event_skip ? "on" : "off");
             } else if (*k) sa1_log("settings: unknown key \"%s\"", k);
         }
         line = next;

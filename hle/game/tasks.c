@@ -164,6 +164,14 @@ void fn_8c099bba(sh4_ctx *c) {
     }
     hle_task *t = alloc(task);
     if (!t) return;
+    /* A live task restarted from outside (the event skip, 0x8C049820): the
+     * console rebuilds its frame, so its suspended coroutine is dropped and
+     * the next switch into it runs fn. */
+    if (t->coro && t != running && t->coro != sa1_plat_coro_main()) {
+        sa1_plat_coro_destroy(t->coro);
+        t->coro = NULL;
+        t->started = 0;
+    }
     t->fn = fn; t->arg = arg;
     t->saved = *c;
     t->saved.r[15] = hle_rd32(task + T_TOP) & 0x9FFFFFFFu;

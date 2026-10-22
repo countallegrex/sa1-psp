@@ -8,7 +8,7 @@
  *                            screenshot there and logs the textures bound in that frame)
  *          [--aspect wide|4:3] [--no-pad] [--goto FRAME:X:Z[:RADIUS]]...
  *          [--save FRAME:FILE]... [--load FILE] [--quick FILE]
- *          [--wav FILE] [--voice en|ja|game] [--no-audio]
+ *          [--wav FILE] [--voice en|ja|game] [--no-audio] [--event-skip on|off|force]
  *
  * Sound (M3, hle/sound/): the audio core renders 735 samples per guest
  * frame whether or not a device is open, so a run behaves the same headless
@@ -478,6 +478,10 @@ int main(int argc, char **argv) {
             int v = hle_parse_voice(argv[++i]);
             if (v < -1) { fprintf(stderr, "--voice: en, ja or game\n"); return 2; }
             snd_voice_lang_cli = v;
+        }
+        else if (!strcmp(argv[i], "--event-skip") && i + 1 < argc) {   /* hle/game/event_skip.c */
+            const char *v = argv[++i];
+            hle_event_skip_cli = !strcmp(v, "force") ? 2 : strcmp(v, "off") != 0;
         }
         else if (!strcmp(argv[i], "--texdump") && i + 1 < argc) { texdump_dir = argv[++i]; texture_set_dump_dir(texdump_dir, 0); }
         else if (!strcmp(argv[i], "--mark") && i + 1 < argc && nmarks < SHOT_MAX) mark_frames[nmarks++] = (uint32_t)strtoul(argv[++i], NULL, 0);

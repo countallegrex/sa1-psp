@@ -83,6 +83,7 @@ void fn_8c051790(sh4_ctx *c) {
             break;
         }
     }
+    hle_event_skip_poll(c);
     fn_8c051790_orig(c);
 }
 
@@ -101,6 +102,7 @@ void fn_8c0517f6(sh4_ctx *c) {
             break;
         }
     }
+    hle_event_skip_poll(c);
     fn_8c0517f6_orig(c);
 }
 
