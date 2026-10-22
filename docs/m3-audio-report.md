@@ -277,6 +277,15 @@ off` in `sa1psp.ini` removes the cost without changing the game.
   The rings' CC 10 of 34 / 94 give DIPAN 0x17 / 7 (far side 21 dB down), as
   logged on the console; we lowered it by 5.5 dB before. The per-port pan
   offset the driver also adds (default 0x80, none) is not modelled.
+- The LFO follows the split's +1C word (split byte 14: LFOF, PLFOWS,
+  PLFOS, ALFOWS, ALFOS) with each depth scaled by the channel's CC 1, as
+  the driver writes it at key-on and on CC 1: d' = ((mod + 1)(d + 1) - 1)
+  >> 7, so CC 1 127 (sent before every sound effect) keeps the split's depth
+  and 0 (the reset value) clears it. Waves, rates and depths are Flycast's
+  (pitch up to +-231 cents at PLFOS 7, amplitude 255 >> (8 - ALFOS) TL steps).
+  MAME's SCSP gives half the amplitude depth from ALFOS 3 up (24 dB at 7 vs
+  Flycast's 47.6); unchecked against the console. The phase starts at 0 on
+  every note (the hardware keeps it per slot unless LFORE is set).
 - The console's per-line stream start-up (a few frames, §5) and music
   start-up (80-140 ms) are not emulated.
 - DSP reverb (`SFPB`/`SFOB`) not rendered; sequence banks not played (none
