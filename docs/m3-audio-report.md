@@ -224,7 +224,13 @@ with no group level and no effect trims, only music -0.6 dB. Effects energy
 over the music-subtracted console capture: Emerald Coast rings +0.3 dB (with
 the old trims -2.1), Chaos 0 ambience -1.6 dB (+0.7). Part of the ambience
 residual is a DSP-only voice (DISDL 0) that Flycast, with its DSP off,
-plays from the send level and we leave silent. Timing against the console's game-frame map: rings -6 to -3 ms,
+plays from the send level and we leave silent. The driver's code
+(`MASARU.DRV` key-on and CC 7) gives the exact law, which `snd_core.c`
+follows: c = (T[vol]+1)(T[expr]+1)/128 - 1 with the driver's table T (bank
+curve 0 but for entries 1-4), level = ((V[vel]+1)(c+1)(256 - split TL) - 1)
+>> 14 with the split's velocity curve V (split byte 42, bank curve n), and
+TL = 255 - level. Near TL 0 that is the fitted law; at higher split TLs it
+attenuates less (TL 40, CC 7 100: 3.5 dB). Timing against the console's game-frame map: rings -6 to -3 ms,
 menu effects +46 ms, music 79-142 ms late on the console (its stream
 start-up), voice lines as in §5.
 
@@ -255,9 +261,8 @@ off` in `sa1psp.ini` removes the cost without changing the game.
 
 ## 8. Open items
 
-- The tone level law (§6) is measured for CC 7 only; velocity and
-  expression are 127 on the whole route and are taken to follow the same
-  curve.
+- The tone level law (§6) comes from the driver code; the console data
+  only cover split TLs up to 5 and velocity and expression 127.
 - Pan follows the driver (MASARU.DRV key-on and CC 10 code): q = pan >> 2;
   below 16 the right side drops by 15 - q DIPAN steps, from 16 the left by
   q - 16, 3 dB a step, step 15 mutes. A channel without a CC 10 since its

@@ -24,7 +24,7 @@
 
 /* Console calibration (docs/m3-audio-report.md section 6: our stems
  * fitted against Flycast captures of the same game frames): music 0.6 dB
- * lower.  Voices matched; tones follow the driver's level law (level_att)
+ * lower.  Voices matched; tones follow the driver's level law (tone_att)
  * and need no trim. */
 #define TRIM_MUSIC_ATT ATT_DB(0.6)
 
@@ -47,10 +47,12 @@ typedef struct voice {
     uint8_t ad_saved;
     int32_t eg;                     /* attenuation, Q16 units of ATT (0 loudest) */
     int32_t eg_ar, eg_d1, eg_d2, eg_rr, eg_dl;   /* per-sample steps (Q16 att units), DL in att units */
-    int32_t att_static;             /* TL + direct send level + velocity (both sides) */
+    int32_t att_static;             /* direct send level (both sides) */
     int32_t base_cents;             /* key - base key + fine tune */
     uint8_t bend_range;             /* semitones */
     uint8_t span;                   /* the split's own pan on the CC 10 scale (DIPAN x 4) */
+    uint8_t tl;                     /* the split's TL */
+    uint8_t vlev;                   /* velocity curve value + 1 (1..128) */
     uint32_t delay;                 /* output samples before the voice starts (layer delay) */
     uint16_t pitch_reg;             /* the split's OCT/FNS word */
     uint8_t bank, prog;             /* what started it (the solo debug filter) */
@@ -88,7 +90,6 @@ struct snd_core {
 
 /* Tables, built once (snd_core_init; identical on every run). */
 static int32_t gain_q15[ATT_MAX + 1];   /* Q15, 32768 = unity */
-static uint16_t vol_att[128];       /* MIDI volume / expression: 40 log10(v/127) dB */
 static uint16_t pan_att[128];       /* attenuation of the far side for pan 0..127 (DIPAN steps) */
 static uint32_t cents_q16[1200];    /* 2^(c/1200), Q16 */
 static int32_t eg_rate_step[64];    /* Q16 att units per sample for a full-range decay at effective rate r */
@@ -98,10 +99,6 @@ static void build_tables(void) {
     if (tables_ready) return;
     for (int i = 0; i <= ATT_MAX; i++) gain_q15[i] = (int32_t)(32768.0 * pow(10.0, -(i * 0.09375) / 20.0) + 0.5);
     gain_q15[ATT_MAX] = 0;
-    for (int v = 0; v < 128; v++) {
-        double db = v ? -40.0 * log10(v / 127.0) : 96.0;
-        int a = ATT_DB(db); vol_att[v] = (uint16_t)(a > ATT_MAX ? ATT_MAX : a);
-    }
     /* The driver (MASARU.DRV, key-on and CC 10) sets DIPAN from pan >> 2:
      * below 16 the right side drops by 15 - q steps, from 16 the left by
      * q - 16; a step is 3 dB and step 15 mutes (AICA send levels). */
@@ -183,16 +180,32 @@ static uint32_t bank_curve(const snd_core *k, uint32_t bank) {
     return t && t < 0x10000 ? B + t : 0;
 }
 
-/* Attenuation for a velocity, channel volume or expression v: the driver
- * writes TL = split TL + 2 x (127 - curve[v]), 0.75 dB per curve step
- * (Flycast's AICA registers against the game's CC 7 over the Chaos 0
- * cutscene fades and the Emerald Coast ring: within 0.5 dB rms; the law is
- * about 57 log10, steeper than MIDI's 40 log10).  Velocity and expression
- * are always 127 on the route, so their law is taken to be the same. */
-static inline int32_t level_att(const snd_core *k, uint32_t curve, uint32_t v) {
-    if (!curve) return vol_att[v & 127];
-    int32_t c = (int32_t)ram8(k, curve + (v & 127));
-    return c >= 127 ? 0 : 8 * (127 - c);
+/* Curve n of the bank (the count is at header +0x1C; out of range -> 0),
+ * and a value read through a curve (none: v itself). */
+static uint32_t bank_curve_n(const snd_core *k, uint32_t bank, uint32_t n) {
+    uint32_t c = bank_curve(k, bank);
+    if (!c) return 0;
+    return n < ram32(k, k->sh->bank_addr[bank] + 0x1C) ? c + 128 * n : c;
+}
+static inline uint32_t curve_at(const snd_core *k, uint32_t curve, uint32_t v) {
+    return curve ? ram8(k, curve + (v & 127)) : v & 127;
+}
+
+/* The TL the driver (MASARU.DRV key-on and CC 7) writes, as attenuation:
+ * the volume and expression curve values combine to c = (cv+1)(ce+1)/128 - 1,
+ * then level = ((curve_vel[vel]+1)(c+1)(256-TL) - 1) >> 14 and TL = 255 -
+ * level.  The volume table is the driver's own, which is bank curve 0 but
+ * for entries 1-4 (inaudible); the velocity curve is the split's (byte 42).
+ * Near TL 0 this is TL + 2 x (127 - curve[v]), as Flycast's registers
+ * showed against the game's CC 7 over the Chaos 0 fades and the Emerald
+ * Coast ring.  Volume and expression both at curve 0 make the driver's c
+ * wrap to 255 (full level); we keep that silent. */
+static inline int32_t tone_att(const snd_core *k, const voice *v, const chan *ch) {
+    uint32_t curve = bank_curve(k, v->bank);
+    int32_t c = (int32_t)(((curve_at(k, curve, ch->vol) + 1) * (curve_at(k, curve, ch->expr) + 1)) >> 7) - 1;
+    if (c < 0) c = 0;
+    uint32_t level = ((uint32_t)v->vlev * (uint32_t)(c + 1) * (256u - v->tl) - 1) >> 14;
+    return (int32_t)(255 - (level & 255)) * 4;
 }
 
 /* The splits a note-on starts: in every layer, each split whose key range
@@ -287,9 +300,9 @@ static void note_on(snd_core *k, int port, int c, int key, int vel) {
         uint32_t disdl = (send >> 8) & 15, tl = tlq >> 8, dipan = send & 31;
         /* the split's DIPAN on the pan scale, as the driver converts it */
         v->span = (uint8_t)(dipan == 0x10 ? 64 : dipan & 0x10 ? (15 - (dipan & 15)) * 4 : (dipan + 16) * 4);
-        int32_t att = (int32_t)tl * 4 + (disdl ? (int32_t)(15 - disdl) * 32 : ATT_MAX);
-        att += level_att(k, bank_curve(k, ch->bank), (uint32_t)vel);
-        v->att_static = att;
+        v->att_static = disdl ? (int32_t)(15 - disdl) * 32 : ATT_MAX;
+        v->tl = (uint8_t)tl;
+        v->vlev = (uint8_t)(curve_at(k, bank_curve_n(k, ch->bank, ram8(k, p + 42)), (uint32_t)vel) + 1);
         int32_t base = (int32_t)ram8(k, p + 38), fine = (int8_t)ram8(k, p + 39);
         v->base_cents = (key - base) * 100 + fine;
         v->pitch_reg = (uint16_t)ram16(k, p + 12);
@@ -363,8 +376,7 @@ static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
     chan *ch = &k->ch[v->port][v->ch];
     /* no group level (port_att): the console's TL never carries the -6 dB
      * the game sets on the MIDI ports, and the level matches without it */
-    uint32_t curve = bank_curve(k, v->bank);
-    int32_t att = v->att_static + level_att(k, curve, ch->vol) + level_att(k, curve, ch->expr);
+    int32_t att = v->att_static + tone_att(k, v, ch);
     int pan = ch->pan & 0x80 ? v->span : ch->pan;
     int32_t att_l = att + (pan >= 64 ? pan_att[pan] : 0);
     int32_t att_r = att + (pan < 64 ? pan_att[pan] : 0);
