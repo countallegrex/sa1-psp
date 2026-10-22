@@ -194,14 +194,19 @@ void sdk_8c643b08(sh4_ctx *c) {
     RET(0);
 }
 void sdk_8c643e08(sh4_ctx *c) { HLE_ENTER(0x8c643e08u, "sdMidiStop"); RET(0); }
+/* 0x8C643D88: sdMidiSetVol(port, level, fade) is driver command 5: the port's
+ * level offset fades to level.  The game calls it only for the sequence
+ * ports, so the MIDI ports keep offset 0 (snd_core's level law). */
 void sdk_8c643d88(sh4_ctx *c) { HLE_ENTER(0x8c643d88u, "sdMidiSetVol"); RET(0); }
 
-/* 0x8C643754: (group, 0, level): the game sets groups 0 and 1 (the MIDI
- * direct ports) to -48 and 2, 3 to 0 at every bank load; the unit is taken
- * as 1/8 dB (the game computes it as its own setting x 8). */
+/* 0x8C643754: sdSysSetVolume(out, pan, level) is driver command 0x83 (MASARU.DRV
+ * 0x5b88): it sets EFSDL/EFPAN of the AICA DSP output mixer slot `out`
+ * (0x802000 + 4 * out), the driver's default plus level / 8 steps of 3 dB.
+ * It never touches a tone's TL or DISDL, so with no DSP here it has nothing
+ * to do.  The game sets outs 0 and 1 to -48 and 2, 3 to 0 at every bank load. */
 void sdk_8c643754(sh4_ctx *c) {
     HLE_ENTER(0x8c643754u, "sdSysSetVolume");
-    snd_host_cmd(SND_CMD_PORT_VOL, (uint8_t)(ARG0 & 3), 0, 0, (int32_t)ARG2, 0);
+    if (snd_log()) sa1_log("snd dsp out %u pan %d level %d", (unsigned)(ARG0 & 0xF), (int8_t)ARG1, (int8_t)ARG2);
     RET(0);
 }
 

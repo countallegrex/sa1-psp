@@ -52,7 +52,7 @@ reaches the rest of the ADX API. Calls over the 36,478 frames:
 | `0x8C6442F2` | 34 | ADXT_Destroy | real |
 | `0x8C6434E0`, `0x8C643624`, `0x8C6435BC` | 29 each | sdMemBlkCreate / SetPrm / Destroy | real |
 | `0x8C643970` | 28 | sdMultiUnitDownload | real: units into the sound-RAM image |
-| `0x8C643754` | 28 | sdSysSetVolume | real (unit taken as 1/8 dB) |
+| `0x8C643754` | 28 | sdSysSetVolume | no-op: driver cmd 0x83 sets the DSP output mixer (EFSDL/EFPAN), no DSP here |
 | `0x8C644968` | 20 | ADXT_StartFname | real |
 | `0x8C65C25C` | 18 | ADXF file start | real: records the partition's file name; still answers -1 (below) |
 | `0x8C64489C` | 18 | ADXT_EntryErrFunc | fixed answer |
@@ -218,7 +218,10 @@ over the Chaos 0 cutscene fades and the Emerald Coast rings show the driver
 writing TL = split TL + 2 x (127 - curve[CC 7]), with the bank's 128-byte
 curve (header +0x18), about 57 log10 against our 40 log10 (64 fade samples
 within 1.3 TL steps rms), and no trace of the -6 dB group level the game
-sets on MIDI ports 0 and 1. The ADPCM tones sat at middling volumes on
+sets on MIDI ports 0 and 1: that call (`sdSysSetVolume`, driver command
+0x83) sets the DSP output mixer (EFSDL/EFPAN), not the tones, and the
+driver's per-port level and pan offsets (commands 5 and 6) are only sent
+by `sdMidiSetVol` for the sequence ports. The ADPCM tones sat at middling volumes on
 ports 0/1, where the two errors added up. `snd_core.c` uses that law now,
 with no group level and no effect trims, only music -0.6 dB. Effects energy
 over the music-subtracted console capture: Emerald Coast rings +0.3 dB (with

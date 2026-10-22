@@ -84,7 +84,7 @@ struct snd_core {
     voice v[SND_VOICES];
     chan ch[SND_PORTS][16];
     stream st[SND_STREAMS];
-    int32_t port_att[4];
+    int32_t spare[4];               /* was a group level; keeps the save-state size */
     uint32_t age;
 };
 
@@ -374,8 +374,6 @@ static int eg_advance(voice *v, int32_t n) {
  * product fits in 32 bits (the PSP has no cheap 64-bit multiply). */
 static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
     chan *ch = &k->ch[v->port][v->ch];
-    /* no group level (port_att): the console's TL never carries the -6 dB
-     * the game sets on the MIDI ports, and the level matches without it */
     int32_t att = v->att_static + tone_att(k, v, ch);
     int pan = ch->pan & 0x80 ? v->span : ch->pan;
     int32_t att_l = att + (pan >= 64 ? pan_att[pan] : 0);
@@ -507,7 +505,6 @@ static void run_commands(snd_core *k) {
             for (int i = 0; i < SND_VOICES; i++) k->v[i].on = 0;
             for (int p = 0; p < SND_PORTS; p++) for (int i = 0; i < 16; i++) { chan_reset(&k->ch[p][i]); k->ch[p][i].bank = 0; k->ch[p][i].prog = 0; }
             break;
-        case SND_CMD_PORT_VOL: if (c.a < 4) k->port_att[c.a] = c.x >= 0 ? 0 : ATT_DB(-c.x / 8.0); break;
         case SND_CMD_STREAM_START: if (c.a < SND_STREAMS) stream_start(k, c.a, (uint32_t)c.x, (uint32_t)c.y); break;
         case SND_CMD_STREAM_STOP:
             if (c.a < SND_STREAMS) {
