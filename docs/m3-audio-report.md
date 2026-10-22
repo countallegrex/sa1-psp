@@ -232,7 +232,11 @@ plays from the send level and we leave silent. The driver's code
 follows: c = (T[vol]+1)(T[expr]+1)/128 - 1 with the driver's table T (bank
 curve 0 but for entries 1-4), level = ((V[vel]+1)(c+1)(256 - split TL) - 1)
 >> 14 with the split's velocity curve V (split byte 42, bank curve n), and
-TL = 255 - level. Near TL 0 that is the fitted law; at higher split TLs it
+TL = 255 - level, the level keeping its low 8 bits as in the driver (a
+velocity curve of 255, curve 3 at velocity 127 in several positional
+effects, makes V+1 = 256 and wraps: 0x1c74f2 at CC 7 116 plays at TL 12,
+as on the console, where a byte-wide V+1 had wrapped to 0 and played it
+at TL 0). Near TL 0 that is the fitted law; at higher split TLs it
 attenuates less (TL 40, CC 7 100: 3.5 dB). Timing against the console's game-frame map: rings -6 to -3 ms,
 menu effects +46 ms, music 79-142 ms late on the console (its stream
 start-up), voice lines as in §5.
