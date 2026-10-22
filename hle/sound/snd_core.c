@@ -52,7 +52,7 @@ typedef struct voice {
     uint8_t bend_range;             /* semitones */
     uint8_t span;                   /* the split's own pan on the CC 10 scale (DIPAN x 4) */
     uint8_t tl;                     /* the split's TL */
-    uint8_t vlev;                   /* velocity curve value + 1 (1..128) */
+    uint8_t vlev;                   /* velocity curve value (0..255) */
     uint32_t delay;                 /* output samples before the voice starts (layer delay) */
     uint16_t pitch_reg;             /* the split's OCT/FNS word */
     uint8_t bank, prog;             /* what started it (the solo debug filter) */
@@ -198,13 +198,17 @@ static inline uint32_t curve_at(const snd_core *k, uint32_t curve, uint32_t v) {
  * for entries 1-4 (inaudible); the velocity curve is the split's (byte 42).
  * Near TL 0 this is TL + 2 x (127 - curve[v]), as Flycast's registers
  * showed against the game's CC 7 over the Chaos 0 fades and the Emerald
- * Coast ring.  Volume and expression both at curve 0 make the driver's c
- * wrap to 255 (full level); we keep that silent. */
+ * Coast ring.  A velocity curve may hold 255 (curve 3 at velocity 127, the
+ * splits of several positional effects): the driver multiplies in 32 bits
+ * and keeps the level's low 8 bits, so 256 x (c+1) x 256 wraps (vol 116:
+ * level 499 -> 243, TL 12, as the console's registers show for 1c74f2).
+ * Volume and expression both at curve 0 make the driver's c wrap to 255
+ * (full level); we keep that silent. */
 static inline int32_t tone_att(const snd_core *k, const voice *v, const chan *ch) {
     uint32_t curve = bank_curve(k, v->bank);
     int32_t c = (int32_t)(((curve_at(k, curve, ch->vol) + 1) * (curve_at(k, curve, ch->expr) + 1)) >> 7) - 1;
     if (c < 0) c = 0;
-    uint32_t level = ((uint32_t)v->vlev * (uint32_t)(c + 1) * (256u - v->tl) - 1) >> 14;
+    uint32_t level = (((uint32_t)v->vlev + 1) * (uint32_t)(c + 1) * (256u - v->tl) - 1) >> 14;
     return (int32_t)(255 - (level & 255)) * 4;
 }
 
@@ -302,7 +306,7 @@ static void note_on(snd_core *k, int port, int c, int key, int vel) {
         v->span = (uint8_t)(dipan == 0x10 ? 64 : dipan & 0x10 ? (15 - (dipan & 15)) * 4 : (dipan + 16) * 4);
         v->att_static = disdl ? (int32_t)(15 - disdl) * 32 : ATT_MAX;
         v->tl = (uint8_t)tl;
-        v->vlev = (uint8_t)(curve_at(k, bank_curve_n(k, ch->bank, ram8(k, p + 42)), (uint32_t)vel) + 1);
+        v->vlev = (uint8_t)curve_at(k, bank_curve_n(k, ch->bank, ram8(k, p + 42)), (uint32_t)vel);
         int32_t base = (int32_t)ram8(k, p + 38), fine = (int8_t)ram8(k, p + 39);
         v->base_cents = (key - base) * 100 + fine;
         v->pitch_reg = (uint16_t)ram16(k, p + 12);
