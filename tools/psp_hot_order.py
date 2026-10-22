@@ -27,6 +27,17 @@ per line, '#' starts a comment:
 
 A name the build no longer has is matched by nothing and costs nothing.
 
+    psp_hot_order.py --pin ELF [--list FILE] [--out FILE]
+
+rewrites the list with an "@ADDR" line before every entry and one after
+the last: ADDR is where that function, and the code after the list,
+start modulo 16 KB in ELF, a build of the same list (pinning that build's
+own list changes nothing in it).  With every entry pinned, a lever that
+grows or shrinks one function moves no other listed function's cache
+sets, nor the libraries and game chunks after the list: only the
+unlisted HLE and backend code still moves.  Entries without a symbol in
+ELF (functions the lever adds) go unpinned, after the entry before them.
+
 Part of sa1-psp (MIT).
 """
 from __future__ import annotations
@@ -104,14 +115,20 @@ def lib_members(distro: str) -> dict[str, str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--pcs", required=True)
-    ap.add_argument("--log", required=True)
-    ap.add_argument("--elf", required=True)
+    ap.add_argument("--pcs")
+    ap.add_argument("--log")
+    ap.add_argument("--elf")
+    ap.add_argument("--pin", metavar="ELF", help="pin every entry of --list to its address in ELF instead")
+    ap.add_argument("--list", default=os.path.join(REPO, "tools", "psp_hot_order.txt"))
     ap.add_argument("--cover", type=float, default=0.90)
     ap.add_argument("--min-samples", type=int, default=3)
     ap.add_argument("--out", default=os.path.join(REPO, "tools", "psp_hot_order.txt"))
     ap.add_argument("--wsl-distro", default="Ubuntu")
     a = ap.parse_args()
+    if a.pin:
+        return pin(a)
+    if not (a.pcs and a.log and a.elf):
+        ap.error("--pcs, --log and --elf are required")
 
     main_at = None
     for line in open(a.log, encoding="utf-8", errors="replace"):
@@ -212,6 +229,54 @@ def main() -> int:
                 % (os.path.basename(a.pcs), len(lines), 100.0 * acc / inside, size))
         f.write("\n".join(lines) + "\n")
     print(f"psp_hot_order: {len(lines)} functions, {100.0 * acc / inside:.1f} % of {inside} samples, {size} bytes -> {a.out}")
+    return 0
+
+
+def pin(a) -> int:
+    """Rewrite --list with an "@ADDR" line before every entry and one after the
+    last: each listed function, and the code after the list, at its address
+    modulo 16 KB in --pin's ELF (a build of that list)."""
+    fns = functions(a.pin, a.wsl_distro)
+    by_name = collections.defaultdict(list)
+    for f in fns:
+        by_name[f[2]].append(f)
+    members = collections.defaultdict(list)
+    for name, mem in lib_members(a.wsl_distro).items():
+        members[mem].append(name)
+
+    def span(entry):
+        if re.match(r"^[^:]+\.a:[^:]+$", entry):
+            fs = [f for n in members.get(entry, []) for f in by_name.get(n, []) if f[3] != "LOCAL"]
+        elif ":" in entry:
+            src, name = entry.split(":", 1)
+            fs = [f for f in by_name.get(name, []) if f[4] == src]
+        else:
+            fs = by_name.get(entry, [])
+            fs = [f for f in fs if f[3] != "LOCAL"] or fs
+        if not fs:
+            return None
+        return min(f[0] for f in fs), max(f[0] + f[1] for f in fs)
+
+    out, pinned, end = [], 0, None
+    for line in open(a.list, encoding="utf-8"):
+        line = line.rstrip("\n")
+        entry = line.split("#")[0].strip()
+        if entry.startswith("@"):
+            continue                      # the old pins: every entry gets a new one
+        if entry:
+            s = span(entry)
+            if s:
+                out.append("@0x%x" % (s[0] & 0x3FFF))
+                pinned += 1
+                end = s[1]
+            else:
+                end = None                # a new function: where it ends is unknown
+        out.append(line)
+    if end is not None:
+        out.append("@0x%-38x # the code after the list" % (end & 0x3FFF))
+    with open(a.out, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(out) + "\n")
+    print(f"psp_hot_order: {pinned} entries pinned to {os.path.basename(a.pin)} -> {a.out}")
     return 0
 
 

@@ -89,7 +89,13 @@ target_compile_options(sa1_backend_psp PRIVATE -O2 -fno-strict-aliasing -Wall -g
 # A line "@ADDR" pads so that the next entry lands at ADDR modulo 16 KB:
 # after a listed function changed size, pinning its successor at the old
 # build's address keeps every later entry in its old cache sets, so a bench
-# measures the change and not a new layout.
+# measures the change and not a new layout.  The committed list pins every
+# entry and the code after it (tools/psp_hot_order.py --pin), and lists the
+# warm HLE and backend functions too, so a lever moves only its own code and
+# the cold code (1 KB of cold code moved Station Square by 0.06 ms, where
+# the unlisted warm code moved it by up to 1.5 ms).  A regenerated list is a
+# new layout (the 97 % cover list of 10-22 was 3.1 ms slower): keep this one
+# and add a lever's new functions by hand, unpinned.
 # The D-cache is 16 KB, 2-way, 64-byte lines too, and .rodata, .data,
 # .sdata, .sbss and .bss follow .text: 380 bytes of cold code moved every
 # hot table and pool by 380 bytes and Station Square by 2.8 ms (cea4798).
@@ -120,7 +126,11 @@ if(SA1_PSP_HOT_ORDER AND EXISTS "${SA1_PSP_HOT_LIST}")
     elseif(l MATCHES "^([^:]+):([^:]+)$")          # file.c:static_fn
       string(APPEND hot_body "    */${CMAKE_MATCH_1}.o*(.text.${CMAKE_MATCH_2})\n")
     else()
-      string(APPEND hot_body "    *(.text.${l})\n")
+      # Not hle/seam_stubs.c's weak stub of the same name: its section is
+      # linked even when the real function overrides it, and would sit in
+      # the list as a symbol-less gap that tools/psp_hot_order.py --pin
+      # cannot see.
+      string(APPEND hot_body "    *(EXCLUDE_FILE(*seam_stubs.c.o*) .text.${l})\n")
     endif()
   endforeach()
   # After the hot list, the rest of the libraries (the other sceGu* calls

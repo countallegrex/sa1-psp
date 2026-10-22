@@ -12,7 +12,8 @@
 #      (prof_N_a.txt), benches base vs N_a.
 #   b: regenerates the hot-code list in -Tree from prof_N_a, builds N_b,
 #      benches base vs N_b.  Only worth it when N_a moved the profile or
-#      regressed; the regenerated list is not always the better one.
+#      regressed; the regenerated list is not always the better one, and it
+#      drops the committed list's pins (a new layout: rarely worth it).
 #   check: title_menu.tape with its check on -Build VARIANT (b_VARIANT in
 #      -Work), else N_b if built, else N_a.  Run it
 #      on the winner only, before committing.
