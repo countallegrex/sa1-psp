@@ -114,11 +114,21 @@ if(SA1_PSP_HOT_ORDER AND EXISTS "${SA1_PSP_HOT_LIST}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SA1_PSP_HOT_LIST}")
   file(STRINGS "${SA1_PSP_HOT_LIST}" hot_lines)
   set(hot_body "")
+  set(game_body "")
+  set(game_end "")
   foreach(l IN LISTS hot_lines)
     string(REGEX REPLACE "#.*" "" l "${l}")
     string(STRIP "${l}" l)
     if(l STREQUAL "")
       continue()
+    elseif(l MATCHES "^=@(0x[0-9a-fA-F]+)$")       # =@ADDR: the code after the game objects
+      set(game_end "    . = . + ((${CMAKE_MATCH_1} - .) & 0x3fff);\n    sa1_obj_end = .;\n")
+    elseif(l MATCHES "^=([^ ]+)( +@(0x[0-9a-fA-F]+))?$")  # =chunk.c [@ADDR]: a game object, whole
+      string(MAKE_C_IDENTIFIER "${CMAKE_MATCH_1}" sym)
+      if(CMAKE_MATCH_3)
+        string(APPEND game_body "    . = . + ((${CMAKE_MATCH_3} - .) & 0x3fff);\n")
+      endif()
+      string(APPEND game_body "    sa1_obj_${sym} = .;\n    *sa1_game_psp.dir/*/${CMAKE_MATCH_1}.o*(.text .text.*)\n")
     elseif(l MATCHES "^@(0x[0-9a-fA-F]+)$")        # @ADDR: the next entry at ADDR mod 16 KB
       string(APPEND hot_body "    . = . + ((${CMAKE_MATCH_1} - .) & 0x3fff);\n")
     elseif(l MATCHES "^([^:]+\\.a):([^:]+)$")      # libX.a:member.o, whole
@@ -136,9 +146,16 @@ if(SA1_PSP_HOT_ORDER AND EXISTS "${SA1_PSP_HOT_LIST}")
   # After the hot list, the rest of the libraries (the other sceGu* calls
   # draw_end_frame makes per item) and of the game chunks: code that never
   # changes with ours goes before the HLE's and the backend's, so an edit
-  # there moves only the HLE and backend code after it.
+  # there moves only the HLE and backend code after it.  The list's
+  # "=chunk.c @ADDR" lines place the game and overlay objects one by one,
+  # each pinned at its start (sa1_obj_<chunk>, read by --pin): a lever that
+  # changes one chunk (game_030 grew 108 B with the libm lever) moves none
+  # of the chunks after it; "=@ADDR" pins the code after them.
+  if(game_body AND NOT game_end)
+    set(game_end "    sa1_obj_end = .;\n")
+  endif()
   string(APPEND order_ld ".text : {\n    . = ALIGN(64);\n${hot_body}    . = ALIGN(64);\n"
-    "    *.a:*(.text .text.*)\n    *sa1_game_psp.dir/*(.text .text.*)\n}\n")
+    "    *.a:*(.text .text.*)\n${game_body}    *sa1_game_psp.dir/*(.text .text.*)\n${game_end}}\n")
   target_compile_options(sa1_hle_psp PRIVATE -ffunction-sections)
   target_compile_options(sa1_backend_psp PRIVATE -ffunction-sections)
 elseif(SA1_PSP_HOT_ORDER)

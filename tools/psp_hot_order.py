@@ -38,6 +38,13 @@ sets, nor the libraries and game chunks after the list: only the
 unlisted HLE and backend code still moves.  Entries without a symbol in
 ELF (functions the lever adds) go unpinned, after the entry before them.
 
+Lines "=CHUNK.c @ADDR" after the list place the game and overlay objects
+one by one after the libraries, each whole and pinned at its start (the
+linker symbol sa1_obj_<CHUNK_c> the build defines there), and "=@ADDR"
+pins the code after them: a lever that changes one chunk moves no other.
+--pin rewrites their addresses too; a "=CHUNK.c" line without one (a new
+chunk) goes unpinned.
+
 Part of sa1-psp (MIT).
 """
 from __future__ import annotations
@@ -86,6 +93,17 @@ def functions(elf: str, distro: str):
             fns.append((int(f[1], 16), int(f[2]), name, bind, cur if bind == "LOCAL" else ""))
     fns.sort()
     return fns
+
+
+def markers(elf: str, distro: str) -> dict[str, int]:
+    """name -> address of the sa1_obj_* symbols (the game objects' starts)."""
+    out = tool("psp-readelf", ["-sW", wsl_path(elf) if os.name == "nt" else elf], distro)
+    m = {}
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 8 and f[0].endswith(":") and f[7].startswith("sa1_obj_"):
+            m[f[7]] = int(f[1], 16)
+    return m
 
 
 def text_bytes(elf: str):
@@ -257,13 +275,30 @@ def pin(a) -> int:
             return None
         return min(f[0] for f in fs), max(f[0] + f[1] for f in fs)
 
-    out, pinned, end = [], 0, None
+    objs = markers(a.pin, a.wsl_distro)
+
+    def list_end():
+        if end is not None:
+            out.append("@0x%-38x # the code after the list" % (end & 0x3FFF))
+
+    out, pinned, end, in_objs = [], 0, None, False
     for line in open(a.list, encoding="utf-8"):
         line = line.rstrip("\n")
         entry = line.split("#")[0].strip()
-        if entry.startswith("@"):
+        if entry.startswith("@") or entry.startswith("=@"):
             continue                      # the old pins: every entry gets a new one
-        if entry:
+        if entry.startswith("="):
+            if not in_objs:
+                list_end()
+                in_objs = True
+            name = entry[1:].split()[0]
+            addr = objs.get("sa1_obj_" + re.sub(r"\W", "_", name))
+            if addr is not None:
+                line = "=%s @0x%x" % (name, addr & 0x3FFF)
+                pinned += 1
+            else:
+                line = "=" + name
+        elif entry:
             s = span(entry)
             if s:
                 out.append("@0x%x" % (s[0] & 0x3FFF))
@@ -272,8 +307,10 @@ def pin(a) -> int:
             else:
                 end = None                # a new function: where it ends is unknown
         out.append(line)
-    if end is not None:
-        out.append("@0x%-38x # the code after the list" % (end & 0x3FFF))
+    if not in_objs:
+        list_end()
+    elif "sa1_obj_end" in objs:
+        out.append("=@0x%-37x # the code after the game objects" % (objs["sa1_obj_end"] & 0x3FFF))
     with open(a.out, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(out) + "\n")
     print(f"psp_hot_order: {pinned} entries pinned to {os.path.basename(a.pin)} -> {a.out}")
