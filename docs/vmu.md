@@ -53,6 +53,16 @@ created and at the game's save points. The game also knows the upload files
 With no store, every entry point gives the same answer as before the VMU
 existed (no card), so no-VMU runs are unchanged.
 
+## Checked on the desktop
+
+With a VMU the game adds its "Select a memory card" and "Select a file"
+screens after the title, so the no-VMU tapes go off route. A private copy of
+`sonic_ec1` with those presses added (the inputs from frame 1182 on moved
+300 frames later) creates the file at the new game, then saves again when
+Sonic is back in Station Square after Chaos 0. Run again from that file, the
+file screen shows "From Station Square, Completed Chaos, Play Time 0:02",
+and Adventure goes on at the hotel pool, not at the opening scene.
+
 ## Not done
 
 - Delete and format: the game never calls them.
