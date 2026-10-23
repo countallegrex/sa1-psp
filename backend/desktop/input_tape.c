@@ -42,6 +42,13 @@
  *                       recording writes its mode into the tape; a tape
  *                       without the line replays as "square"; a run without
  *                       a tape uses "round"
+ *   --slow-substep F    (repeatable) TMU1 reads in frame F run two vblanks
+ *                       late, so the game adds the third logic sub-step a
+ *                       console frame that long gets (hle.h
+ *                       hle_tmu_slow_frames).  Oracle tapes carry
+ *                       "slow-substep F" lines for the console's long load
+ *                       frames (tools/tape_diff.py slow); the options add to
+ *                       them.  A recording writes none: live play has none
  *   (--aspect, main.c)  a recording writes the run's aspect into the tape; a
  *                       replay without --aspect takes the tape's (absent:
  *                       wide, the default every tape before 2026-10-21 had)
@@ -70,10 +77,20 @@ static int sound_timing = -1, sound_timing_set;   /* 1 real, 0 none, -1 not give
 static int fpu_zero = -1, fpu_zero_set;           /* 1 toward zero, 0 nearest, -1 not given */
 static int fmac_fused = -1, fmac_set;           /* 1 fused, 0 split, -1 follow fpu_zero */
 static int round_gate = -1, round_gate_set;       /* 1 round, 0 square, -1 not given */
+static uint32_t slow_frames[64];
+static int slow_count;
 static int tape_aspect = -1;                      /* the tape's line: 1 wide, 0 4:3, -1 none */
 static const char *record_path, *replay_path, *check_path, *watch_list_path, *watch_trace_path;
 static uint32_t expect_frame;
 static char title_sha[65];
+
+static int add_slow(const char *val) {
+    if (slow_count == (int)(sizeof slow_frames / sizeof slow_frames[0])) {
+        fprintf(stderr, "tape: too many slow-substep frames\n"); return -1;
+    }
+    slow_frames[slow_count++] = (uint32_t)strtoul(val, NULL, 0);
+    return 0;
+}
 
 /* ---- the tape --------------------------------------------------------------
  * Text, one record per run of identical frames:
@@ -147,6 +164,7 @@ static int load_tape(const char *path) {
             else if (!strcmp(key, "fpu-round")) { if (!fpu_zero_set) fpu_zero = !strcmp(val, "zero"); }
             else if (!strcmp(key, "fmac")) { if (!fmac_set) fmac_fused = !strcmp(val, "fused"); }
             else if (!strcmp(key, "stick-gate")) { if (!round_gate_set) round_gate = !strcmp(val, "round"); }
+            else if (!strcmp(key, "slow-substep")) { if (add_slow(val) != 0) { fclose(f); return -1; } }
             else if (!strcmp(key, "aspect")) tape_aspect = strcmp(val, "4:3") != 0 && strcmp(val, "4x3") != 0;
             else if (!strcmp(key, "end")) {
                 uint32_t e = (uint32_t)strtoul(val, NULL, 0) + 1;
@@ -312,6 +330,7 @@ int input_tape_arg(int argc, char **argv, int *i) {
     else if (!strcmp(a, "--sound-timing")) { sound_timing = strcmp(argv[++*i], "none") != 0; sound_timing_set = 1; }
     else if (!strcmp(a, "--fpu-round")) { fpu_zero = !strcmp(argv[++*i], "zero"); fpu_zero_set = 1; }
     else if (!strcmp(a, "--fmac")) { fmac_fused = !strcmp(argv[++*i], "fused"); fmac_set = 1; }
+    else if (!strcmp(a, "--slow-substep")) { if (add_slow(argv[++*i]) != 0) exit(2); }
     else if (!strcmp(a, "--stick-gate")) { round_gate = !strcmp(argv[++*i], "round"); round_gate_set = 1; }
     else if (!strcmp(a, "--record")) { record_path = argv[++*i]; strict = 1; }
     else if (!strcmp(a, "--replay")) { replay_path = argv[++*i]; strict = 1; }
@@ -444,3 +463,4 @@ int input_tape_fpu_zero(void) { return fpu_zero; }
 int input_tape_fmac_fused(void) { return fmac_fused >= 0 ? fmac_fused : fpu_zero != 0; }
 int input_tape_round_gate(void) { return round_gate != 0; }
 int input_tape_aspect_wide(void) { return tape_aspect; }
+const uint32_t *input_tape_slow_frames(int *count) { *count = slow_count; return slow_frames; }

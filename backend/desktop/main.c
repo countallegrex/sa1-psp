@@ -587,6 +587,8 @@ int main(int argc, char **argv) {
     if (!aspect_given && input_tape_aspect_wide() >= 0) hle_aspect_wide = input_tape_aspect_wide();
     hle_pad_round_gate = input_tape_round_gate();
     if (hle_pad_round_gate) sa1_log("pad: round stick gate, as the controller");
+    hle_tmu_slow_frames = input_tape_slow_frames(&hle_tmu_slow_count);
+    for (int i = 0; i < hle_tmu_slow_count; i++) sa1_log("tmu: frame %u runs two vblanks late (slow-substep)", hle_tmu_slow_frames[i]);
     plat_set_data_root(root);
     if (headless || no_audio) audio_sdl_enabled = 0;
     if (input_tape_sound_timing() >= 0) snd_guest_timing = input_tape_sound_timing();

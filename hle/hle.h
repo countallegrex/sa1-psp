@@ -84,6 +84,15 @@ extern hle_pad hle_pad_state;
  * (-91,-91).  0 = the square range every tape before 2026-10-22 replays
  * with (desktop: input_tape.c "stick-gate").  Set before the first frame. */
 extern int hle_pad_round_gate;
+/* Frames (hle_frame_count) in which TMU1 reads (hle/shinobi/hw.c) run two
+ * vblanks late.  The game's catch-up loop (0x8C04EA4A) adds a third logic
+ * sub-step to a game frame when TMU1 shows >= 1.85 vblanks after the
+ * second; on the console that happens after a long GD-ROM load, which our
+ * reads (complete at once) never cause.  Oracle tapes name those frames
+ * (desktop: input_tape.c "slow-substep"); NULL / 0 = none, as live play.
+ * Set before the first frame. */
+extern const uint32_t *hle_tmu_slow_frames;
+extern int hle_tmu_slow_count;
 /* 1 = hor+ widescreen (the clip rectangle lets the game draw 853x480 of its
  * screen space), 0 = 4:3.  Set before hle_init; the backend gets the same
  * value through draw_set_aspect. */

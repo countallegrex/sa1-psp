@@ -9,7 +9,9 @@
  *    TCNT1, 0xFFD8001C TCR1): the game's profiling timer (0x8C06C0C0-
  *    0x8C06C240).  TCNT1 counts down from the value written at the rate the
  *    TCR1 prescaler selects (peripheral clock 50 MHz / 4 by default);
- *    reads return that count derived from the host clock.
+ *    reads return that count derived from the host clock (virtual time,
+ *    so a long console frame such as a GD-ROM load never shows unless a
+ *    tape asks for it: hle_tmu_slow_frames).
  *  - PDTRA (0xFF800030): bits 8-9 are the video cable pins.  3 = composite
  *    (NTSC path), 0 would be VGA.
  *  - G2 FIFO status (0xA05F688C): 0 = idle, which is what every poll waits
@@ -34,9 +36,21 @@ static uint32_t tmu_rate_hz(void) {
     return 50000000u / div[tmu_tcr1 & 7];
 }
 
+/* Frames whose TMU1 reads run two vblanks late (hle.h hle_tmu_slow_frames). */
+const uint32_t *hle_tmu_slow_frames;
+int hle_tmu_slow_count;
+
+static int tmu_slow_now(void) {
+    uint32_t f = hle_frame_count();
+    for (int i = 0; i < hle_tmu_slow_count; i++)
+        if (hle_tmu_slow_frames[i] == f) return 1;
+    return 0;
+}
+
 static uint32_t tmu_tcnt1(void) {
     if (!(tmu_tstr & 2)) return tmu_tcnt1_start;
     uint64_t el = shinobi_time_us() - tmu_tcnt1_t0;
+    if (hle_tmu_slow_count && tmu_slow_now()) el += 33334;   /* two vblanks */
     uint64_t ticks = el * tmu_rate_hz() / 1000000u;
     uint64_t period = (uint64_t)tmu_tcor1 + 1;
     uint64_t start = tmu_tcnt1_start;

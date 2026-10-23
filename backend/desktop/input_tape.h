@@ -36,3 +36,6 @@ int input_tape_round_gate(void);     /* 1: the stick's round gate (hle_pad_round
  * game logic (the clip rectangle the game culls by), so a replay without
  * --aspect takes it. */
 int input_tape_aspect_wide(void);
+/* The frames whose TMU1 reads run late (tape "slow-substep" lines and
+ * --slow-substep): hle_tmu_slow_frames. */
+const uint32_t *input_tape_slow_frames(int *count);

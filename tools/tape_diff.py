@@ -29,6 +29,25 @@ aligned desktop game frame as an "oracle_g" column.
       Replay the output once more and check that it reports no change: a
       different input can move a game-frame boundary.
 
+  tape_diff.py slow TAPE DESKTOP.tsv FLYCAST.tsv -o OUT.tape [--column substeps]
+      TAPE with a "slow-substep F" line for each game frame where the
+      console ran a logic sub-step more than the desktop.  The game's
+      catch-up loop (0x8C04EA4A) adds a third sub-step to a game frame when
+      the profiling timer TMU1 shows >= 1.85 vblanks after the second;
+      on the console a long GD-ROM load does that, the desktop's loads
+      take no time, so the console runs one 1/60 s step ahead from then on
+      (seen as a camera a sub-step ahead, then a route off once the
+      camera-relative stick moves Sonic).  The line makes the desktop's
+      TMU1 reads in vblank F run two vblanks late (hle.h
+      hle_tmu_slow_frames).  Both traces need the sub-step counter
+      0x8C752BEC as a watch column ("8c752bec 4 substeps trace"); a game
+      frame G where console minus desktop grows, and stays grown for the
+      next --persist aligned game frames, gives F = the desktop's last
+      vblank before G.  (Where a vblank falls inside a game frame differs
+      between the runs, so the difference also shows one-frame blips that
+      are no extra step.)  Replay the output and run this again on the
+      new desktop trace: it must report no new frame.
+
   tape_diff.py diff DESKTOP.tsv FLYCAST.tsv [--watch watch.txt]
       Compares the watched values at the first vblank of each game frame
       both runs reached; reports the first divergent game frame (exit 1)
@@ -147,6 +166,36 @@ def cmd_quantize(a):
     return 0
 
 
+def cmd_slow(a):
+    tape = tape_io.read(a.tape)
+    hd, drows = read_tsv(a.desktop)
+    hf, frows = read_tsv(a.flycast)
+    for path, h in ((a.desktop, hd), (a.flycast, hf)):
+        if a.column not in h:
+            sys.exit("%s: no %s column (watch 8c752bec 4 %s trace)" % (path, a.column, a.column))
+    last_vb = {}                   # desktop game frame -> its last vblank
+    for r in drows:
+        last_vb[int(r[COUNTER])] = int(r["frame"])
+    d, f = by_game_frame(drows), by_game_frame(frows)
+    gs = sorted(set(d) & set(f))
+    deltas = [int(f[g][a.column]) - int(d[g][a.column]) for g in gs]
+    prev, added = None, 0
+    for i, (g, delta) in enumerate(zip(gs, deltas)):
+        if (prev is not None and delta > prev and g - 1 in last_vb
+                and len(deltas) > i + a.persist and min(deltas[i:i + a.persist + 1]) >= delta):
+            vb = last_vb[g - 1]
+            if vb not in tape.slow:
+                tape.slow.append(vb)
+                added += 1
+            print("slow: game frame %d: console +%d sub-step(s) -> slow-substep %d%s"
+                  % (g, delta - prev, vb, "" if delta - prev == 1 else " (more than one: check by hand)"),
+                  file=sys.stderr)
+        prev = delta
+    tape_io.write(a.out, tape)
+    print("slow: %d frame(s) added" % added, file=sys.stderr)
+    return 0
+
+
 def cmd_diff(a):
     watches = [w for w in tape_expect.read_watch(a.watch) if w.role != "trace" and w.name != COUNTER]
     hd, rd = read_tsv(a.desktop)
@@ -222,6 +271,14 @@ def main(argv=None):
     q.add_argument("trace", help="desktop --watch-trace of a replay of TAPE")
     q.add_argument("-o", "--out", required=True)
     q.add_argument("--from", dest="start", type=int, default=0, help="leave tape frames before this one")
+    s = sub.add_parser("slow", help="slow-substep lines where the console ran an extra logic sub-step")
+    s.add_argument("tape")
+    s.add_argument("desktop", help="desktop --watch-trace of a replay of TAPE")
+    s.add_argument("flycast", help="oracle trace of the same tape")
+    s.add_argument("-o", "--out", required=True)
+    s.add_argument("--persist", type=int, default=8,
+                   help="aligned game frames the larger difference must last (default 8)")
+    s.add_argument("--column", default="substeps", help="the 0x8C752BEC watch column (default substeps)")
     d = sub.add_parser("diff", help="first divergent game frame")
     d.add_argument("desktop")
     d.add_argument("flycast")
@@ -232,7 +289,7 @@ def main(argv=None):
                    help="a value Flycast has this many game frames earlier or later is a slip, not a divergence "
                         "(default 2; 0 = frame-exact)")
     a = ap.parse_args(argv)
-    return {"gpad": cmd_gpad, "quantize": cmd_quantize}.get(a.cmd, cmd_diff)(a)
+    return {"gpad": cmd_gpad, "quantize": cmd_quantize, "slow": cmd_slow}.get(a.cmd, cmd_diff)(a)
 
 
 if __name__ == "__main__":

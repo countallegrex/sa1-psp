@@ -7,6 +7,7 @@
 A tape is a header (key value lines) and records
   FRAME BUTTONS(hex) STICK_X STICK_Y LTRIG RTRIG [COUNT]
 each covering COUNT frames from FRAME; uncovered frames are a neutral pad.
+"slow-substep F" is the one header key that may repeat (Tape.slow).
 
 Part of sa1-psp (MIT).
 """
@@ -21,6 +22,7 @@ class Tape:
         self.header = {}           # key -> value (strings), in file order
         self.pads = {}             # frame -> (buttons, x, y, lt, rt); neutral frames may be absent
         self.end = 0               # last frame defined
+        self.slow = []             # "slow-substep" frames (tools/tape_diff.py slow)
 
     def pad(self, frame):
         return self.pads.get(frame, NEUTRAL)
@@ -44,6 +46,8 @@ def read(path):
                 for i in range(count):
                     t.pads[frame + i] = (b, x, y, lt, rt)
                 t.end = max(t.end, frame + count - 1)
+            elif p[0] == "slow-substep":
+                t.slow.append(int(p[1], 0))
             elif p[0] == "end":
                 t.end = max(t.end, int(p[1], 0))
             else:
@@ -57,6 +61,7 @@ def encode(t):
     keys = ["sa1psp-tape", "title-sha256", "epoch", "tool"]
     lines = ["%s %s" % (k, t.header[k]) for k in keys if k in t.header]
     lines += ["%s %s" % (k, v) for k, v in t.header.items() if k not in keys]
+    lines += ["slow-substep %d" % f for f in sorted(set(t.slow))]
     lines.append("# FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]")
     frame = 1
     while frame <= t.end:
@@ -80,6 +85,8 @@ def main(argv):
         t = read(argv[1])
         for k, v in t.header.items():
             print("%-14s %s" % (k, v))
+        for f in t.slow:
+            print("%-14s %d" % ("slow-substep", f))
         print("%-14s %d (%.1f s at 60 Hz)" % ("frames", t.end, t.end / 60))
         return 0
     if len(argv) >= 3 and argv[0] == "normalize":

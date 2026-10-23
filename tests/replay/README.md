@@ -150,6 +150,7 @@ fpu-round zero                  # 2026-10-19 and later; absent = nearest
 fmac fused                      # 2026-10-21 and later; absent = follows fpu-round
 stick-gate round                # 2026-10-22 and later; absent = square
 aspect 4:3                      # 2026-10-21 and later; absent = wide
+slow-substep 7530               # oracle tapes only; may repeat
 # FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]
 1 0 0 0 0 0 499
 500 8 0 0 0 0 4
@@ -218,6 +219,20 @@ replays as `square`: `sonic_ec1` and `sonic_to_ec1_start` hold full
 diagonals and were recorded square. `--stick-gate round|square` overrides
 the line; console comparisons of those two tapes need `round`
 (`tools/flycast/run_oracle.py --stick-gate round`).
+
+`slow-substep F` makes the profiling timer TMU1 read two vblanks late in
+guest frame F (`hle/shinobi/hw.c`). The game's catch-up loop (0x8C04EA4A)
+runs a third logic sub-step in a game frame whose second one ends 1.85
+vblanks or more after the timer reload; on the console a long GD-ROM load
+does that, but the desktop's loads take no time, so after one the console
+runs a 1/60 s step ahead. On `sonic_to_ec1_start` at 4:3 the load at game
+frame 3761 lasts 7 vblanks on the console and 3 on the desktop: the
+camera then turns one sub-step earlier, and once Sonic runs, the
+camera-relative stick sends him off the console's route at 3956. With
+`slow-substep 7530` the desktop matches the console exactly through 3962.
+`tools/tape_diff.py slow` derives the lines from a desktop and an oracle
+trace that both watch the sub-step counter 0x8C752BEC. `--record` writes
+none (live play has no such frames); `--slow-substep F` adds one.
 
 The aspect is game logic too. The wide default widens the clip rectangle
 the game's own culling tests (0x8C88F600, `hle/ninja/kamui.c`), and some
