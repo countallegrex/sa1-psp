@@ -58,7 +58,13 @@
 -- Flycast latches the pad one vblank after this script sets it, so each
 -- vblank presents what the desktop had at the next one: in the first vblank
 -- of game frame G the pad of G's last vblank ("G ..." lines), in a later
--- vblank the pad of G+1's first vblank ("first G+1 ..." lines).
+-- vblank the pad of G+1's first vblank ("first G+1 ..." lines).  That is
+-- right while the console runs a game frame's logic in the counter's later
+-- vblank (the rand() seed moves there); when it falls behind and runs the
+-- logic with the counter step instead (the seed stays put in the later
+-- vblank, as in parts of Emerald Coast), the next logic step is still a
+-- vblank away, so a later vblank whose seed has not moved keeps G's pad.
+-- Without an rng_seed watch, the first rule only.
 -- When the watch list has an rng_seed row (the game's rand() state) and the
 -- sync line carries the desktop's seed, the console's seed is set to it at
 -- that sync, and the gap is printed as a count of rand() calls.  Loads let
@@ -82,6 +88,7 @@ local loaded = LOAD_SLOT < 0          -- vblanks before the state is in are not 
 
 local pads, firsts, first_g, last_g = {}, {}, nil, -1
 local cur_g, phase = nil, 0   -- the counter and the vblanks since it changed
+local seed0 = nil             -- the rand() seed at the counter's first vblank
 local watches, counter, modew, rngw = {}, nil, nil, nil
 local syncs, next_sync, offset, aligned, last_mode, unaligned_since = {}, 1, 0, true, nil, 0
 local START_TAP = {8, 0, 0, 0, 0}
@@ -217,11 +224,13 @@ local function on_vblank()
   prev_g = g
   local ag = aligned and g - offset or -1
   last_ag = ag
-  if g == cur_g then phase = phase + 1 else cur_g, phase = g, 0 end
+  local seed = rngw and mem.read32(rngw.addr)
+  if g == cur_g then phase = phase + 1 else cur_g, phase, seed0 = g, 0, seed end
   local p = NEUTRAL
   if aligned then
     if phase == 0 then p = pads[ag] or NEUTRAL
-    else p = firsts[ag + 1] or pads[ag + 1] or pads[ag] or NEUTRAL end
+    elseif not rngw or seed ~= seed0 then p = firsts[ag + 1] or pads[ag + 1] or pads[ag] or NEUTRAL
+    else p = pads[ag] or NEUTRAL end
   end
   local waited = vblank - unaligned_since
   if not aligned and waited >= 120 and waited % 60 < 2 then p = START_TAP end

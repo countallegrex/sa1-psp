@@ -295,8 +295,13 @@ between two vblanks at a mode change (the Emerald Coast entry does on the
 console), and anchoring on the count the vblank shows put the console one
 game frame early. Flycast latches the pad a vblank after the script sets
 it, so each vblank presents the desktop's pad of the next vblank (`gpad`
-writes each game frame's first-vblank pad as `first` lines). With both, the
-scripted route's Sonic matches the console bit for bit into Emerald Coast.
+writes each game frame's first-vblank pad as `first` lines). That holds
+while the console runs a game frame's logic in the counter's later vblank,
+which changes the rand() seed there; when the console falls behind and runs
+it together with the counter step (the seed then stays put in the later
+vblank), the next logic step is still a vblank away and takes the pad of
+the frame's last vblank instead. With both, the scripted route's Sonic
+matches the console bit for bit into Emerald Coast.
 Library states saved before this rule carry the old offset: rebuild a
 tape's library (`oracle_states.py build`) before trusting `--from-state`
 past a shifted anchor. In a mode the desktop never
