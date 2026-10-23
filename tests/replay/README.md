@@ -302,6 +302,16 @@ it together with the counter step (the seed then stays put in the later
 vblank), the next logic step is still a vblank away and takes the pad of
 the frame's last vblank instead. With both, the scripted route's Sonic
 matches the console bit for bit into Emerald Coast.
+One case no pad rule can cover: the adventure field runs two logic steps
+per game frame, each reading the pad after one vblank of the frame's wait
+(0x8C0517F6), and a console that runs behind does both in one vblank
+period, so both read the same latched pad. A tape whose pad changes
+between a frame's two vblanks then reaches the console one logic step
+off. For exact comparisons, `tools/tape_diff.py quantize TAPE TRACE -o
+OUT` moves every pad change to the first vblank of its game frame
+(replay the output and quantize again to check that it is stable). On the
+Emerald Coast splice route this took the exact match (within 1 ulp, same
+rand() count) from game frame 3002 to the end of the run, 3300.
 Library states saved before this rule carry the old offset: rebuild a
 tape's library (`oracle_states.py build`) before trusting `--from-state`
 past a shifted anchor. In a mode the desktop never

@@ -18,6 +18,17 @@ aligned desktop game frame as an "oracle_g" column.
       and feeds Flycast that game frame's pad).  DESKTOP.tsv is the
       desktop replay's --watch-trace.
 
+  tape_diff.py quantize TAPE DESKTOP.tsv -o OUT.tape [--from FRAME]
+      TAPE with every vblank given the pad of the first vblank of its game
+      frame (by DESKTOP.tsv, a --watch-trace of TAPE), so the pad changes
+      only where a game frame starts.  The adventure field runs two logic
+      steps per game frame, each reading the pad after one vblank of the
+      frame's wait (0x8C0517F6); when the console runs behind it does both
+      in one vblank period, so both read the same latched pad and a pad
+      change between the two cannot reach it as it reached the desktop.
+      Replay the output once more and check that it reports no change: a
+      different input can move a game-frame boundary.
+
   tape_diff.py diff DESKTOP.tsv FLYCAST.tsv [--watch watch.txt]
       Compares the watched values at the first vblank of each game frame
       both runs reached; reports the first divergent game frame (exit 1)
@@ -120,6 +131,22 @@ def cmd_gpad(a):
     return 0
 
 
+def cmd_quantize(a):
+    tape = tape_io.read(a.tape)
+    _, rows = read_tsv(a.trace)
+    first, changed = {}, 0
+    for r in rows:
+        f, g = int(r["frame"]), int(r[COUNTER])
+        if g not in first:
+            first[g] = f
+        elif f >= a.start and tape.pad(f) != tape.pad(first[g]):
+            tape.pads[f] = tape.pad(first[g])
+            changed += 1
+    tape_io.write(a.out, tape)
+    print("quantize: %d vblanks changed" % changed, file=sys.stderr)
+    return 0
+
+
 def cmd_diff(a):
     watches = [w for w in tape_expect.read_watch(a.watch) if w.role != "trace" and w.name != COUNTER]
     hd, rd = read_tsv(a.desktop)
@@ -190,6 +217,11 @@ def main(argv=None):
     g.add_argument("tape")
     g.add_argument("trace", help="desktop --watch-trace of a replay of TAPE")
     g.add_argument("-o", "--out")
+    q = sub.add_parser("quantize", help="pad changes moved to the start of their game frame")
+    q.add_argument("tape")
+    q.add_argument("trace", help="desktop --watch-trace of a replay of TAPE")
+    q.add_argument("-o", "--out", required=True)
+    q.add_argument("--from", dest="start", type=int, default=0, help="leave tape frames before this one")
     d = sub.add_parser("diff", help="first divergent game frame")
     d.add_argument("desktop")
     d.add_argument("flycast")
@@ -200,7 +232,7 @@ def main(argv=None):
                    help="a value Flycast has this many game frames earlier or later is a slip, not a divergence "
                         "(default 2; 0 = frame-exact)")
     a = ap.parse_args(argv)
-    return cmd_gpad(a) if a.cmd == "gpad" else cmd_diff(a)
+    return {"gpad": cmd_gpad, "quantize": cmd_quantize}.get(a.cmd, cmd_diff)(a)
 
 
 if __name__ == "__main__":
