@@ -24,9 +24,12 @@
 
 /* Console calibration (docs/m3-audio-report.md section 6: our stems
  * fitted against Flycast captures of the same game frames): music 0.6 dB
- * lower.  Voices matched; tones follow the driver's level law (tone_att)
- * and need no trim. */
+ * lower, effects 0.7 dB higher, and ADPCM tones a further 4.2 dB higher
+ * (three ADPCM effects measured 4.2-4.9 dB low against 0.7 dB for a PCM
+ * one; the decode is the same, the cause is open).  Voices matched. */
 #define TRIM_MUSIC_ATT ATT_DB(0.6)
+#define TRIM_FX_GAIN ATT_DB(0.7)
+#define TRIM_ADPCM_GAIN ATT_DB(4.2)
 
 enum { EG_OFF = 0, EG_ATTACK, EG_DECAY1, EG_DECAY2, EG_RELEASE };
 enum { FMT_PCM16 = 0, FMT_PCM8 = 1, FMT_ADPCM = 2 };
@@ -45,24 +48,18 @@ typedef struct voice {
     int32_t ad_ls, ad_lq;           /* ADPCM state saved at the loop start */
     uint32_t ad_next;               /* index of the next sample the ADPCM decoder produces */
     uint8_t ad_saved;
-    uint8_t lfo_state;              /* LFO phase, 0..255 (fills the padding after ad_saved) */
-    uint16_t lfo_reg;               /* the split's LFO word (AICA +1C), depths before CC 1 */
     int32_t eg;                     /* attenuation, Q16 units of ATT (0 loudest) */
     int32_t eg_ar, eg_d1, eg_d2, eg_rr, eg_dl;   /* per-sample steps (Q16 att units), DL in att units */
-    int32_t att_static;             /* direct send level (both sides) */
+    int32_t att_static;             /* TL + direct send level + base pan (both sides) */
     int32_t base_cents;             /* key - base key + fine tune */
     uint8_t bend_range;             /* semitones */
-    uint8_t span;                   /* the split's own pan on the CC 10 scale (DIPAN x 4) */
-    uint8_t tl;                     /* the split's TL */
-    uint8_t vlev;                   /* velocity curve value (0..255) */
-    uint16_t delay;                 /* output samples before the voice starts (layer delay, <= 11220) */
-    uint16_t lfo_count;             /* samples until the LFO phase steps */
+    uint32_t delay;                 /* output samples before the voice starts (layer delay) */
     uint16_t pitch_reg;             /* the split's OCT/FNS word */
     uint8_t bank, prog;             /* what started it (the solo debug filter) */
 } voice;
 
 typedef struct chan {
-    uint8_t bank, prog, vol, pan, expr, mod;   /* pan bit 7: no CC 10 yet, the split's own pan */
+    uint8_t bank, prog, vol, pan, expr, mod;
     int16_t bend;                   /* -8192 .. 8191 */
 } chan;
 
@@ -87,28 +84,31 @@ struct snd_core {
     voice v[SND_VOICES];
     chan ch[SND_PORTS][16];
     stream st[SND_STREAMS];
-    int32_t spare[4];               /* was a group level; keeps the save-state size */
+    int32_t port_att[4];
     uint32_t age;
 };
 
 /* Tables, built once (snd_core_init; identical on every run). */
 static int32_t gain_q15[ATT_MAX + 1];   /* Q15, 32768 = unity */
-static uint16_t pan_att[128];       /* attenuation of the far side for pan 0..127 (DIPAN steps) */
+static uint16_t vol_att[128];       /* MIDI volume / expression: 40 log10(v/127) dB */
+static uint16_t pan_att[128];       /* attenuation of the far side for CC 10 */
 static uint32_t cents_q16[1200];    /* 2^(c/1200), Q16 */
 static int32_t eg_rate_step[64];    /* Q16 att units per sample for a full-range decay at effective rate r */
-static uint16_t plfo_q10[8][256];   /* pitch LFO factor per PLFOS and wave value, Q10 */
 static int tables_ready;
 
 static void build_tables(void) {
     if (tables_ready) return;
     for (int i = 0; i <= ATT_MAX; i++) gain_q15[i] = (int32_t)(32768.0 * pow(10.0, -(i * 0.09375) / 20.0) + 0.5);
     gain_q15[ATT_MAX] = 0;
-    /* The driver (MASARU.DRV, key-on and CC 10) sets DIPAN from pan >> 2:
-     * below 16 the right side drops by 15 - q steps, from 16 the left by
-     * q - 16; a step is 3 dB and step 15 mutes (AICA send levels). */
+    for (int v = 0; v < 128; v++) {
+        double db = v ? -40.0 * log10(v / 127.0) : 96.0;
+        int a = ATT_DB(db); vol_att[v] = (uint16_t)(a > ATT_MAX ? ATT_MAX : a);
+    }
     for (int p = 0; p < 128; p++) {
-        int q = p >> 2, d = q < 16 ? 15 - q : q - 16;
-        pan_att[p] = (uint16_t)(d >= 15 ? ATT_MAX : d * 32);
+        int d = p > 64 ? p - 64 : 64 - p;           /* distance from the centre */
+        double g = 1.0 - d / 64.0;
+        double db = g > 0.0 ? -20.0 * log10(g) : 96.0;
+        int a = ATT_DB(db); pan_att[p] = (uint16_t)(a > ATT_MAX ? ATT_MAX : a);
     }
     for (int c = 0; c < 1200; c++) cents_q16[c] = (uint32_t)(65536.0 * pow(2.0, c / 1200.0) + 0.5);
     /* Envelope rates: a full 96 dB decay takes about 118 s at effective
@@ -120,12 +120,6 @@ static void build_tables(void) {
         eg_rate_step[r] = (int32_t)(ATT_MAX * 65536.0 / (t * SND_RATE) + 0.5);
         if (eg_rate_step[r] < 1) eg_rate_step[r] = 1;
     }
-    /* Pitch LFO depth per PLFOS, cents either way (Flycast's table: wave
-     * value 128 is the note's pitch, 0 and 255 the ends). */
-    static const double plfos_cents[8] = { 0, 3.61, 7.22, 14.44, 28.88, 57.75, 115.5, 231 };
-    for (int d = 0; d < 8; d++)
-        for (int i = 0; i < 256; i++)
-            plfo_q10[d][i] = (uint16_t)(1024.0 * pow(2.0, plfos_cents[d] * (i - 128) / 128.0 / 1200.0));
     tables_ready = 1;
 }
 
@@ -183,45 +177,6 @@ static inline int64_t tone_next(const voice *v, uint32_t i) {
 typedef struct split_ref { uint32_t sp, bank_base; uint8_t bend; uint8_t delay; } split_ref;
 #define MAX_SPLITS 8
 
-/* The bank's level curve (header +0x18, 128 bytes, 127 -> 127), 0 if none. */
-static uint32_t bank_curve(const snd_core *k, uint32_t bank) {
-    if (bank >= 16 || !k->sh->bank_size[bank]) return 0;
-    uint32_t B = k->sh->bank_addr[bank], t = ram32(k, B + 0x18);
-    return t && t < 0x10000 ? B + t : 0;
-}
-
-/* Curve n of the bank (the count is at header +0x1C; out of range -> 0),
- * and a value read through a curve (none: v itself). */
-static uint32_t bank_curve_n(const snd_core *k, uint32_t bank, uint32_t n) {
-    uint32_t c = bank_curve(k, bank);
-    if (!c) return 0;
-    return n < ram32(k, k->sh->bank_addr[bank] + 0x1C) ? c + 128 * n : c;
-}
-static inline uint32_t curve_at(const snd_core *k, uint32_t curve, uint32_t v) {
-    return curve ? ram8(k, curve + (v & 127)) : v & 127;
-}
-
-/* The TL the driver (MASARU.DRV key-on and CC 7) writes, as attenuation:
- * the volume and expression curve values combine to c = (cv+1)(ce+1)/128 - 1,
- * then level = ((curve_vel[vel]+1)(c+1)(256-TL) - 1) >> 14 and TL = 255 -
- * level.  The volume table is the driver's own, which is bank curve 0 but
- * for entries 1-4 (inaudible); the velocity curve is the split's (byte 42).
- * Near TL 0 this is TL + 2 x (127 - curve[v]), as Flycast's registers
- * showed against the game's CC 7 over the Chaos 0 fades and the Emerald
- * Coast ring.  A velocity curve may hold 255 (curve 3 at velocity 127, the
- * splits of several positional effects): the driver multiplies in 32 bits
- * and keeps the level's low 8 bits, so 256 x (c+1) x 256 wraps (vol 116:
- * level 499 -> 243, TL 12, as the console's registers show for 1c74f2).
- * Volume and expression both at curve 0 make the driver's c wrap to 255
- * (full level); we keep that silent. */
-static inline int32_t tone_att(const snd_core *k, const voice *v, const chan *ch) {
-    uint32_t curve = bank_curve(k, v->bank);
-    int32_t c = (int32_t)(((curve_at(k, curve, ch->vol) + 1) * (curve_at(k, curve, ch->expr) + 1)) >> 7) - 1;
-    if (c < 0) c = 0;
-    uint32_t level = (((uint32_t)v->vlev + 1) * (uint32_t)(c + 1) * (256u - v->tl) - 1) >> 14;
-    return (int32_t)(255 - (level & 255)) * 4;
-}
-
 /* The splits a note-on starts: in every layer, each split whose key range
  * holds the key (a layer may stack two tones on one range).  Returns the
  * count, at most MAX_SPLITS. */
@@ -251,29 +206,6 @@ static int find_splits(snd_core *k, uint32_t bank, uint32_t prog, uint32_t key, 
     }
     return n;
 }
-
-/* ---- the LFO (AICA +1C: RE, LFOF, PLFOWS, PLFOS, ALFOWS, ALFOS) ---------- */
-/* Samples per LFO phase step; 256 steps make a period (172 Hz at LFOF 31,
- * 0.17 Hz at 0).  With both waves noise the phase steps every sample. */
-static uint32_t lfo_period(uint32_t reg) {
-    if (((reg >> 8) & 3) == 3 && ((reg >> 3) & 3) == 3) return 1;
-    uint32_t n = (reg >> 10) & 31, s = n >> 2, m = ~n & 3, g = 128u >> s;
-    return ((g - 1) << 2) + g * (m + 1);
-}
-
-/* The wave at phase st, 0..255: saw, square, triangle, noise (Flycast's). */
-static uint32_t lfo_wave(uint32_t type, uint32_t st) {
-    switch (type) {
-    case 0: return st;
-    case 1: return st & 0x80 ? 255 : 0;
-    case 2: return ((st & 0x7f) ^ (st & 0x80 ? 0x7f : 0)) << 1;
-    default: return (st * 0x41c64e6du + 0x3039u) & 0xff;
-    }
-}
-
-/* The depth the driver writes for the channel's CC 1 (key-on, MASARU.DRV
- * 0x0d50, and CC 1, 0x1a60, alike): CC 1 127 keeps the split's, 0 clears it. */
-static inline uint32_t lfo_depth(uint32_t d, uint32_t mod) { return (((mod + 1) * (d + 1) - 1) >> 7) & 7; }
 
 /* ---- voices ---------------------------------------------------------------- */
 static voice *alloc_voice(snd_core *k) {
@@ -334,20 +266,21 @@ static void note_on(snd_core *k, int port, int c, int key, int vel) {
         v->eg = v->eg_ar < 0 ? 0 : ATT_MAX << 16;
         v->eg_stage = v->eg_ar < 0 ? EG_DECAY1 : EG_ATTACK;
         uint32_t send = ram16(k, p + 18), tlq = ram16(k, p + 20);
-        uint32_t disdl = (send >> 8) & 15, tl = tlq >> 8, dipan = send & 31;
-        /* the split's DIPAN on the pan scale, as the driver converts it */
-        v->span = (uint8_t)(dipan == 0x10 ? 64 : dipan & 0x10 ? (15 - (dipan & 15)) * 4 : (dipan + 16) * 4);
-        v->att_static = disdl ? (int32_t)(15 - disdl) * 32 : ATT_MAX;
-        v->tl = (uint8_t)tl;
-        v->vlev = (uint8_t)curve_at(k, bank_curve_n(k, ch->bank, ram8(k, p + 42)), (uint32_t)vel);
+        uint32_t disdl = (send >> 8) & 15, tl = tlq >> 8;
+        int32_t att = (int32_t)tl * 4 + (disdl ? (int32_t)(15 - disdl) * 32 : ATT_MAX);
+        /* the bank's velocity curve (header +0x18; 127 -> 127), then the
+         * same 40 log10 law as the channel volume */
+        uint32_t vtab = ram32(k, sp[l].bank_base + 0x18);
+        int32_t velc = vtab && vtab < 0x10000 ? (int32_t)ram8(k, sp[l].bank_base + vtab + (uint32_t)(vel & 127)) : vel;
+        att += vol_att[velc & 127];
+        att -= TRIM_FX_GAIN + (v->fmt == FMT_ADPCM ? TRIM_ADPCM_GAIN : 0);
+        v->att_static = att;
         int32_t base = (int32_t)ram8(k, p + 38), fine = (int8_t)ram8(k, p + 39);
         v->base_cents = (key - base) * 100 + fine;
         v->pitch_reg = (uint16_t)ram16(k, p + 12);
-        v->lfo_reg = (uint16_t)ram16(k, p + 14);
-        v->lfo_count = (uint16_t)lfo_period(v->lfo_reg);   /* phase 0, as after LFORE */
         v->step = pitch_step(v->base_cents, v->pitch_reg);
         v->bend_range = sp[l].bend ? sp[l].bend : 2;
-        v->delay = (uint16_t)(sp[l].delay * (SND_RATE / 1000));
+        v->delay = (uint32_t)sp[l].delay * (SND_RATE / 1000);
         v->age = ++k->age;
         v->pos = 0; v->frac = 0; v->ad_next = 0; v->ad_q = 127;
         v->cur = tone_sample(k, v, 0);
@@ -364,7 +297,7 @@ static void note_off(snd_core *k, int port, int c, int key) {
     }
 }
 
-static void chan_reset(chan *ch) { ch->vol = 100; ch->pan = 0xC0; ch->expr = 127; ch->mod = 0; ch->bend = 0; }
+static void chan_reset(chan *ch) { ch->vol = 100; ch->pan = 64; ch->expr = 127; ch->mod = 0; ch->bend = 0; }
 
 static void midi(snd_core *k, int port, int st, int d1, int d2) {
     if (port < 0 || port >= SND_PORTS) return;
@@ -413,21 +346,11 @@ static int eg_advance(voice *v, int32_t n) {
  * product fits in 32 bits (the PSP has no cheap 64-bit multiply). */
 static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
     chan *ch = &k->ch[v->port][v->ch];
-    int32_t att = v->att_static + tone_att(k, v, ch);
-    int pan = ch->pan & 0x80 ? v->span : ch->pan;
-    int32_t att_l = att + (pan >= 64 ? pan_att[pan] : 0);
-    int32_t att_r = att + (pan < 64 ? pan_att[pan] : 0);
+    int32_t att = v->att_static + vol_att[ch->vol] + vol_att[ch->expr] + k->port_att[v->port & 3];
+    int32_t att_l = att + (ch->pan > 64 ? pan_att[ch->pan] : 0);
+    int32_t att_r = att + (ch->pan < 64 ? pan_att[ch->pan] : 0);
     uint32_t step = v->step;
     if (ch->bend) step = pitch_step(v->base_cents + ch->bend * v->bend_range * 100 / 8192, v->pitch_reg);
-    /* LFO: the amplitude wave adds up to 255 >> (8 - ALFOS) TL steps
-     * (0.375 dB), the pitch wave scales the step; both change only when
-     * the phase steps, which can be every sample. */
-    uint32_t reg = v->lfo_reg, lfo_n = reg ? lfo_period(reg) : 0;
-    uint32_t pd = lfo_depth((reg >> 5) & 7, ch->mod), ad = lfo_depth(reg & 7, ch->mod);
-    uint32_t pw = (reg >> 8) & 3, aw = (reg >> 3) & 3;
-    if (lfo_n && (v->lfo_count == 0 || v->lfo_count > lfo_n)) v->lfo_count = (uint16_t)lfo_n;
-    int32_t alfo = ad ? (int32_t)(lfo_wave(aw, v->lfo_state) >> (8 - ad)) * 4 : 0;
-    uint32_t vstep = pd ? (uint32_t)(((uint64_t)step * plfo_q10[pd][lfo_wave(pw, v->lfo_state)]) >> 10) : step;
     uint32_t i = 0;
     if (v->delay) {
         uint32_t d = v->delay < n ? v->delay : n;
@@ -437,21 +360,12 @@ static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
         uint32_t m = n - i < EG_CHUNK ? n - i : EG_CHUNK;
         if (!eg_advance(v, (int32_t)m)) { v->on = 0; return; }
         int32_t e = v->eg >> 16;
-        int32_t gl = gain_q15[clamp_att(att_l + e + alfo)], gr = gain_q15[clamp_att(att_r + e + alfo)];
+        int32_t gl = gain_q15[clamp_att(att_l + e)], gr = gain_q15[clamp_att(att_r + e)];
         for (uint32_t j = 0; j < m; j++, i++) {
             int32_t s = v->cur + (((v->nxt - v->cur) * (int32_t)(v->frac >> 1)) >> 15);
             acc[2 * i] += (s * gl) >> 15;
             acc[2 * i + 1] += (s * gr) >> 15;
-            v->frac += vstep;
-            if (lfo_n && --v->lfo_count == 0) {
-                v->lfo_count = (uint16_t)lfo_n;
-                v->lfo_state++;
-                if (ad) {
-                    alfo = (int32_t)(lfo_wave(aw, v->lfo_state) >> (8 - ad)) * 4;
-                    gl = gain_q15[clamp_att(att_l + e + alfo)]; gr = gain_q15[clamp_att(att_r + e + alfo)];
-                }
-                if (pd) vstep = (uint32_t)(((uint64_t)step * plfo_q10[pd][lfo_wave(pw, v->lfo_state)]) >> 10);
-            }
+            v->frac += step;
             while (v->frac >= 0x10000u) {
                 v->frac -= 0x10000u;
                 int64_t nx = tone_next(v, v->pos);
@@ -562,6 +476,7 @@ static void run_commands(snd_core *k) {
             for (int i = 0; i < SND_VOICES; i++) k->v[i].on = 0;
             for (int p = 0; p < SND_PORTS; p++) for (int i = 0; i < 16; i++) { chan_reset(&k->ch[p][i]); k->ch[p][i].bank = 0; k->ch[p][i].prog = 0; }
             break;
+        case SND_CMD_PORT_VOL: if (c.a < 4) k->port_att[c.a] = c.x >= 0 ? 0 : ATT_DB(-c.x / 8.0); break;
         case SND_CMD_STREAM_START: if (c.a < SND_STREAMS) stream_start(k, c.a, (uint32_t)c.x, (uint32_t)c.y); break;
         case SND_CMD_STREAM_STOP:
             if (c.a < SND_STREAMS) {

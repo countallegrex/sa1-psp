@@ -854,10 +854,9 @@ static void apply_blend_depth(const draw_state *s) {
         sceGuBlendFunc(GU_ADD, sf, df, sfix, dfix);
     }
     sceGuDepthFunc((gu_debug & 8) && s->layer == DRAW_LAYER_2D ? GU_ALWAYS : depth_func(s->depth_func));
-    /* depth_write is the game's, except for translucent 3D strips (none) and
-     * translucent 2D strips at either end of the buffer (rec_depth_write) */
-    int write = s->depth_write && !(s->translucent && s->layer != DRAW_LAYER_2D);
-    sceGuDepthMask(write ? GU_FALSE : GU_TRUE);     /* GU_TRUE masks (disables) the write */
+    /* depth_write is the game's, except for translucent 2D strips at either
+     * end of the buffer (rec_depth_write) */
+    sceGuDepthMask(s->depth_write ? GU_FALSE : GU_TRUE);     /* GU_TRUE masks (disables) the write */
     if (s->alpha_test) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GEQUAL, 0x80, 0xFF); }
     else sceGuDisable(GU_ALPHA_TEST);
     if (s->texture && s->texture < TEX_MAX && texs[s->texture].mem) sceGuEnable(GU_TEXTURE_2D);
@@ -1351,15 +1350,9 @@ static void strip_split(const draw_vertex *v, int n, int guard) {
  * z ~1400 there, behind it) showed through as a blue wedge over the roof
  * (2026-10-19).  The 2D depth is 1/max(1, -priority) (draw2d.c), so the
  * ends are the priorities beyond -10000 and the HUD's 1.  3D translucent
- * strips write no depth (apply_blend_depth), as on the desktop (563a78e):
- * the console sorts the translucent list per pixel, so one never hides
- * another.  With writes, overlapping headlight pools in Emerald Coast cut
- * each other, and against the Flycast oracle the character select's Sonic
- * (largely translucent) matches the no-write picture, not the written one
- * (MAE 22 vs 63 on the pixels where they differ).  694b9e8 had them off
- * too and Sonic's back showed through his front on the console, but the
- * strips were then sorted by their mean 1/w; they are now sorted by their
- * farthest vertex (143d87a), as Flycast sorts.
+ * strips always keep their writes: the characters are largely in the
+ * translucent list and need them for their own front and back (with them
+ * off, Sonic's back showed through his front, the maintainer's run of 694b9e8).
  * The state recorded for the strip carries the write it gets. */
 #define UI_FAR_W 1e-4f
 static void rec_depth_write(const draw_vertex *v) {

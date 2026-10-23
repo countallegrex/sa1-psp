@@ -52,7 +52,7 @@ reaches the rest of the ADX API. Calls over the 36,478 frames:
 | `0x8C6442F2` | 34 | ADXT_Destroy | real |
 | `0x8C6434E0`, `0x8C643624`, `0x8C6435BC` | 29 each | sdMemBlkCreate / SetPrm / Destroy | real |
 | `0x8C643970` | 28 | sdMultiUnitDownload | real: units into the sound-RAM image |
-| `0x8C643754` | 28 | sdSysSetVolume | no-op: driver cmd 0x83 sets the DSP output mixer (EFSDL/EFPAN), no DSP here |
+| `0x8C643754` | 28 | sdSysSetVolume | real (unit taken as 1/8 dB) |
 | `0x8C644968` | 20 | ADXT_StartFname | real |
 | `0x8C65C25C` | 18 | ADXF file start | real: records the partition's file name; still answers -1 (below) |
 | `0x8C64489C` | 18 | ADXT_EntryErrFunc | fixed answer |
@@ -212,32 +212,10 @@ alignment by cross-correlation), before calibration:
 
 Spectral envelopes agree (menu effect 0.9999, voices 0.996, ambience
 0.99), so the ADPCM decode (low nibble first) is right; the ADPCM level
-gap has the same decode step as Flycast's. Its cause was the level law,
-not the format: Flycast's AICA channel registers (TL, DISDL, DIPAN) logged
-over the Chaos 0 cutscene fades and the Emerald Coast rings show the driver
-writing TL = split TL + 2 x (127 - curve[CC 7]), with the bank's 128-byte
-curve (header +0x18), about 57 log10 against our 40 log10 (64 fade samples
-within 1.3 TL steps rms), and no trace of the -6 dB group level the game
-sets on MIDI ports 0 and 1: that call (`sdSysSetVolume`, driver command
-0x83) sets the DSP output mixer (EFSDL/EFPAN), not the tones, and the
-driver's per-port level and pan offsets (commands 5 and 6) are only sent
-by `sdMidiSetVol` for the sequence ports. The ADPCM tones sat at middling volumes on
-ports 0/1, where the two errors added up. `snd_core.c` uses that law now,
-with no group level and no effect trims, only music -0.6 dB. Effects energy
-over the music-subtracted console capture: Emerald Coast rings +0.3 dB (with
-the old trims -2.1), Chaos 0 ambience -1.6 dB (+0.7). Part of the ambience
-residual is a DSP-only voice (DISDL 0) that Flycast, with its DSP off,
-plays from the send level and we leave silent. The driver's code
-(`MASARU.DRV` key-on and CC 7) gives the exact law, which `snd_core.c`
-follows: c = (T[vol]+1)(T[expr]+1)/128 - 1 with the driver's table T (bank
-curve 0 but for entries 1-4), level = ((V[vel]+1)(c+1)(256 - split TL) - 1)
->> 14 with the split's velocity curve V (split byte 42, bank curve n), and
-TL = 255 - level, the level keeping its low 8 bits as in the driver (a
-velocity curve of 255, curve 3 at velocity 127 in several positional
-effects, makes V+1 = 256 and wraps: 0x1c74f2 at CC 7 116 plays at TL 12,
-as on the console, where a byte-wide V+1 had wrapped to 0 and played it
-at TL 0). Near TL 0 that is the fitted law; at higher split TLs it
-attenuates less (TL 40, CC 7 100: 3.5 dB). Timing against the console's game-frame map: rings -6 to -3 ms,
+gap has the same decode step as Flycast's and an open cause (§8). The
+core now applies the measured trims (`snd_core.c`: music -0.6 dB, effects
++0.7 dB, ADPCM tones +4.2 dB more); the route still passes its check with
+them. Timing against the console's game-frame map: rings -6 to -3 ms,
 menu effects +46 ms, music 79-142 ms late on the console (its stream
 start-up), voice lines as in §5.
 
@@ -268,24 +246,9 @@ off` in `sa1psp.ini` removes the cost without changing the game.
 
 ## 8. Open items
 
-- The tone level law (§6) comes from the driver code; the console data
-  only cover split TLs up to 5 and velocity and expression 127.
-- Pan follows the driver (MASARU.DRV key-on and CC 10 code): q = pan >> 2;
-  below 16 the right side drops by 15 - q DIPAN steps, from 16 the left by
-  q - 16, 3 dB a step, step 15 mutes. A channel without a CC 10 since its
-  reset (the driver stores 0xC0) plays each split at the split's own DIPAN.
-  The rings' CC 10 of 34 / 94 give DIPAN 0x17 / 7 (far side 21 dB down), as
-  logged on the console; we lowered it by 5.5 dB before. The per-port pan
-  offset the driver also adds (default 0x80, none) is not modelled.
-- The LFO follows the split's +1C word (split byte 14: LFOF, PLFOWS,
-  PLFOS, ALFOWS, ALFOS) with each depth scaled by the channel's CC 1, as
-  the driver writes it at key-on and on CC 1: d' = ((mod + 1)(d + 1) - 1)
-  >> 7, so CC 1 127 (sent before every sound effect) keeps the split's depth
-  and 0 (the reset value) clears it. Waves, rates and depths are Flycast's
-  (pitch up to +-231 cents at PLFOS 7, amplitude 255 >> (8 - ALFOS) TL steps).
-  MAME's SCSP gives half the amplitude depth from ALFOS 3 up (24 dB at 7 vs
-  Flycast's 47.6); unchecked against the console. The phase starts at 0 on
-  every note (the hardware keeps it per slot unless LFORE is set).
+- ADPCM tones play 4.2-4.9 dB quieter than on the console with the same
+  decode step as Flycast's: calibrated by a fixed trim, cause open
+  (output scaling of ADPCM in the AICA, or something per program).
 - The console's per-line stream start-up (a few frames, §5) and music
   start-up (80-140 ms) are not emulated.
 - DSP reverb (`SFPB`/`SFOB`) not rendered; sequence banks not played (none
