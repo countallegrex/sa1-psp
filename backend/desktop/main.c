@@ -585,6 +585,8 @@ int main(int argc, char **argv) {
     if (load_path && input_tape_recording()) { fprintf(stderr, "--record cannot start from a loaded state (a tape starts at frame 1)\n"); return 2; }
     if (!frame_limit) frame_limit = input_tape_frames();
     if (!aspect_given && input_tape_aspect_wide() >= 0) hle_aspect_wide = input_tape_aspect_wide();
+    hle_pad_round_gate = input_tape_round_gate();
+    if (hle_pad_round_gate) sa1_log("pad: round stick gate, as the controller");
     plat_set_data_root(root);
     if (headless || no_audio) audio_sdl_enabled = 0;
     if (input_tape_sound_timing() >= 0) snd_guest_timing = input_tape_sound_timing();

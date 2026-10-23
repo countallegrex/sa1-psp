@@ -180,6 +180,9 @@ def add_timing_args(ap):
     ap.add_argument("--aspect", choices=("4:3", "wide"),
                     help="desktop aspect (default: the tape's aspect line, absent = wide; 4:3 is the console's: "
                          "wide widens the game's own culling rectangle, which game logic reads)")
+    ap.add_argument("--stick-gate", choices=("round", "square"),
+                    help="desktop stick range (default: the tape's stick-gate line, absent = square; round is the "
+                         "console's: its controller scales a stick vector longer than 128 back onto that circle)")
 
 
 def timing_args(a):
@@ -191,6 +194,8 @@ def timing_args(a):
         out += ["--sound-timing", a.sound_timing]
     if getattr(a, "aspect", None):
         out += ["--aspect", a.aspect]
+    if getattr(a, "stick_gate", None):
+        out += ["--stick-gate", a.stick_gate]
     return out
 
 

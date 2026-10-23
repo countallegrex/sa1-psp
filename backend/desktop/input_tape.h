@@ -31,6 +31,7 @@ int input_tape_sound_timing(void);
  * 0 to nearest (a tape recorded before 2026-10-19), -1 not given. */
 int input_tape_fpu_zero(void);
 int input_tape_fmac_fused(void);     /* 1: fmac rounds once (sh4_rt.h FMAC_F) */
+int input_tape_round_gate(void);     /* 1: the stick's round gate (hle_pad_round_gate) */
 /* The replayed tape's aspect line: 1 wide, 0 4:3, -1 none.  The aspect is
  * game logic (the clip rectangle the game culls by), so a replay without
  * --aspect takes it. */

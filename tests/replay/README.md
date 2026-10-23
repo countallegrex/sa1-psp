@@ -148,6 +148,7 @@ tool sa1psp input_tape 1
 sound-timing real               # M3 and later; absent = none
 fpu-round zero                  # 2026-10-19 and later; absent = nearest
 fmac fused                      # 2026-10-21 and later; absent = follows fpu-round
+stick-gate round                # 2026-10-22 and later; absent = square
 aspect 4:3                      # 2026-10-21 and later; absent = wide
 # FRAME BUTTONS STICK_X STICK_Y LTRIG RTRIG [COUNT]
 1 0 0 0 0 0 499
@@ -201,6 +202,22 @@ PSP build always). One ulp in a rare tie was enough for `sonic_ec1`
 (recorded split, to nearest) to lose its route at frame 24000 on the
 fused form. A tape without the line follows its rounding: `zero` fused,
 `nearest` split. `--fmac fused|split` overrides it.
+
+`stick-gate` is the stick's range. A Dreamcast controller's stick moves in
+a round gate, so the pad never reports a vector longer than 128: Flycast's
+controller scales a longer one back onto that circle, and (-127,-127), a
+full diagonal, reaches the game as (-91,-91). With `round` the pad server
+does the same (`hle/shinobi/pad.c`); with `square` it passes the tape's
+axes as they are, as every run before 2026-10-22 did. On the spliced
+Emerald Coast route (a private tape: `ec_scripted` then the `sonic_ec1`
+run from the beach) the first full diagonal, at game frame 2774, put the
+desktop off the console's path at 2776; with `round` the two agree within
+0.003 units until 2900 and the `rand()` seeds until 2914. `--record`
+writes `round`, a run without a tape uses it, and a tape without the line
+replays as `square`: `sonic_ec1` and `sonic_to_ec1_start` hold full
+diagonals and were recorded square. `--stick-gate round|square` overrides
+the line; console comparisons of those two tapes need `round`
+(`tools/flycast/run_oracle.py --stick-gate round`).
 
 The aspect is game logic too. The wide default widens the clip rectangle
 the game's own culling tests (0x8C88F600, `hle/ninja/kamui.c`), and some

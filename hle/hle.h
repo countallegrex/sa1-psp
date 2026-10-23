@@ -78,6 +78,12 @@ sa1_coro *sa1_plat_coro_by_index(int index);
  * the guest records. */
 typedef struct hle_pad { uint32_t buttons; uint8_t ltrig, rtrig; int8_t x, y; } hle_pad;
 extern hle_pad hle_pad_state;
+/* 1 = the controller's round gate: the pad server scales a stick vector
+ * longer than 128 back onto that circle, as a real controller (and the
+ * Flycast oracle's maple controller) reports it, so (-127,-127) reads
+ * (-91,-91).  0 = the square range every tape before 2026-10-22 replays
+ * with (desktop: input_tape.c "stick-gate").  Set before the first frame. */
+extern int hle_pad_round_gate;
 /* 1 = hor+ widescreen (the clip rectangle lets the game draw 853x480 of its
  * screen space), 0 = 4:3.  Set before hle_init; the backend gets the same
  * value through draw_set_aspect. */

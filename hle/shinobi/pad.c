@@ -15,11 +15,14 @@
 #include "shinobi.h"
 #include "../state.h"
 
+#include <math.h>
+
 #define PAD_TABLE 0x8C88E9A4u
 #define PAD_RECORD 52
 #define PAD_UNITS 24
 
 hle_pad hle_pad_state;      /* written by the backend before each frame */
+int hle_pad_round_gate;
 static uint32_t prev_on;
 
 #ifdef SA1_PAD_PULSE
@@ -76,8 +79,15 @@ void sdk_8c601e2a(sh4_ctx *c) {
     hle_wr32(r + 20, prev_on & ~on);
     hle_wr16(r + 24, hle_pad_state.rtrig);
     hle_wr16(r + 26, hle_pad_state.ltrig);
-    hle_wr16(r + 28, (uint16_t)(int16_t)hle_pad_state.x);
-    hle_wr16(r + 30, (uint16_t)(int16_t)hle_pad_state.y);
+    int sx = hle_pad_state.x, sy = hle_pad_state.y;
+    float m2 = (float)(sx * sx + sy * sy);
+    if (hle_pad_round_gate && m2 > 128.0f * 128.0f) {   /* round gate: back onto radius 128, rounded half away */
+        float k = sqrtf(m2) / 128.0f;
+        sx = (int)lroundf((float)sx / k);
+        sy = (int)lroundf((float)sy / k);
+    }
+    hle_wr16(r + 28, (uint16_t)(int16_t)sx);
+    hle_wr16(r + 30, (uint16_t)(int16_t)sy);
     hle_wr16(r + 32, 0);
     hle_wr16(r + 34, 0);
     hle_wr32(r + 44, prev_on);
