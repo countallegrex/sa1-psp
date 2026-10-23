@@ -24,12 +24,20 @@ static uint32_t wav_frames;
 typedef struct feeder {
     uint8_t on, done;
     char path[128];
+    uint8_t pending;                /* started, the core not told yet (in the padding: states keep their size) */
     uint32_t base, size;
     adx_info info;
     uint32_t q;                     /* play-order index of the next group */
     uint32_t gen;
-    uint64_t start_clock;           /* frame clock when it started */
+    uint64_t start_clock;           /* frame clock when it plays (status 3) */
 } feeder;
+/* The console's ADXT player (Flycast, every voice line of a Station Square
+ * cutscene) shows status 1 for 6 frames after a start and 2 for 2 more
+ * before it plays (3), and 4 over the last 22 frames before it ends (5);
+ * from 3 to 5 is the stream's length. */
+#define STREAM_PREP_FRAMES 8
+#define STREAM_PREP2_FRAMES 2
+#define STREAM_DRAIN_FRAMES 22
 static feeder feed[SND_STREAMS];
 static uint32_t generation;
 /* The frame clock: output samples of every guest frame so far, 735 a frame,
@@ -89,7 +97,7 @@ static uint32_t play_group(const feeder *f, uint32_t q) {
 /* Sends block groups until the ring holds about 1/4 s or is full. */
 static void feed_stream(int si) {
     feeder *f = &feed[si];
-    if (!f->on || f->done) return;
+    if (!f->on || f->done || f->pending) return;
     snd_byte_ring *r = &sh->stream_data[si];
     uint32_t gb = adx_group_bytes(&f->info);
     uint32_t want = (f->info.rate / 4 / ADX_BLOCK_SAMPLES + 2) * gb;   /* a quarter second */
@@ -129,16 +137,25 @@ int snd_stream_start(int si, const char *path, uint32_t off, uint32_t size) {
     }
     (void)size;
     feeder *f = &feed[si];
+    if (f->on && !f->pending) snd_host_cmd(SND_CMD_STREAM_STOP, (uint8_t)si, 0, 0, 0, 0);
     memset(f, 0, sizeof *f);
     snprintf(f->path, sizeof f->path, "%s", path);
     f->base = off; f->size = size; f->info = info; f->on = 1;
     f->gen = ++generation;
-    f->start_clock = clock_samples;
-    sh->stream_info[si] = info;
+    f->start_clock = clock_samples + (uint64_t)STREAM_PREP_FRAMES * SND_FRAME_SAMPLES;
+    f->pending = 1;
+    return 0;
+}
+
+/* The core starts a stream when the guest sees it play. */
+static void begin_stream(int si) {
+    feeder *f = &feed[si];
+    if (!f->on || !f->pending || clock_samples < f->start_clock) return;
+    f->pending = 0;
+    sh->stream_info[si] = f->info;
     uint32_t pos = sh->stream_data[si].head;
     feed_stream(si);
     snd_host_cmd(SND_CMD_STREAM_START, (uint8_t)si, 0, 0, (int32_t)pos, (int32_t)f->gen);
-    return 0;
 }
 
 void snd_stream_stop(int si) {
@@ -151,6 +168,7 @@ void snd_stream_volume(int si, int32_t v) { snd_host_cmd(SND_CMD_STREAM_VOL, (ui
 
 /* Source samples a stream has played by now (loops counted on). */
 static uint64_t stream_pos(const feeder *f) {
+    if (clock_samples < f->start_clock) return 0;
     uint64_t elapsed = clock_samples - f->start_clock;
     return elapsed * f->info.rate / SND_RATE;
 }
@@ -158,7 +176,12 @@ static uint64_t stream_pos(const feeder *f) {
 uint32_t snd_stream_state(int si) {
     if (!sh || si < 0 || si >= SND_STREAMS || !feed[si].on) return 0;
     const feeder *f = &feed[si];
-    if (!f->info.loop && stream_pos(f) >= f->info.samples) return 5;
+    if (clock_samples < f->start_clock)
+        return f->start_clock - clock_samples > (uint64_t)STREAM_PREP2_FRAMES * SND_FRAME_SAMPLES ? 1 : 2;
+    if (f->info.loop) return 3;
+    uint64_t p = stream_pos(f);
+    if (p >= f->info.samples) return 5;
+    if ((f->info.samples - p) * SND_RATE < (uint64_t)STREAM_DRAIN_FRAMES * SND_FRAME_SAMPLES * f->info.rate) return 4;
     return 3;
 }
 
@@ -206,6 +229,7 @@ void snd_host_frame(void) {
         sa1_log("snd: %s", device_ok ? "audio device open (44.1 kHz stereo)" : "no audio device; the core runs silent");
     }
     clock_samples += SND_FRAME_SAMPLES;
+    for (int si = 0; si < SND_STREAMS; si++) begin_stream(si);
     if (!snd_audio_enabled) return;
     for (int si = 0; si < SND_STREAMS; si++) feed_stream(si);
     int16_t out[2 * SND_FRAME_SAMPLES];

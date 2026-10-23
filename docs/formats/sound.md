@@ -100,6 +100,13 @@ So a cutscene line holds the event until the line has been heard: with
 no player (before M3) the status was always 0 and every line ended at
 once.
 
+The status around a start, as the console shows it (Flycast, the voice
+lines and music starts of the first Station Square cutscenes): 1 for 6
+frames, 2 for 2 frames, then 3 while playing, 4 over the last 22 frames,
+then 5; from 3 to 5 is the stream's length. `hle/sound/snd_host.c` keeps
+the same phases and starts the stream in the core when the status turns
+3; without the 8 frames each cutscene line ended early.
+
 ### 2.3 The AFS archives
 
 `"AFS\0"`, u32 entry count (2,044 in both), then per entry u32 offset and
