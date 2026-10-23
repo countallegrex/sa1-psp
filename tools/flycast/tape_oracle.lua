@@ -93,6 +93,12 @@ local watches, counter, modew, rngw = {}, nil, nil, nil
 local syncs, next_sync, offset, aligned, last_mode, unaligned_since = {}, 1, 0, true, nil, 0
 local START_TAP = {8, 0, 0, 0, 0}
 local LOOKAHEAD = 4          -- desktop mode changes the console may skip before a match
+-- After a first match, a desktop mode change more than this many game frames
+-- from the aligned frame is not the one the console is at (it passes through
+-- modes the desktop run skips, e.g. 10 between 8 and 11 at boot, and the
+-- same mode may come much later in the desktop run).
+local SYNC_WINDOW = 600
+local synced = false
 local out, vblank, done = nil, 0, false
 local last_ag = -1
 local prev_g = nil           -- the counter at the previous vblank (the sync anchor)
@@ -209,11 +215,11 @@ local function on_vblank()
     last_mode = mode
     local found = nil
     for k = next_sync, math.min(#syncs, next_sync + LOOKAHEAD) do
-      if syncs[k].mode == mode then found = k; break end
+      if syncs[k].mode == mode and not (synced and aligned and math.abs(syncs[k].g - (g - offset)) > SYNC_WINDOW) then found = k; break end
     end
     if found then
       local at = (prev_g and g > prev_g + 1) and prev_g + 1 or g
-      offset, aligned, next_sync = at - syncs[found].g, true, found + 1
+      offset, aligned, next_sync, synced = at - syncs[found].g, true, found + 1, true
       print(string.format("tape_oracle: vblank %d, game mode %d at game frame %d = desktop %d", vblank, mode, at, syncs[found].g))
       if rngw and syncs[found].seed then rng_resync(syncs[found].seed, syncs[found].g) end
     else
