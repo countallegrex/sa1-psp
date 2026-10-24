@@ -44,24 +44,13 @@
 #define FR0(v) (c->fr[0] = (v))
 #define FARG(i) (c->fr[4 + (i)])
 
-static const float TURN = (float)(6.283185307179586 / 65536.0);
-static inline float ang_rad(uint32_t a) { return (float)(a & 0xFFFFu) * TURN; }
 static inline uint32_t rad_ang(float r) { return (uint32_t)(int32_t)(r * (65536.0f / 6.2831853f)) & 0xFFFFu; }
-/* sinf and cosf of a Ninja angle.  ang_rad keeps 16 bits, so both are a
- * pure function of a & 0xFFFF: a direct-mapped cache (64 KB) hands back
- * the libm values themselves, bit for bit, without newlib's argument
- * reduction (host sinf/cosf were 2.3 % of a PSP-3001 Station Square frame,
- * 2026-10-21). */
-#define SC_BITS 12
-static struct sc_ent { uint32_t key; float s, c, pad; } sc_cache[1u << SC_BITS];
+/* Sine and cosine of a Ninja angle: njSin and njCos are fsca on the
+ * console, so they read the same table (sh4_trig.h), bit for bit; it also
+ * replaced a 64 KB cache of host sinf/cosf (2.3 % of a PSP-3001 Station
+ * Square frame, 2026-10-21). */
 static inline __attribute__((always_inline)) void ang_sc(uint32_t a, float *s, float *c) {
-    a &= 0xFFFFu;
-    struct sc_ent *e = &sc_cache[a & ((1u << SC_BITS) - 1u)];
-    if (__builtin_expect(e->key != (a | 0x10000u), 0)) {
-        float r = ang_rad(a);
-        e->s = sinf(r); e->c = cosf(r); e->key = a | 0x10000u;
-    }
-    *s = e->s; *c = e->c;
+    *s = sh4_sin16(a); *c = sh4_cos16(a);
 }
 
 /* ---- matrix access: XMTRX or guest memory ---------------------------------
@@ -348,10 +337,12 @@ void sdk_8c640528(sh4_ctx *c) {         /* njSetScreen(scr {dist, w, h, cx, cy})
     HLE_ENTER(0x8c640528u, "njSetScreen");
     hle_wrf(G_DIST, hle_rdf(ARG0)); hle_wrf(G_CX, hle_rdf(ARG0 + 12)); hle_wrf(G_CY, hle_rdf(ARG0 + 16));
 }
-void sdk_8c640500(sh4_ctx *c) {         /* njSetPerspective(ang): dist = w / (2 tan(ang/2)) */
+void sdk_8c640500(sh4_ctx *c) {         /* njSetPerspective(ang): dist = w / (t + t), t = njTan(ang >> 1) */
     HLE_ENTER(0x8c640500u, "njSetPerspective");
-    float half = ang_rad(ARG0) * 0.5f, t = tanf(half);
-    if (t != 0.0f) hle_wrf(G_DIST, hle_rdf(G_W) / (2.0f * t));
+    /* as the console: shar r4, njTan (fsca, fdiv), w / (t + t), stored even when t is 0 */
+    uint32_t half = (uint32_t)((int32_t)ARG0 >> 1);
+    float t = sh4_sin16(half) / sh4_cos16(half);
+    hle_wrf(G_DIST, hle_rdf(G_W) / (t + t));
 }
 void sdk_8c64036c(sh4_ctx *c) {         /* njClipZ(near, far) */
     HLE_ENTER(0x8c64036cu, "njClipZ");
@@ -381,6 +372,17 @@ void sdk_8c6403b0(sh4_ctx *c) {         /* njInitCamera(cam) */
     v_store(cam + CAM_BPOS, z); v_store(cam + CAM_BDIR, d); hle_wr32(cam + CAM_BROLL, 0);
 }
 
+/* The console's njSetCamera takes its arc cosines from the game's own acosf
+ * (0x8C10D008, SHC's libm, recompiled): calling it keeps them bit for bit,
+ * where the host acosf differs between the desktop and newlib (PSP). */
+void fn_8c10d008(sh4_ctx *c);
+static float guest_acosf(sh4_ctx *c, float x) {
+    c->fr[4] = x;
+    fn_8c10d008(c);
+    static int logged;
+    if (!logged++) sa1_log("njSetCamera: game acosf(%.9g) = %.9g (host acosf %.9g)", x, c->fr[0], acosf(x));
+    return c->fr[0];
+}
 void sdk_8c640540(sh4_ctx *c) {         /* njSetCamera(cam) */
     HLE_ENTER(0x8c640540u, "njSetCamera");
     uint32_t cam = ARG0;
@@ -392,12 +394,12 @@ void sdk_8c640540(sh4_ctx *c) {         /* njSetCamera(cam) */
     float len = sqrtf(dir[1] * dir[1] + h * h);
     if (len > 0.0f) {
         float ca = h / len; if (ca > 1.0f) ca = 1.0f;
-        uint32_t a = rad_ang(acosf(ca));
+        uint32_t a = rad_ang(guest_acosf(c, ca));
         m_rot_x(v, dir[1] >= 0.0f ? a : (uint32_t)(-(int32_t)a));
     }
     if (h > 0.0f) {
         float cb = dir[2] / h; if (cb > 1.0f) cb = 1.0f; if (cb < -1.0f) cb = -1.0f;
-        uint32_t b = rad_ang(acosf(cb));
+        uint32_t b = rad_ang(guest_acosf(c, cb));
         m_rot_y(v, dir[0] >= 0.0f ? (uint32_t)(-(int32_t)b) : b);
     }
     float np[3] = {-pos[0], -pos[1], -pos[2]};

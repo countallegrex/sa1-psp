@@ -78,7 +78,7 @@ static void draw_sprite(sh4_ctx *c, uint32_t sp, uint32_t n, uint32_t attr, floa
      * bodies 0x8C63F038 / 0x8C63F2D4): left/top = -c * s, right/bottom = (size - c) * s */
     float ex0 = -acx * sx, ey0 = -acy * sy, ex1 = (asx - acx) * sx, ey1 = (asy - acy) * sy;
     float rs = 0.0f, rc = 1.0f;
-    if (attr & 1) { float a = (float)(hle_rd32(sp + 20) & 0xFFFF) * (float)(6.283185307179586 / 65536.0); rs = sinf(a); rc = cosf(a); }
+    if (attr & 1) { uint32_t a = hle_rd32(sp + 20); rs = sh4_sin16(a); rc = sh4_cos16(a); }   /* fsca (sh4_trig.h) */
     if (tlist) hle_wr32(NJ_CUR_TEXLIST, tlist);
     uint32_t mat = (attr & 2) ? NJ_G_CONST_MAT : 0;
     if (kamui_ptr_trace())       /* SA1_KAMUI_DUMP: every sprite of the frame */

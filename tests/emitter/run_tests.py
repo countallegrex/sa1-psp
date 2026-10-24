@@ -992,6 +992,7 @@ def main():
     counts = prog.write_all(out, chunks=1)
     shutil.copy(os.path.join(EMITTER, "runtime", "sh4_rt.h"), out)
     shutil.copy(os.path.join(EMITTER, "runtime", "sh4_rt.c"), out)
+    shutil.copy(os.path.join(EMITTER, "runtime", "sh4_trig.h"), out)
     with open(os.path.join(out, "image.bin"), "wb") as f:
         f.write(image)
     write_main(os.path.join(out, "test_main.c"), prog)

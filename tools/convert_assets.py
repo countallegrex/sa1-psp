@@ -2,7 +2,7 @@
 """Stage 6 of the launcher (launcher/README.md): write the Memory Stick folder.
 
     convert_assets.py --data DUMP/data --out FOLDER [--eboot EBOOT.PBP] [--pack]
-                      [--args "OPTION ..."] [--tape NAME]... [--dry-run]
+                      [--fsca FILE] [--args "OPTION ..."] [--tape NAME]... [--dry-run]
 
 FOLDER is the game's folder on the card, e.g. E:/PSP/GAME/SA1PSP or
 PPSSPP's memstick/PSP/GAME/SA1PSP.  It receives
@@ -17,6 +17,12 @@ PPSSPP's memstick/PSP/GAME/SA1PSP.  It receives
                           build reads the pack when it is there
                           (backend/psp/platform_psp.c).  A loose SONICADV/
                           left beside it is no longer read and can go.
+  data/fsca_sh4.bin       the console's fsca table (recomp/emitter/runtime/
+                          sh4_trig.h), made from the user's own oracle by
+                          tools/flycast/fsca_dump.py; --fsca FILE, else the
+                          dump's data/fsca_sh4.bin or ../private/ref/.
+                          Without it the game uses the host libm (not the
+                          console's values) and refuses strict runs.
   EBOOT.PBP               with --eboot (stage 7's packaging, for now by hand)
   args.txt                with --args: the EBOOT's command line
                           (backend/psp/main_psp.c); --args "" removes it
@@ -126,6 +132,7 @@ def main() -> int:
     ap.add_argument("--args", help="write args.txt with these options (empty: remove it)")
     ap.add_argument("--tape", action="append", default=[], help="copy tests/replay/NAME.tape and NAME.check")
     ap.add_argument("--pack", action="store_true", help="SONICADV/ as data/SONICADV.PAK instead of loose files")
+    ap.add_argument("--fsca", help="the fsca table (default: DATA/fsca_sh4.bin or ../private/ref/fsca_sh4.bin)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
@@ -150,6 +157,13 @@ def main() -> int:
             rel = os.path.relpath(root, a.data)
             for name in sorted(files):
                 copy_if_changed(os.path.join(root, name), os.path.join(data_out, rel, name), a.dry_run, stats)
+    fsca = next((f for f in (a.fsca, os.path.join(a.data, "fsca_sh4.bin"),
+                             os.path.join(os.path.dirname(REPO), "private", "ref", "fsca_sh4.bin")) if f and os.path.isfile(f)), None)
+    if fsca:
+        copy_if_changed(fsca, os.path.join(data_out, "fsca_sh4.bin"), a.dry_run, stats)
+    else:
+        print("convert_assets: WARNING: no fsca_sh4.bin (tools/flycast/fsca_dump.py): the game will use the host libm's "
+              "sine, not the console's, and refuse strict runs")
     if a.eboot:
         copy_if_changed(a.eboot, os.path.join(a.out, "EBOOT.PBP"), a.dry_run, stats)
     for name in a.tape:

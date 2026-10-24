@@ -262,7 +262,7 @@ static void draw_basic_model(sh4_ctx *c, uint32_t model) {
 static void m_load_xf(sh4_ctx *c, float *m) { for (int i = 0; i < 16; i++) m[i] = c->xf[i]; }
 static void m_store_xf(sh4_ctx *c, const float *m) { for (int i = 0; i < 16; i++) c->xf[i] = m[i]; }
 static void m_rot(float *m, int axis, uint32_t a) {
-    float s = sinf((float)(a & 0xFFFF) * (float)(6.283185307179586 / 65536.0)), co = cosf((float)(a & 0xFFFF) * (float)(6.283185307179586 / 65536.0));
+    float s = sh4_sin16(a), co = sh4_cos16(a);   /* fsca, as the console (sh4_trig.h) */
     for (int i = 0; i < 4; i++) {
         if (axis == 0) { float c1 = m[4 + i], c2 = m[8 + i]; m[4 + i] = co * c1 + s * c2; m[8 + i] = co * c2 - s * c1; }
         else if (axis == 1) { float c0 = m[i], c2 = m[8 + i]; m[i] = co * c0 - s * c2; m[8 + i] = s * c0 + co * c2; }

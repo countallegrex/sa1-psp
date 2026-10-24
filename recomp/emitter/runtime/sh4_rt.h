@@ -411,9 +411,10 @@ extern int sh4_fmac_fused;
 #else
 #define FMAC_F(a, b, c) ((a) * (b) + (c))
 #endif
-/* fsca: angle is the low 16 bits of FPUL, 65536 = one turn. */
-#define FSCA(fp, sn, cs) do { float a_ = (float)((fp) & 0xFFFFu) * (float)(6.283185307179586 / 65536.0); \
-    (sn) = sinf(a_); (cs) = cosf(a_); } while (0)
+/* fsca: angle is the low 16 bits of FPUL, 65536 = one turn; the console's
+ * table (sh4_trig.h), the same bits on every platform. */
+#include "sh4_trig.h"
+#define FSCA(fp, sn, cs) do { uint32_t a_ = (fp); (sn) = sh4_sin16(a_); (cs) = sh4_cos16(a_); } while (0)
 #define FSRRA(x) (1.0f / sqrtf(x))
 #define FIPR(a0, a1, a2, a3, b0, b1, b2, b3) \
     ((a0) * (b0) + (a1) * (b1) + (a2) * (b2) + (a3) * (b3))

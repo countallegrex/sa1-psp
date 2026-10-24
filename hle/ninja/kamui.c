@@ -1080,6 +1080,7 @@ static void mark_finish(void) {
 }
 
 void kamui_report(void) {
+    if (!sh4_fsca_authentic) sa1_log("fsca: NOT the console's table (host libm): this run is not authentic");
     sa1_log("render: %u frames presented; last frame %u draw calls, %u triangles, polygons op %u tr %u pt %u; "
             "per frame on average: polygons op %u tr %u pt %u, strips op %u tr %u",
             frame_rendered_count, last_calls, last_tris, last_polys[0], last_polys[1], last_polys[2],

@@ -69,6 +69,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <math.h>
 
 PSP_MODULE_INFO("SA1PSP", PSP_MODULE_USER, 0, 4);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
@@ -96,6 +97,31 @@ void vmu_store_psp_init(const char *dir);   /* vmu_store_psp.c */
 const char *vmu_store_psp_dir(void);
 static int vmu_mode;                        /* -1 --no-vmu, 1 --vmu-dir, 0 default */
 static const char *vmu_dir_arg;
+static const char *dump_trig_path;   /* --dump-trig FILE: libm sinf/cosf of every 16-bit angle, then exit */
+
+/* The libm's sinf and cosf of (float)i * TURN for i = 0..65535, under
+ * round-to-nearest then round-toward-zero (FCSR.RM 0 and 1): 4 arrays of
+ * 65536 float bit patterns, to compare with the desktop's libm. */
+static void dump_trig(const char *path) {
+    static uint32_t out[4][65536];
+    const float turn = (float)(6.283185307179586 / 65536.0);
+    uint32_t fcsr;
+    __asm__ volatile("cfc1 %0, $31" : "=r"(fcsr));
+    for (int m = 0; m < 2; m++) {
+        uint32_t want = (fcsr & ~3u) | (uint32_t)m;
+        __asm__ volatile("ctc1 %0, $31" : : "r"(want));
+        for (int i = 0; i < 65536; i++) {
+            volatile float a = (float)i * turn;
+            float sn = sinf(a), cs = cosf(a);
+            memcpy(&out[m * 2][i], &sn, 4);
+            memcpy(&out[m * 2 + 1][i], &cs, 4);
+        }
+    }
+    __asm__ volatile("ctc1 %0, $31" : : "r"(fcsr));
+    FILE *f = fopen(path, "wb");
+    if (f) { fwrite(out, 1, sizeof out, f); fclose(f); }
+    sa1_log("dump-trig: %s %s", path, f ? "written" : "cannot write");
+}
 void draw_gu_set_ge_pipeline(int on);
 void draw_gu_set_stall_every(int n);
 uint32_t hle_task_running(void);
@@ -514,6 +540,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--gu-split") && i + 1 < args_c) draw_gu_set_split((float)atof(av[++i]));
         else if (!strcmp(av[i], "--gu-lod-bias") && i + 1 < args_c) draw_gu_set_lod_bias((float)atof(av[++i]));
         else if (!strcmp(av[i], "--gu-max-mip") && i + 1 < args_c) draw_gu_set_max_mip(atoi(av[++i]));
+        else if (!strcmp(av[i], "--dump-trig") && i + 1 < args_c) dump_trig_path = av[++i];
         else if (!strcmp(av[i], "--no-vmu")) vmu_mode = -1;
         else if (!strcmp(av[i], "--vmu-dir") && i + 1 < args_c) { vmu_dir_arg = av[++i]; vmu_mode = 1; }
         else if (!strcmp(av[i], "--tex-pool") && i + 1 < args_c) draw_gu_set_tex_pool(strcmp(av[++i], "off") != 0, -1);   /* draw_gu.c: texture chunks */
@@ -662,6 +689,7 @@ int main(int argc, char **argv) {
         vmu_store_psp_init(vd);
         sa1_log("VMU A1: %s", vmu_store_psp_dir());
     }
+    if (dump_trig_path) { dump_trig(dump_trig_path); plat_log_flush(); sceKernelExitGame(); return 0; }
     sa1_log("step: hle_init");
     hle_init();
     sa1_log("step: function map");

@@ -104,6 +104,7 @@ def main():
     counts = prog.write_all(args.out, chunks=args.chunks)
     shutil.copy(os.path.join(HERE, "runtime", "sh4_rt.h"), args.out)
     shutil.copy(os.path.join(HERE, "runtime", "sh4_rt.c"), args.out)
+    shutil.copy(os.path.join(HERE, "runtime", "sh4_trig.h"), args.out)
     print("total %.1fs" % (time.time() - t0))
     for k in sorted(counts):
         print("  %-24s %s" % (k, counts[k]))

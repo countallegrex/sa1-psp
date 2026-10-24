@@ -3,6 +3,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
+#include <stdlib.h>
 #include "state.h"
 
 void hle_bios_init(void);     /* hle/bios/syscalls.c */
@@ -32,7 +33,30 @@ void hle_call_guest(sh4_ctx *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t 
     sa1_call(c, fn);
 }
 
+/* fsca's table (recomp/emitter/runtime/sh4_trig.h): fsca_sh4.bin in the data
+ * folder, the oracle's fsca for every angle (tools/flycast/fsca_dump.py).
+ * Without it fsca and the Ninja trig come from the host libm, which is not
+ * the console: said loudly, and a strict run (tapes, checks, the oracle)
+ * refuses to go on, so such a run can never pass as authentic. */
+static void fsca_load(void) {
+    static const char name[] = "fsca_sh4.bin";
+    uint32_t size = 0;
+    void *buf = NULL;
+    if (sa1_plat_file_size(name, &size) == 0 && size == 65536u * 8u && (buf = malloc(size)) != NULL
+        && sa1_plat_file_read(name, 0, buf, size) != (int)size) { free(buf); buf = NULL; }
+    int bad = sh4_trig_init(buf, buf ? size : 0) != 0;
+    free(buf);
+    if (sh4_fsca_authentic) { sa1_log("fsca: the console's table (%s)", name); return; }
+    sa1_log("fsca: %s %s: fsca and the Ninja trig use the host libm, NOT the console's values (make it with tools/flycast/fsca_dump.py)",
+            name, bad ? "is not a valid fsca table" : "is missing from the data folder");
+    if (hle_strict) {
+        sa1_log("fsca: a strict run needs the console's table; stopping");
+        exit(3);
+    }
+}
+
 void hle_init(void) {
+    fsca_load();
     hle_bios_init();
     hle_shinobi_init();
     hle_movie_init();

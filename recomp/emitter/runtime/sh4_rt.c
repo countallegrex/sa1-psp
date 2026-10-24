@@ -8,6 +8,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+
+/* ---- fsca (sh4_trig.h) ---------------------------------------------------- */
+uint32_t sh4_fsca_sin[32768];
+int sh4_fsca_ready, sh4_fsca_authentic;
+
+int sh4_trig_init(const void *table, uint32_t size) {
+    const uint8_t *t = (const uint8_t *)table;
+    int ok = t && size == 65536u * 8u;
+    uint32_t w[4];
+    for (uint32_t a = 0; ok && a < 65536u; a++) {
+        memcpy(w, t + 8u * a, 8);                                 /* sin, cos of a */
+        memcpy(w + 2, t + 8u * ((a + 0x4000u) & 0xFFFFu), 4);      /* sin of a + 1/4 */
+        memcpy(w + 3, t + 8u * ((a + 0x8000u) & 0xFFFFu), 4);      /* sin of a + 1/2 */
+        float f; memcpy(&f, w, 4);
+        /* the table's own structure: cos = sin a quarter on, sin flips sign a half on, |sin| <= 1 */
+        if (w[1] != w[2] || w[3] != (w[0] ^ 0x80000000u) || !(f >= -1.0f && f <= 1.0f)) ok = 0;
+    }
+    if (ok && (((const uint32_t *)(const void *)t)[0] != 0 || ((const uint32_t *)(const void *)t)[1] != 0x3F800000u)) ok = 0;
+    if (ok)
+        for (uint32_t a = 0; a < 32768u; a++) memcpy(&sh4_fsca_sin[a], t + 8u * a, 4);
+    else
+        for (uint32_t a = 0; a < 32768u; a++) {      /* the platform's libm: not the console's values */
+            float f = sinf((float)a * (float)(6.283185307179586 / 65536.0));
+            if (a == 0) f = 0.0f;
+            memcpy(&sh4_fsca_sin[a], &f, 4);
+        }
+    sh4_fsca_authentic = ok;
+    sh4_fsca_ready = 1;
+    return ok || !t ? 0 : -1;
+}
 
 uint8_t *sa1_ram;
 void sa1_ram_set(uint8_t *ram) { sa1_ram = ram; }

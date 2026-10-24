@@ -21,7 +21,6 @@
 #define LIGHT_LIST  0x8C8EA3E0u
 #define LIGHT_COUNT (LIGHT_LIST + 0x80)
 #define FARG(i) (c->fr[4 + (i)])
-static const float TURN = (float)(6.283185307179586 / 65536.0);
 
 /* The premultiplied colours, as njCreateLight / njSetLightColor /
  * njSetLightIntensity (0x8C63AEC8 scales four floats) lay them out:
@@ -46,7 +45,7 @@ static void ranges(uint32_t l) {
 }
 static void angles(uint32_t l) {
     uint32_t in = hle_rd32(l + 0x140) & 0xFFFF, out = hle_rd32(l + 0x144) & 0xFFFF;
-    float ci = cosf((float)in * TURN), co = cosf((float)out * TURN);
+    float ci = sh4_cos16(in), co = sh4_cos16(out);   /* fsca, as the console (sh4_trig.h) */
     hle_wrf(l + 0x70, ci * ci); hle_wrf(l + 0x74, co * co);
     hle_wr32(l + 0x8C, in | out << 16);
     /* +0x80: 1 / |cos^2 inner - cos^2 outer| for the spot types (0x88, 0xC8);
