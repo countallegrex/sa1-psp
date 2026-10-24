@@ -48,7 +48,10 @@ draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const float 
 int kamui_native_model(uint32_t handle, const float m[16], uint32_t *rec);
 /* native_land.c (docs/native-renderer.md) */
 extern int hle_renderer_native, hle_renderer_cli, hle_renderer_force, native_land_window, native_land_noland;
-extern int hle_land_cull, hle_land_cull_cli;   /* land_cull = on (default) | off */
+extern int hle_land_cull, hle_land_cull_cli;   /* land_cull = on (default, 1) | opaque (2) | off (0) */
+extern int hle_land_decide_cli;                /* --land-decide new (0) | old (1) | check (2) */
+int hle_parse_land_cull(const char *v);        /* off 0, opaque 2, else on 1 */
+int hle_parse_land_decide(const char *v);      /* new 0, old 1, check 2, else -1 */
 extern int native_land_all_sets;   /* the decided model draws nothing: every set, whatever its material */
 int native_land_decide(sh4_ctx *c, uint32_t model);   /* the transform's wrapper: 1 = natively */
 int native_land_model_ok(uint32_t model);                /* the decided model */

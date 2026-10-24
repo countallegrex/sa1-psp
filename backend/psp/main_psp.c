@@ -51,7 +51,8 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
-extern int hle_renderer_cli, hle_renderer_force, hle_land_cull_cli;   /* hle/ninja/native_land.c */
+extern int hle_renderer_cli, hle_renderer_force, hle_land_cull_cli, hle_land_decide_cli;   /* hle/ninja/native_land.c */
+int hle_parse_land_cull(const char *v), hle_parse_land_decide(const char *v);
 #include "../draw.h"
 #include "../desktop/input_tape.h"
 #include "../desktop/savestate.h"
@@ -533,7 +534,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--cull-flip")) draw_gu_set_cull_flip(1);
         else if (!strcmp(av[i], "--ta-direct")) hle_ta_direct = 1;
         else if (!strcmp(av[i], "--no-ta-direct")) hle_ta_direct = 0;
-        else if (!strcmp(av[i], "--land-cull") && i + 1 < args_c) hle_land_cull_cli = strcmp(av[++i], "off") != 0;   /* hle/ninja/native_land.c */
+        else if (!strcmp(av[i], "--land-cull") && i + 1 < args_c) hle_land_cull_cli = hle_parse_land_cull(av[++i]);   /* on|opaque|off; hle/ninja/native_land.c */
+        else if (!strcmp(av[i], "--land-decide") && i + 1 < args_c) {   /* new|old|check; hle/ninja/native_land.c */
+            int d = hle_parse_land_decide(av[++i]);
+            if (d >= 0) hle_land_decide_cli = d; else sa1_log("--land-decide %s: not new, old or check; ignored", av[i]);
+        }
         else if (!strcmp(av[i], "--renderer") && i + 1 < args_c) {   /* hle/ninja/native_land.c */
             const char *v = av[++i];
             if (!strncmp(v, "force:", 6)) { hle_renderer_force = 1; v += 6; }

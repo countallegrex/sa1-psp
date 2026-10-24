@@ -2,8 +2,9 @@
  * from converted meshes with hardware transform where the backend can
  * (docs/native-renderer.md; s.6 is this design, iteration 3).
  *
- * land_cull = on (default) | off (sa1psp.ini, or --land-cull; also in strict
- * runs: it changes only draw scratch, as frame skip's skipped frames do) and
+ * land_cull = on (default) | opaque | off (sa1psp.ini, or --land-cull; also
+ * in strict runs: it changes only draw scratch, as frame skip's skipped
+ * frames do; opaque never culls a translucent model, a console A/B aid) and
  * renderer = native | ta | noland (sa1psp.ini, or --renderer, with force:
  * also in strict runs).  The game's own land draw runs unchanged (its
  * cull, visible list, matrices, njSetTexture; the land task's MainSub
@@ -48,9 +49,12 @@
 #include <string.h>
 
 int hle_renderer_native;            /* sa1psp.ini renderer: 0 ta, 1 native, 2 noland */
-int hle_land_cull = 1;              /* sa1psp.ini land_cull (default on) */
-int hle_land_cull_cli = -1;         /* --land-cull on|off, wins */
+int hle_land_cull = 1;              /* sa1psp.ini land_cull: 0 off, 1 on (default), 2 opaque */
+int hle_land_cull_cli = -1;         /* --land-cull on|opaque|off, wins */
+int hle_land_decide_cli;            /* --land-decide new (0, default) | old (1) | check (2) */
 static int cull;                    /* in force */
+static int cull_alpha;              /* translucent models culled too (land_cull on, not opaque) */
+static int decide_old, cull_check;  /* --land-decide old: 62c9300's path; check: both, mismatches counted */
 int hle_renderer_cli = -1;          /* backend option, wins */
 int hle_renderer_force;             /* also in strict runs (tests) */
 int native_land_window;             /* on: land_cull, or renderer native or noland */
@@ -60,6 +64,14 @@ static int check;                   /* SA1_NATIVE_CHECK=1: persistent models go 
 static int nopersist;               /* renderer = native-sets: iteration 2's per-set way every frame (a check) */
 static uint32_t chk_state, chk_col, chk_sets, chk_lit, chk_logged;
 int native_land_all_sets;           /* the decided model is OUT: ta_mesh.c skips every set */
+
+int hle_parse_land_cull(const char *v) {
+    return !strcmp(v, "off") ? 0 : !strcmp(v, "opaque") ? 2 : 1;
+}
+
+int hle_parse_land_decide(const char *v) {
+    return !strcmp(v, "new") ? 0 : !strcmp(v, "old") ? 1 : !strcmp(v, "check") ? 2 : -1;
+}
 
 #define USE_ALPHA 0x00100000u
 #define ENV_MAP   0x00400000u       /* UVs from the normals (not converted yet): the TA way */
@@ -98,7 +110,15 @@ static struct {
     uint32_t nb, nmat, nv, ni;
     nl_model *models;               /* sorted by model */
     uint32_t nmodels;
+    uint32_t *keys;                 /* models[i].model, packed: the search touches 4 bytes a probe, not a model */
+    uint32_t lo, hi;                /* the smallest and largest model address: the rest is no land model */
+    uint32_t *succ;                 /* per model, the model found after it last time: the land draw's order stands from frame to frame */
+    uint32_t hint;                  /* the last model found */
 } L;
+
+/* view_out_fast's plane normals for the viewport last seen (view_normals). */
+static struct { uint32_t in[4]; float n[5][3]; int valid; } pc;
+static uint32_t chk_dec, chk_mis, chk_mis_logged, pc_miss, n_decide, n_range, n_inr, n_hint;
 
 enum { DEC_NONE, DEC_OUT, DEC_MODEL, DEC_SETS };
 static nl_model *dec;               /* the model the game is drawing now, if not the TA way */
@@ -138,7 +158,7 @@ static void unload(void) {
         free(md->col); free(md->ocol); free(md->st); free(md->zoff);
         if (md->handle) draw_model_destroy(md->handle);
     }
-    free(L.file); free(L.models);
+    free(L.file); free(L.models); free(L.keys);
     memset(&L, 0, sizeof L);
     dec = NULL;
 }
@@ -183,16 +203,39 @@ static void walk_table(uint32_t lt) {
         }
     }
     free(ms);
+    if (L.nmodels) {
+        L.keys = malloc(2u * L.nmodels * sizeof *L.keys);
+        if (L.keys) {
+            L.succ = L.keys + L.nmodels;
+            for (uint32_t i = 0; i < L.nmodels; i++) { L.keys[i] = L.models[i].model; L.succ[i] = i + 1 < L.nmodels ? i + 1 : 0; }
+        }
+        L.lo = L.models[0].model; L.hi = L.models[L.nmodels - 1].model;
+    }
 }
 
 static nl_model *model_of(uint32_t model) {
     model &= 0x1FFFFFFFu;
+    if (!decide_old && (model < L.lo || model > L.hi)) return NULL;
+    n_inr++;
+    if (!L.keys || decide_old) {    /* 62c9300's search */
+        uint32_t lo = 0, hi = L.nmodels;
+        while (lo < hi) {
+            uint32_t mid = (lo + hi) >> 1;
+            if (L.models[mid].model < model) lo = mid + 1; else hi = mid;
+        }
+        return lo < L.nmodels && L.models[lo].model == model ? &L.models[lo] : NULL;
+    }
+    const uint32_t *k = L.keys;
+    const uint32_t h = L.hint, g = L.succ[h];
+    if (k[g] == model) { n_hint++; L.hint = g; return &L.models[g]; }
+    if (k[h] == model) { n_hint++; return &L.models[h]; }
     uint32_t lo = 0, hi = L.nmodels;
     while (lo < hi) {
         uint32_t mid = (lo + hi) >> 1;
-        if (L.models[mid].model < model) lo = mid + 1; else hi = mid;
+        if (k[mid] < model) lo = mid + 1; else hi = mid;
     }
-    return lo < L.nmodels && L.models[lo].model == model ? &L.models[lo] : NULL;
+    if (lo < L.nmodels && k[lo] == model) { L.succ[h] = lo; L.hint = lo; return &L.models[lo]; }
+    return NULL;
 }
 
 /* The converted meshes (native only): each model's batches, one per set. */
@@ -290,23 +333,85 @@ static int view_out(const float *m, const float *bound) {
     return 0;
 }
 
+/* view_out without game_matrix: its plane k, n = (p0 sx, p1 sy, p0 cx +
+ * p1 cy + p2) on XMTRX's rows 0..2, is n . (X, Y, Z) at the sphere's centre
+ * moved by XMTRX, so the centre is moved once (9 multiplies) and each plane
+ * costs three; the plane's length in model space (n on each of XMTRX's
+ * three columns) only when the centre is outside it.  The n change with
+ * the viewport only (four words, compared per call).  The same half-spaces
+ * as view_out, rounded in another order: --land-decide check counts the
+ * decisions that differ. */
+static void view_normals(void) {
+    const uint32_t in[4] = { hle_rd32(0x8c8ffe00u), hle_rd32(0x8c8ffe04u), hle_rd32(0x8c8ffe08u), hle_rd32(0x8c8ffe0cu) };
+    if (pc.valid && !memcmp(in, pc.in, sizeof in)) return;
+    pc_miss++;
+    memcpy(pc.in, in, sizeof in);
+    pc.valid = 1;
+    float f[4];
+    memcpy(f, in, sizeof f);
+    const float cx = f[0], cy = f[1], sx = f[2], sy = f[3] * sx;
+    static const float pl[5][3] = {   /* view_out's */
+        { 0, 0, 1 }, { 1, 0, -(DRAW_WIDE_LEFT - 8.0f) }, { -1, 0, DRAW_WIDE_RIGHT + 8.0f }, { 0, 1, 8.0f }, { 0, -1, 488.0f } };
+    for (int k = 0; k < 5; k++) {
+        pc.n[k][0] = pl[k][0] * sx;
+        pc.n[k][1] = pl[k][1] * sy;
+        pc.n[k][2] = pl[k][0] * cx + pl[k][1] * cy + pl[k][2];
+    }
+}
+
+static int view_out_fast(const sh4_ctx *c, const float *b) {
+    view_normals();
+    const float *x = c->xf;
+    const float X = x[0] * b[0] + x[4] * b[1] + x[8] * b[2] + x[12];
+    const float Y = x[1] * b[0] + x[5] * b[1] + x[9] * b[2] + x[13];
+    const float Z = x[2] * b[0] + x[6] * b[1] + x[10] * b[2] + x[14];
+    for (int k = 0; k < 5; k++) {
+        const float *n = pc.n[k];
+        const float d = n[0] * X + n[1] * Y + n[2] * Z;
+        if (d >= 0.0f) continue;
+        const float a0 = n[0] * x[0] + n[1] * x[1] + n[2] * x[2];
+        const float a1 = n[0] * x[4] + n[1] * x[5] + n[2] * x[6];
+        const float a2 = n[0] * x[8] + n[1] * x[9] + n[2] * x[10];
+        if (d * d > b[3] * b[3] * (a0 * a0 + a1 * a1 + a2 * a2)) return 1;
+    }
+    return 0;
+}
+
 /* From the transform's wrapper, XMTRX set: 1 = not the TA way (the transform
  * is skipped), 0 = the TA way.  The answer stands until the next model's
  * transform (lighting and mesh loop ask native_land_model_ok). */
 int native_land_decide(sh4_ctx *c, uint32_t model) {
     dec = NULL; dec_kind = DEC_NONE; dec_marked = 0; native_land_all_sets = 0;
     if (!native_land_window) return 0;
+    n_decide++;
     nl_model *md = find_model(model);
     if (!md) return 0;
+    n_range++;
     if (native_land_noland) { dec = md; dec_kind = DEC_OUT; native_land_all_sets = 1; return 1; }
-    game_matrix(c, dec_m);
-    /* models with a translucent material are never culled: their strips go to the
-     * depth-sorted list, whose order for the rest changes without them (a few
-     * pixels of Sonic differed on the console) */
-    if (cull && !md->alpha && view_out(dec_m, md->bound)) { dec = md; dec_kind = DEC_OUT; native_land_all_sets = 1; st.out++; st.out_tris += md->ntri; md->out_draws++; return 1; }
+    /* land_cull opaque: models with a translucent material are not culled (once
+     * needed for the console's picture: the GE backend's batching put a
+     * translucent run's offset colour after the whole run, so another run
+     * order changed pixels; draw_gu.c's strip_emit breaks those runs now) */
+    int out = 0;
+    if (decide_old) game_matrix(c, dec_m);    /* 62c9300: for every land model */
+    if (cull && (!md->alpha || cull_alpha)) {
+        if (decide_old) out = view_out(dec_m, md->bound);
+        else {
+            out = view_out_fast(c, md->bound);
+            if (cull_check) {
+                float m[16];
+                game_matrix(c, m);
+                const int old = view_out(m, md->bound);
+                chk_dec++;
+                if (old != out) { chk_mis++; if (chk_mis_logged++ < 10) sa1_log("land check: f%u model 0x%08x: old %d new %d", hle_frame_count(), md->model, old, out); }
+            }
+        }
+    }
+    if (out) { dec = md; dec_kind = DEC_OUT; native_land_all_sets = 1; st.out++; st.out_tris += md->ntri; md->out_draws++; return 1; }
     /* the material override (0x8C8FFE1C: enable, AND, OR; the land draw sets it) may turn
      * USE_ALPHA or the environment map on: then the TA way */
     if (mode != 1 || !md->conv || (hle_rd32(0x8c8ffe1cu) && (hle_rd32(0x8c8ffe24u) & (USE_ALPHA | ENV_MAP)))) { st.ta_other++; st.ta_tris += md->ntri; md->ta_draws++; return 0; }
+    if (!decide_old) game_matrix(c, dec_m);   /* only the native renderer reads it */
     const int p = draw_mesh_test(dec_m, md->bound);
     if (p < 0) { st.ta_test[-p]++; st.ta_tris += md->ntri; md->ta_draws++; return 0; }
     dec = md;
@@ -443,7 +548,14 @@ void native_land_captured(uint32_t tag, const draw_state *s) {
 
 void native_land_init(void) {
     int on = hle_renderer_cli >= 0 ? hle_renderer_cli : hle_renderer_native;
-    cull = hle_land_cull_cli >= 0 ? hle_land_cull_cli : hle_land_cull;
+    const int lc = hle_land_cull_cli >= 0 ? hle_land_cull_cli : hle_land_cull;
+    cull = lc != 0;
+    cull_alpha = lc == 1;
+    decide_old = hle_land_decide_cli == 1;
+    cull_check = hle_land_decide_cli == 2;
+    if (lc == 2) sa1_log("native land: land_cull opaque (translucent models never culled)");
+    if (decide_old) sa1_log("native land: land decision the old way (game_matrix, view_out, binary search)");
+    if (cull_check) sa1_log("native land: land decision checked against the old way");
     if (on && hle_strict && !hle_renderer_force) { sa1_log("native land: renderer off (strict run)"); on = 0; }
     if (!on) {
         native_land_window = cull;
@@ -462,6 +574,8 @@ void native_land_init(void) {
 
 void native_land_report(void) {
     report_ta();
+    if (cull_check) sa1_log("land check: %u of %u cull decisions differ from view_out's", chk_mis, chk_dec);
+    if (n_decide) sa1_log("native land: %u transforms asked, %u in the land range, %u land models (%u by the hint); plane normals made %u times", n_decide, n_inr, n_range, n_hint, pc_miss);
     if (check) sa1_log("native check: %u of %u set draws with another state than kept, %u of %u lightings with other colours", chk_state, chk_sets, chk_col, chk_lit);
     const uint32_t ta = st.ta_other + st.ta_test[0] + st.ta_test[1] + st.ta_test[2] + st.ta_test[3] + st.ta_test[4];
     if (st.out || st.model || st.sets || ta)

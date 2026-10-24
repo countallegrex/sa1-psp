@@ -63,7 +63,8 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
-extern int hle_renderer_cli, hle_renderer_force, hle_land_cull_cli;   /* hle/ninja/native_land.c */
+extern int hle_renderer_cli, hle_renderer_force, hle_land_cull_cli, hle_land_decide_cli;   /* hle/ninja/native_land.c */
+int hle_parse_land_cull(const char *v), hle_parse_land_decide(const char *v);
 #include "../draw.h"
 #include "input_tape.h"
 #include "platform_desktop.h"
@@ -489,7 +490,12 @@ int main(int argc, char **argv) {
             if (v < -1) { fprintf(stderr, "--voice: en, ja or game\n"); return 2; }
             snd_voice_lang_cli = v;
         }
-        else if (!strcmp(argv[i], "--land-cull") && i + 1 < argc) hle_land_cull_cli = strcmp(argv[++i], "off") != 0;   /* hle/ninja/native_land.c */
+        else if (!strcmp(argv[i], "--land-cull") && i + 1 < argc) hle_land_cull_cli = hle_parse_land_cull(argv[++i]);   /* on|opaque|off; hle/ninja/native_land.c */
+        else if (!strcmp(argv[i], "--land-decide") && i + 1 < argc) {   /* new|old|check; hle/ninja/native_land.c */
+            int d = hle_parse_land_decide(argv[++i]);
+            if (d < 0) { fprintf(stderr, "--land-decide: new, old or check\n"); return 2; }
+            hle_land_decide_cli = d;
+        }
         else if (!strcmp(argv[i], "--renderer") && i + 1 < argc) {   /* hle/ninja/native_land.c */
             const char *v = argv[++i];
             if (!strncmp(v, "force:", 6)) { hle_renderer_force = 1; v += 6; }

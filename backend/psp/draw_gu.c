@@ -1630,6 +1630,12 @@ static float strip_zs(const draw_vertex *v, int n, float *z) {
 }
 
 static void strip_emit(int pass, const draw_vertex *v, int n) {
+    /* A run's offset draw goes after all its strips (replay).  Opaque,
+     * that is the per-strip order's picture; translucent, a strip after one
+     * with offset vertices would blend before that offset instead of after
+     * it.  So a translucent strip never joins a run with offsets pending:
+     * each one's base-then-offset order is the desktop's (draw_gl.c). */
+    if (cur.translucent && nobatch[pass]) batch_flush_pass(pass);
     int has_offset = 0;
     if (cur.texture) for (int i = 0; i < n && !has_offset; i++) if (v[i].ocolor & 0x00FFFFFFu) has_offset = 1;
     if (nbatch[pass] + n + 3 > BATCH_MAX || (has_offset && nobatch[pass] + n + 3 > BATCH_MAX)) batch_flush_pass(pass);

@@ -191,19 +191,43 @@ clip path, so it was not built.
 
 What iteration 3 does (`hle/ninja/native_land.c`, `backend/psp/draw_gu.c`):
 
-- **View culling** (`land_cull = on`, the default, `--land-cull off`;
+- **View culling** (`land_cull = on`, the default; `opaque`, `off`;
+  `--land-cull on|opaque|off`;
   independent of the renderer, on in strict runs too): every model of the
   current land table gets a sphere over its points when the table changes
   (no converted data needed: it works in every level).  A model whose
   sphere lies wholly outside one of the view's half-spaces (z >= 0, the
   wide view's x range and 0..480 in y, with an 8-pixel margin) skips the
   transform, the lighting and the mesh-set loop, exactly as a skipped frame
-  does; nothing it would have drawn is on screen.  Models with a
-  translucent material are never culled: their strips go to the
-  depth-sorted list, and without them five pixels of Sonic came out
-  slightly different on the console (the sort's order of the rest
-  changes).  With that rule the console pictures are the TA path's to the
-  byte (Station Square and Emerald Coast, frames 200 and 400).
+  does; nothing it would have drawn is on screen.  Translucent models are
+  culled too (since the run-break fix below); `opaque` keeps 62c9300's
+  rule, which never culled them, for console A/B runs.  With that rule the
+  console pictures were the TA path's to the byte (Station Square and
+  Emerald Coast, frames 200 and 400).
+- **The run break** (`backend/psp/draw_gu.c` strip_emit).  Culling the
+  translucent models changed five pixels of Sonic on the console, not on
+  the desktop.  The cause found (to be confirmed by console pictures) is
+  the GE backend's batching, not the sort:
+  same-state strips go as one GE draw, and the run's offset (specular,
+  additive) draw is replayed after the whole run, so in a translucent run
+  strip B blended before strip A's offset instead of after it; another set
+  of land models in front of the list changed where the runs began.  A
+  translucent strip now never continues a run with offset vertices
+  pending, so each translucent strip's base-then-offset order is the
+  desktop's per-strip order (draw_gl.c's emit_offset).
+- **The decision's cost** (`native_land_decide`).  A transform outside the
+  land table's address range (the lowest to the highest model) is
+  rejected with two compares; a land model is found through a packed key
+  array (4 bytes a probe) behind a next-model hint (the land draw's order
+  stands from frame to frame: 88-89 % of finds in Station Square and Emerald
+  Coast); `view_out_fast` moves the sphere's centre by XMTRX once and tests
+  it against plane normals made only when the viewport words change (about
+  500 times a tape), instead of building the game matrix for every model.
+  `game_matrix` runs only for the native renderer.  `--land-decide old`
+  is 62c9300's path (game matrix, view_out, plain binary search), kept as
+  a measurement switch; `--land-decide check` makes both decisions and
+  logs the mismatches at exit (0 of 567k in sonic_to_ec1_start, 0 of 886k
+  in sonic_ec1, translucent models included).
 - **Persistent models** (`native`): a converted, opaque model the GE takes
   whole is drawn once per set the iteration 2 way, which hands kamui's
   decoded state of each set back to native_land; with every set's state
@@ -242,9 +266,10 @@ Console (PSP-3001, ABBA x3, frame skip off, mean of f300/f450, medians):
 | land_cull + `renderer = native` | 40.43 ms (-9.03) | 80.41 ms (+1.13) |
 
 An earlier batch that culled translucent models too gave 39.14 / 37.56 ms
-in Station Square: the translucent rule costs about 3 ms.  Emerald Coast
-has little land out of view; what it pays is the decision per model (to be
-made cheaper).  GE busy time (no pipelining, the stall address withheld so
+in Station Square: the translucent rule cost about 3 ms (now the default
+`on`; `--land-cull opaque` measures the old rule).  Emerald Coast has
+little land out of view; what it paid was the decision per model (now the
+cheaper path above; `--land-decide old` for the A/B).  GE busy time (no pipelining, the stall address withheld so
 the GE runs after the list is closed): 4.4 ms (TA) and 4.5 ms (native) per
 frame, far from the frame time.  Heap at exit, Station Square: 32.8 MB
 (TA), 32.6 (cull), 33.5 (native, largest free block 2.1 MB).  The game's
