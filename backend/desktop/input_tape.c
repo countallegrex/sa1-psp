@@ -348,6 +348,12 @@ int input_tape_start(const char *title_path) {
         if (load_watches(watch_list_path) != 0) return -1;
         wtrace = fopen(watch_trace_path, "wb");
         if (!wtrace) { fprintf(stderr, "watch: cannot write %s\n", watch_trace_path); return -1; }
+        /* One write per 256 KB, not per stdio buffer (~1 KB in newlib): on the
+         * PSP the trace goes to host0:, and a write every second for 15 minutes
+         * ended with usbhostfs reporting bad packets and the PSP hung below
+         * PSPLink (2026-10-24). */
+        static char wtrace_buf[256 * 1024];
+        setvbuf(wtrace, wtrace_buf, _IOFBF, sizeof wtrace_buf);
         fprintf(wtrace, "frame");
         for (int i = 0; i < nwatches; i++) fprintf(wtrace, "\t%s", watches[i].name);
         fputc('\n', wtrace);
