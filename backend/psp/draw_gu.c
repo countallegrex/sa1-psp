@@ -51,6 +51,7 @@
 #include <pspctrl.h>
 
 #include <malloc.h>
+#include <math.h>
 #include "../texpool.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,6 +81,7 @@ static int cull_flip;                         /* --cull-flip (main_psp.c): the o
 /* Counters for the report beyond draw_stats. */
 static struct { uint32_t list_high, pool_high, pool_full, dropped, offscreen, mirrors, mirror_fail, downscaled, frames;
                 uint32_t flush_state, flush_proj, flush_offset, last_strips, last_draws, last_states;
+                uint32_t mesh_ge, mesh_cpu;   /* draw_mesh: GE-transformed draws, CPU-clipped ones */
                 float zmin_frame, zmin_win, zmin_last; uint32_t znear_verts[4];   /* nearest 3D z; vertices with z < 2, 4, 8, 16 */
                 uint64_t gpu_wait_us, swap_wait_us, replay_us, frame_us_sum, frame_us_max, last_end; } gs;
 /* The largest strip w folded into gs.zmin_frame since it was last reset: a
@@ -887,15 +889,8 @@ void draw_end_frame(void) {
 }
 
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
-/* draw.h draw_mesh: the GE path (hardware transform, display lists) is the
- * slice's console step (docs/native-renderer.md); until then the native
- * renderer stays off on the PSP. */
-int draw_mesh_supported(void) { return 0; }
-void draw_mesh(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
-    (void)m; (void)v; (void)nv; (void)idx; (void)ni;
-}
-
 void draw_gu_report(void) {
+    if (gs.mesh_ge || gs.mesh_cpu) sa1_log("draw: meshes %u by the GE, %u clipped on the CPU", gs.mesh_ge, gs.mesh_cpu);
     if (tex_pool_on) pool_log("report");
     sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, list replay %.2f ms/frame, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB, vertices %u KB (%u strips over); "
             "%u strips dropped (list full), %u clipped to the GE's guard band",
@@ -1037,7 +1032,13 @@ typedef struct { uint32_t color; float x, y, z; } gu_ovtx;
 /* One recorded draw: a run of strips (or a line strip) of one state and
  * projection in one pass, its vertices already in the display list (the
  * list jumps over them), the offset-colour vertices beside them. */
-typedef struct { uint16_t state; uint8_t proj, prim; uint16_t n, on; void *v, *ov; } gu_item;
+typedef struct { uint16_t state; uint8_t proj, prim; uint16_t n, on; void *v, *ov; const void *ix; int16_t mat; } gu_item;
+/* draw_mesh's items: indexed triangles in model space (ix the 16-bit
+ * indices, mat the GU_MODEL matrix below, -1 for the strips' identity). */
+#define MESH_MAT_MAX 2048
+static ScePspFMatrix4 mesh_mats[MESH_MAT_MAX];
+static int nmesh_mats;
+static const ScePspFMatrix4 mesh_ident = { {1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1} };
 static draw_state rstates[STATE_MAX];
 static int nrstates;
 static gu_item items[PASSES][ITEM_MAX];
@@ -1086,6 +1087,7 @@ static void *pool_chunk(uint32_t bytes) {
 
 static void rec_reset(void) {
     nrstates = 0;
+    nmesh_mats = 0;
     if (vpool_top > gs.pool_high) gs.pool_high = vpool_top;
     vpool_top = 0;
     for (int p = 0; p < PASSES; p++) {
@@ -1110,7 +1112,7 @@ static void batch_flush_pass(int pass) {
     it->n = (uint16_t)nbatch[pass]; it->on = (uint16_t)nobatch[pass];
     it->v = batch[pass];
     batch[pass] += nbatch[pass];
-    it->ov = NULL;
+    it->ov = NULL; it->ix = NULL; it->mat = -1;
     if (nobatch[pass]) {
         it->ov = obatch[pass];
         obatch[pass] += nobatch[pass];
@@ -1188,24 +1190,28 @@ static void replay(void) {
             sceGuClear(GU_DEPTH_BUFFER_BIT);
             if (!aspect_wide) sceGuScissor(SCR_W / 8, 0, SCR_W * 7 / 8, SCR_H);
         }
-        int st = -1, pj = -1;
+        int st = -1, pj = -1, mt = -1;
         for (int i = 0; i < nitems[pass]; i++) {
             gu_item *it = &items[pass][i];
             const draw_state *s = &rstates[it->state];
             if (it->state != st) { apply_state(s); st = it->state; }
             if (it->proj != pj) { set_proj(pass, it->proj); pj = it->proj; }
-            ge_draw(it->prim, VTX_FMT, it->n, it->v);
+            if (it->mat != mt) { sceGuSetMatrix(GU_MODEL, it->mat >= 0 ? &mesh_mats[it->mat] : &mesh_ident); mt = it->mat; }
+            if (it->ix) sceGuDrawArray(it->prim, VTX_FMT | GU_INDEX_16BIT, it->n, it->ix, it->v);
+            else ge_draw(it->prim, VTX_FMT, it->n, it->v);
             stats.draw_calls++;
             if (it->on) {                 /* the offset colour: additive, untextured, at equal depth */
                 sceGuDisable(GU_TEXTURE_2D);
                 sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
                 sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
                 sceGuDisable(GU_ALPHA_TEST);
-                ge_draw(GU_TRIANGLE_STRIP, OVTX_FMT, it->on, it->ov);
+                if (it->ix) sceGuDrawArray(GU_TRIANGLES, OVTX_FMT | GU_INDEX_16BIT, it->on, it->ix, it->ov);
+                else ge_draw(GU_TRIANGLE_STRIP, OVTX_FMT, it->on, it->ov);
                 stats.draw_calls++;
                 apply_blend_depth(s);     /* the texture stays bound; only its enable changed */
             }
         }
+        if (mt >= 0) sceGuSetMatrix(GU_MODEL, &mesh_ident);
     }
 }
 
@@ -1748,4 +1754,125 @@ int draw_poll_input(struct hle_pad *p, int *quit) {
     p->ltrig = (k & PSP_CTRL_LTRIGGER) ? 255 : 0;
     p->rtrig = (k & PSP_CTRL_RTRIGGER) ? 255 : 0;
     return 0;
+}
+
+/* ---- meshes (draw.h draw_mesh; docs/native-renderer.md) -------------------
+ * The fed vector (x z, y z, -(z + 1), z) of draw.h becomes the GE vertex of
+ * this file, (x z, y z, -z): the model matrix is m's rows 0, 1 and minus row
+ * 3, under the pass's own projection, so depth, fog and the passes are the
+ * strips'.  A mesh whose bounding sphere lies inside the guard band, in front
+ * of the near plane and within one pass is one indexed GE draw with that
+ * matrix (GU_TRANSFORM_3D): no CPU transform, no strip work.  Any other is
+ * transformed here, clipped at the near plane and drawn as strips, which cut
+ * at the guard band and the split as usual.  The vertices and indices go to
+ * the frame's pool (written back before replay), the colours by the strips'
+ * rules (conv_vtx, conv_offset). */
+int draw_mesh_supported(void) { return 1; }
+
+static void mesh_strips(const float *m, const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
+    for (int t = 0; t + 2 < ni; t += 3) {
+        float h[3][4];
+        const draw_mesh_vertex *p[3];
+        int ok = 1;
+        for (int k = 0; k < 3; k++) {
+            if (idx[t + k] >= nv) { ok = 0; break; }
+            p[k] = &v[idx[t + k]];
+            for (int r = 0; r < 4; r++) h[k][r] = m[r] * p[k]->x + m[4 + r] * p[k]->y + m[8 + r] * p[k]->z + m[12 + r];
+        }
+        if (!ok) continue;
+        /* clip at z = depth_zn (h[3] is z): up to four vertices */
+        draw_vertex out[4];
+        int n = 0;
+        for (int k = 0; k < 3; k++) {
+            int k2 = (k + 1) % 3;
+            float z0 = h[k][3], z1 = h[k2][3];
+            if (z0 >= depth_zn) {
+                float iz = 1.0f / z0;
+                out[n].x = h[k][0] * iz; out[n].y = h[k][1] * iz; out[n].w = iz;
+                out[n].u = p[k]->u; out[n].v = p[k]->v; out[n].color = p[k]->color; out[n].ocolor = p[k]->ocolor;
+                n++;
+            }
+            if ((z0 >= depth_zn) != (z1 >= depth_zn)) {
+                float f = (depth_zn - z0) / (z1 - z0), hx = h[k][0] + (h[k2][0] - h[k][0]) * f, hy = h[k][1] + (h[k2][1] - h[k][1]) * f;
+                float iz = 1.0f / depth_zn;
+                out[n].x = hx * iz; out[n].y = hy * iz; out[n].w = iz;
+                out[n].u = p[k]->u + (p[k2]->u - p[k]->u) * f; out[n].v = p[k]->v + (p[k2]->v - p[k]->v) * f;
+                const draw_mesh_vertex *near = f < 0.5f ? p[k] : p[k2];
+                out[n].color = near->color; out[n].ocolor = near->ocolor;
+                n++;
+            }
+        }
+        if (n == 3) draw_strip(out, 3);
+        else if (n == 4) { draw_vertex q[4] = { out[0], out[1], out[3], out[2] }; draw_strip(q, 4); }
+    }
+}
+
+void draw_mesh(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
+    if (headless || !list_open || !cur_valid || ni < 3 || nv <= 0 || list_full()) return;
+    /* bounding sphere (box centre, farthest corner) through the rows of m */
+    float lo[3] = { v[0].x, v[0].y, v[0].z }, hi[3] = { v[0].x, v[0].y, v[0].z };
+    for (int i = 1; i < nv; i++) {
+        const float q[3] = { v[i].x, v[i].y, v[i].z };
+        for (int k = 0; k < 3; k++) { if (q[k] < lo[k]) lo[k] = q[k]; if (q[k] > hi[k]) hi[k] = q[k]; }
+    }
+    float c[3], rad2 = 0.0f;
+    for (int k = 0; k < 3; k++) { c[k] = 0.5f * (lo[k] + hi[k]); float d = hi[k] - c[k]; rad2 += d * d; }
+    float rad = sqrtf(rad2), mn[4], mx[4];
+    for (int r = 0; r < 4; r++) {
+        float b = m[r] * c[0] + m[4 + r] * c[1] + m[8 + r] * c[2] + m[12 + r];
+        float e = rad * sqrtf(m[r] * m[r] + m[4 + r] * m[4 + r] + m[8 + r] * m[8 + r]);
+        mn[r] = b - e; mx[r] = b + e;
+    }
+    int pass = -1;
+    if (cur.layer == DRAW_LAYER_3D && mn[3] >= depth_zn && nmesh_mats < MESH_MAT_MAX && ni <= 65535) {
+        float xs[4] = { mn[0] / mn[3], mn[0] / mx[3], mx[0] / mn[3], mx[0] / mx[3] };
+        float ys[4] = { mn[1] / mn[3], mn[1] / mx[3], mx[1] / mn[3], mx[1] / mx[3] };
+        float x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
+        for (int k = 1; k < 4; k++) { x0 = xs[k] < x0 ? xs[k] : x0; x1 = xs[k] > x1 ? xs[k] : x1; y0 = ys[k] < y0 ? ys[k] : y0; y1 = ys[k] > y1 ? ys[k] : y1; }
+        if (x0 > GUARD_X0 && x1 < GUARD_X1 && y0 > GUARD_Y0 && y1 < GUARD_Y1) {
+            if (!depth_split) pass = PASS_NEAR;
+            else if (mn[3] >= depth_split) pass = PASS_FAR;
+            else if (mx[3] <= depth_split) pass = PASS_NEAR;
+        }
+    }
+    if (pass < 0) { gs.mesh_cpu++; mesh_strips(m, v, nv, idx, ni); return; }
+    int mode = conv_mode(), off = 0;
+    uint32_t aor = (mode & CONV_ALPHA) ? 0u : 0xFF000000u;
+    if (cur.texture) for (int i = 0; i < nv && !off; i++) if (v[i].ocolor & 0x00FFFFFFu) off = 1;
+    uint32_t vb = ((uint32_t)nv * sizeof(gu_vtx) + 63u) & ~63u, ib = ((uint32_t)ni * 2u + 63u) & ~63u;
+    uint32_t ob = off ? (((uint32_t)nv * sizeof(gu_ovtx) + 63u) & ~63u) : 0u;
+    uint8_t *mem = pool_chunk(vb + ib + ob);
+    if (!mem) { gs.dropped++; return; }
+    batch_flush();
+    if (cur_proj != PROJ_3D) cur_proj = PROJ_3D;
+    if (nitems[pass] == ITEM_MAX || nrstates == 0) { gs.dropped++; return; }
+    gu_vtx *gv = (gu_vtx *)(void *)mem;
+    uint16_t *gi = (uint16_t *)(void *)(mem + vb);
+    gu_ovtx *go = off ? (gu_ovtx *)(void *)(mem + vb + ib) : NULL;
+    int scale = cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA;
+    for (int i = 0; i < nv; i++) {
+        uint32_t t = v[i].color | aor;
+        if (mode & CONV_ADD_OFFSET) t = (t & 0xFF000000u) | sat_add(v[i].color, v[i].ocolor);
+        gv[i].u = v[i].u; gv[i].v = v[i].v; gv[i].color = argb_abgr(t);
+        gv[i].x = v[i].x; gv[i].y = v[i].y; gv[i].z = v[i].z;
+        if (go) {
+            uint32_t oc = v[i].ocolor;
+            unsigned r = (oc >> 16) & 255, g = (oc >> 8) & 255, b = oc & 255;
+            if (scale) { unsigned a = (v[i].color >> 24) & 255; r = mul255(r, a); g = mul255(g, a); b = mul255(b, a); }
+            go[i].color = 0xFF000000u | b << 16 | g << 8 | r;
+            go[i].x = v[i].x; go[i].y = v[i].y; go[i].z = v[i].z;
+        }
+    }
+    memcpy(gi, idx, (size_t)ni * 2);
+    ScePspFMatrix4 *mm = &mesh_mats[nmesh_mats];
+    mm->x.x = m[0];  mm->x.y = m[1];  mm->x.z = -m[3];  mm->x.w = 0.0f;
+    mm->y.x = m[4];  mm->y.y = m[5];  mm->y.z = -m[7];  mm->y.w = 0.0f;
+    mm->z.x = m[8];  mm->z.y = m[9];  mm->z.z = -m[11]; mm->z.w = 0.0f;
+    mm->w.x = m[12]; mm->w.y = m[13]; mm->w.z = -m[15]; mm->w.w = 1.0f;
+    gu_item *it = &items[pass][nitems[pass]++];
+    it->state = (uint16_t)(nrstates - 1); it->proj = PROJ_3D; it->prim = GU_TRIANGLES;
+    it->n = (uint16_t)ni; it->on = go ? (uint16_t)ni : 0;
+    it->v = gv; it->ov = go; it->ix = gi; it->mat = (int16_t)nmesh_mats++;
+    gs.mesh_ge++;
+    stats.draw_calls++; stats.triangles += (uint32_t)(ni / 3);
 }
