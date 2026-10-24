@@ -104,7 +104,7 @@ void fn_8c037294_orig(sh4_ctx *c);
 void fn_8c037294_ta(sh4_ctx *c);
 void fn_8c037294(sh4_ctx *c) {
     if (hle_draw_skip) return;   /* frame skip: no picture this frame (hle/game/frame_skip.c) */
-    if (native_land_window && native_land_model_ok(c->r[4])) {   /* native_land.c: the backend transforms */
+    if (native_land_window && native_land_decide(c, c->r[4])) {  /* native_land.c: the backend transforms */
         WR32(c->gbr, 60, RD32(0x8c88f64cu, 0));                  /* the vertex buffer, for the lighting */
         return;
     }
@@ -125,8 +125,10 @@ void fn_8c037350_orig(sh4_ctx *c);
 void fn_8c037350(sh4_ctx *c) {
     HLE_ENTER(0x8c037350u, "model lighting fn_8c037350");
     if (hle_draw_skip) return;   /* frame skip */
+    if (native_land_window && native_land_skip_light(c->r[4])) return;   /* native_land.c: its kept colours */
     if (hle_ta_direct && !kamui_ptr_trace()) ta_xform_8c037350(c);
     else fn_8c037350_orig(c);
+    if (native_land_window) native_land_lit(c, c->r[4]);
 }
 #endif
 TA_PASS(8c037460)

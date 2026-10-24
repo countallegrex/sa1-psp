@@ -116,10 +116,15 @@ void draw_line_strip(const draw_vertex *v, int n);
  * homogeneous vector the strip path feeds the rasteriser, (x z, y z,
  * -(z + 1), z) for screen x, y in DC pixels and depth z, so projection,
  * depth and fog are the strip path's and the hardware clips at the near
- * plane.  draw_mesh_supported() is 0 where a backend has no such path yet. */
+ * plane.  bound is a model-space sphere (x, y, z, radius) holding every
+ * vertex: draw_mesh_accepts(m, bound) says whether this backend draws such a
+ * mesh in hardware (the caller decides before it transforms anything, and
+ * draws it the strip way otherwise); draw_mesh draws only what it accepts.
+ * draw_mesh_supported() is 0 where a backend has no such path yet. */
 typedef struct draw_mesh_vertex { float x, y, z, u, v; uint32_t color, ocolor; } draw_mesh_vertex;
 int draw_mesh_supported(void);
-void draw_mesh(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni);
+int draw_mesh_accepts(const float m[16], const float bound[4]);
+void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni);
 
 uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels, int clut_fmt, const void *clut);
 void draw_texture_destroy(uint32_t handle);

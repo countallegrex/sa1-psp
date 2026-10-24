@@ -3,8 +3,10 @@
 Orders item 3b/d (2026-10-22): re-express the Dreamcast's land drawing the PSP
 way instead of translating it every frame.  This note covers the first
 vertical slice, Station Square's static scenery (the land table), its
-desktop check, and the go/no-go measured on the console.  Status: design;
-the renderer option is off by default until the console go/no-go.
+desktop check, and the go/no-go measured on the console.  Status: NO-GO
+(2026-10-24, section 5): the GE path drew correctly but was not cheaper
+than the TA path; the code stays behind `renderer = native` (off by
+default) and the big lever moves to the Media Engine.
 
 Prior art read for ideas only (no code taken): JGR Portable builds GE
 command packets per stage batch once and replays them with sceGuCallList,
@@ -138,3 +140,31 @@ Measure Station Square with the slice on and off (ABBA, tools/psp_bench.py).
 Go if it saves at least ~60 % of the land's measured render time from the
 fresh profile; then characters (GE skinning), effects and shadows, one type
 at a time.  No-go: write up why and move to the Media Engine instead.
+
+## 5. Result (2026-10-24, PSP-3001, `--stage ss`, frame skip off, ABBA x3)
+
+| run | Station Square | note |
+|---|---|---|
+| TA path | 48.99 ms | today |
+| land not drawn (`renderer = noland`) | 27.75 ms | the land costs **21.24 ms**: the go bar was a saving of 12.7 ms |
+| native #1 (8980e72: sphere test inside draw_mesh, CPU per-triangle fallback) | 57.98 ms | +9.0: 46 % of meshes fell back to a per-triangle CPU path dearer than TA |
+| native #2 (decision per model before the transform, failures untouched TA, lighting kept per model) | 51.51 ms | **+2.5**: 45 % of the land's models accepted (5,932 vs 7,306 left to TA) |
+
+Pictures matched on the console (0.02-0.05 % of pixels differ, none by more
+than 60 levels) and the game state matched on the desktop (tapes, watch
+traces, guest RAM outside draw scratch), but by the kill criterion agreed
+beforehand (the meshes on the GE path must be cheaper than the same meshes
+on TA) the slice is a no-go.  Where the time went in #2: kamui's CPU time
+fell only from 14.08 to 13.78 ms while the replay rose from 3.30 to 4.80 ms.
+Skipping the transform and the lighting saves little on accepted models
+because the per-frame work that replaces them is of the same order: every
+native vertex is gathered (kept colours, positions, UVs) into a draw record,
+converted again into the GE layout in the frame's pool, and each mesh set
+costs an sceGuDrawArray syscall and an sceGuSetMatrix in the replay.  Half of
+the land's models do not qualify at all (large models crossing the guard
+band or the near/far split of the 16-bit depth passes), so they keep the TA
+cost.  What it would take to pay (not done: no second iteration without new
+evidence): persistent GE vertex buffers per model (no per-frame gather or
+conversion), prebuilt display lists replayed with one call, and splitting
+the land's large models at convert time so most qualify; even then the bar
+is 12.7 ms out of a 21.2 ms land cost.

@@ -493,6 +493,7 @@ int main(int argc, char **argv) {
             const char *v = argv[++i];
             if (!strncmp(v, "force:", 6)) { hle_renderer_force = 1; v += 6; }
             if (!strcmp(v, "native")) hle_renderer_cli = 1; else if (!strcmp(v, "ta")) hle_renderer_cli = 0;
+            else if (!strcmp(v, "noland")) hle_renderer_cli = 2;   /* measurement: the land not drawn */
             else { fprintf(stderr, "--renderer: ta, native or force:native\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--frame-skip") && i + 1 < argc) {   /* hle/game/frame_skip.c: auto|off|N|force:... */

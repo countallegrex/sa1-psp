@@ -714,8 +714,10 @@ static void mesh_vec(const float *m, const draw_mesh_vertex *p, float *h) {
 #endif
 
 int draw_mesh_supported(void) { return 1; }
+int draw_mesh_accepts(const float m[16], const float bound[4]) { (void)m; (void)bound; return 1; }   /* GL clips everything */
 
-void draw_mesh(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
+void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
+    (void)bound;
     if (ni < 3) return;
     stats.draw_calls++; stats.triangles += (uint32_t)(ni / 3);
 #ifndef SA1_NO_SDL

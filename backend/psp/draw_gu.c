@@ -81,7 +81,7 @@ static int cull_flip;                         /* --cull-flip (main_psp.c): the o
 /* Counters for the report beyond draw_stats. */
 static struct { uint32_t list_high, pool_high, pool_full, dropped, offscreen, mirrors, mirror_fail, downscaled, frames;
                 uint32_t flush_state, flush_proj, flush_offset, last_strips, last_draws, last_states;
-                uint32_t mesh_ge, mesh_cpu;   /* draw_mesh: GE-transformed draws, CPU-clipped ones */
+                uint32_t mesh_ge, mesh_cpu;   /* draw_mesh_accepts: yes, no */
                 float zmin_frame, zmin_win, zmin_last; uint32_t znear_verts[4];   /* nearest 3D z; vertices with z < 2, 4, 8, 16 */
                 uint64_t gpu_wait_us, swap_wait_us, replay_us, frame_us_sum, frame_us_max, last_end; } gs;
 /* The largest strip w folded into gs.zmin_frame since it was last reset: a
@@ -890,7 +890,7 @@ void draw_end_frame(void) {
 
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
 void draw_gu_report(void) {
-    if (gs.mesh_ge || gs.mesh_cpu) sa1_log("draw: meshes %u by the GE, %u clipped on the CPU", gs.mesh_ge, gs.mesh_cpu);
+    if (gs.mesh_ge || gs.mesh_cpu) sa1_log("draw: meshes accepted for the GE %u, left to the TA path %u", gs.mesh_ge, gs.mesh_cpu);
     if (tex_pool_on) pool_log("report");
     sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, list replay %.2f ms/frame, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB, vertices %u KB (%u strips over); "
             "%u strips dropped (list full), %u clipped to the GE's guard band",
@@ -1762,80 +1762,46 @@ int draw_poll_input(struct hle_pad *p, int *quit) {
  * 3, under the pass's own projection, so depth, fog and the passes are the
  * strips'.  A mesh whose bounding sphere lies inside the guard band, in front
  * of the near plane and within one pass is one indexed GE draw with that
- * matrix (GU_TRANSFORM_3D): no CPU transform, no strip work.  Any other is
- * transformed here, clipped at the near plane and drawn as strips, which cut
- * at the guard band and the split as usual.  The vertices and indices go to
+ * matrix (GU_TRANSFORM_3D): no CPU transform, no strip work.  The caller asks
+ * draw_mesh_accepts first, before the game transforms anything, and draws any
+ * other mesh the game's own way.  The vertices and indices go to
  * the frame's pool (written back before replay), the colours by the strips'
  * rules (conv_vtx, conv_offset). */
 int draw_mesh_supported(void) { return 1; }
 
-static void mesh_strips(const float *m, const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
-    for (int t = 0; t + 2 < ni; t += 3) {
-        float h[3][4];
-        const draw_mesh_vertex *p[3];
-        int ok = 1;
-        for (int k = 0; k < 3; k++) {
-            if (idx[t + k] >= nv) { ok = 0; break; }
-            p[k] = &v[idx[t + k]];
-            for (int r = 0; r < 4; r++) h[k][r] = m[r] * p[k]->x + m[4 + r] * p[k]->y + m[8 + r] * p[k]->z + m[12 + r];
-        }
-        if (!ok) continue;
-        /* clip at z = depth_zn (h[3] is z): up to four vertices */
-        draw_vertex out[4];
-        int n = 0;
-        for (int k = 0; k < 3; k++) {
-            int k2 = (k + 1) % 3;
-            float z0 = h[k][3], z1 = h[k2][3];
-            if (z0 >= depth_zn) {
-                float iz = 1.0f / z0;
-                out[n].x = h[k][0] * iz; out[n].y = h[k][1] * iz; out[n].w = iz;
-                out[n].u = p[k]->u; out[n].v = p[k]->v; out[n].color = p[k]->color; out[n].ocolor = p[k]->ocolor;
-                n++;
-            }
-            if ((z0 >= depth_zn) != (z1 >= depth_zn)) {
-                float f = (depth_zn - z0) / (z1 - z0), hx = h[k][0] + (h[k2][0] - h[k][0]) * f, hy = h[k][1] + (h[k2][1] - h[k][1]) * f;
-                float iz = 1.0f / depth_zn;
-                out[n].x = hx * iz; out[n].y = hy * iz; out[n].w = iz;
-                out[n].u = p[k]->u + (p[k2]->u - p[k]->u) * f; out[n].v = p[k]->v + (p[k2]->v - p[k]->v) * f;
-                const draw_mesh_vertex *near = f < 0.5f ? p[k] : p[k2];
-                out[n].color = near->color; out[n].ocolor = near->ocolor;
-                n++;
-            }
-        }
-        if (n == 3) draw_strip(out, 3);
-        else if (n == 4) { draw_vertex q[4] = { out[0], out[1], out[3], out[2] }; draw_strip(q, 4); }
-    }
-}
-
-void draw_mesh(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
-    if (headless || !list_open || !cur_valid || ni < 3 || nv <= 0 || list_full()) return;
-    /* bounding sphere (box centre, farthest corner) through the rows of m */
-    float lo[3] = { v[0].x, v[0].y, v[0].z }, hi[3] = { v[0].x, v[0].y, v[0].z };
-    for (int i = 1; i < nv; i++) {
-        const float q[3] = { v[i].x, v[i].y, v[i].z };
-        for (int k = 0; k < 3; k++) { if (q[k] < lo[k]) lo[k] = q[k]; if (q[k] > hi[k]) hi[k] = q[k]; }
-    }
-    float c[3], rad2 = 0.0f;
-    for (int k = 0; k < 3; k++) { c[k] = 0.5f * (lo[k] + hi[k]); float d = hi[k] - c[k]; rad2 += d * d; }
-    float rad = sqrtf(rad2), mn[4], mx[4];
+/* The pass a mesh with this matrix and bounding sphere draws in, or -1 when
+ * the GE cannot take it whole: the sphere through the rows of m must lie in
+ * front of the near plane, inside the guard band and within one pass. */
+static int mesh_pass(const float *m, const float *bound) {
+    if (cur.layer != DRAW_LAYER_3D || nmesh_mats >= MESH_MAT_MAX) return -1;
+    float mn[4], mx[4];
     for (int r = 0; r < 4; r++) {
-        float b = m[r] * c[0] + m[4 + r] * c[1] + m[8 + r] * c[2] + m[12 + r];
-        float e = rad * sqrtf(m[r] * m[r] + m[4 + r] * m[4 + r] + m[8 + r] * m[8 + r]);
+        float b = m[r] * bound[0] + m[4 + r] * bound[1] + m[8 + r] * bound[2] + m[12 + r];
+        float e = bound[3] * sqrtf(m[r] * m[r] + m[4 + r] * m[4 + r] + m[8 + r] * m[8 + r]);
         mn[r] = b - e; mx[r] = b + e;
     }
-    int pass = -1;
-    if (cur.layer == DRAW_LAYER_3D && mn[3] >= depth_zn && nmesh_mats < MESH_MAT_MAX && ni <= 65535) {
-        float xs[4] = { mn[0] / mn[3], mn[0] / mx[3], mx[0] / mn[3], mx[0] / mx[3] };
-        float ys[4] = { mn[1] / mn[3], mn[1] / mx[3], mx[1] / mn[3], mx[1] / mx[3] };
-        float x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
-        for (int k = 1; k < 4; k++) { x0 = xs[k] < x0 ? xs[k] : x0; x1 = xs[k] > x1 ? xs[k] : x1; y0 = ys[k] < y0 ? ys[k] : y0; y1 = ys[k] > y1 ? ys[k] : y1; }
-        if (x0 > GUARD_X0 && x1 < GUARD_X1 && y0 > GUARD_Y0 && y1 < GUARD_Y1) {
-            if (!depth_split) pass = PASS_NEAR;
-            else if (mn[3] >= depth_split) pass = PASS_FAR;
-            else if (mx[3] <= depth_split) pass = PASS_NEAR;
-        }
-    }
-    if (pass < 0) { gs.mesh_cpu++; mesh_strips(m, v, nv, idx, ni); return; }
+    if (mn[3] < depth_zn) return -1;
+    float xs[4] = { mn[0] / mn[3], mn[0] / mx[3], mx[0] / mn[3], mx[0] / mx[3] };
+    float ys[4] = { mn[1] / mn[3], mn[1] / mx[3], mx[1] / mn[3], mx[1] / mx[3] };
+    float x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
+    for (int k = 1; k < 4; k++) { x0 = xs[k] < x0 ? xs[k] : x0; x1 = xs[k] > x1 ? xs[k] : x1; y0 = ys[k] < y0 ? ys[k] : y0; y1 = ys[k] > y1 ? ys[k] : y1; }
+    if (!(x0 > GUARD_X0 && x1 < GUARD_X1 && y0 > GUARD_Y0 && y1 < GUARD_Y1)) return -1;
+    if (!depth_split) return PASS_NEAR;
+    if (mn[3] >= depth_split) return PASS_FAR;
+    if (mx[3] <= depth_split) return PASS_NEAR;
+    return -1;
+}
+
+int draw_mesh_accepts(const float m[16], const float bound[4]) {
+    int ok = !headless && mesh_pass(m, bound) >= 0;
+    if (ok) gs.mesh_ge++; else gs.mesh_cpu++;
+    return ok;
+}
+
+void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
+    if (headless || !list_open || !cur_valid || ni < 3 || nv <= 0 || ni > 65535 || list_full()) return;
+    int pass = mesh_pass(m, bound);
+    if (pass < 0) { gs.dropped++; return; }    /* the caller asked draw_mesh_accepts with the same m and bound */
     int mode = conv_mode(), off = 0;
     uint32_t aor = (mode & CONV_ALPHA) ? 0u : 0xFF000000u;
     if (cur.texture) for (int i = 0; i < nv && !off; i++) if (v[i].ocolor & 0x00FFFFFFu) off = 1;
@@ -1873,6 +1839,5 @@ void draw_mesh(const float m[16], const draw_mesh_vertex *v, int nv, const uint1
     it->state = (uint16_t)(nrstates - 1); it->proj = PROJ_3D; it->prim = GU_TRIANGLES;
     it->n = (uint16_t)ni; it->on = go ? (uint16_t)ni : 0;
     it->v = gv; it->ov = go; it->ix = gi; it->mat = (int16_t)nmesh_mats++;
-    gs.mesh_ge++;
     stats.draw_calls++; stats.triangles += (uint32_t)(ni / 3);
 }

@@ -43,10 +43,13 @@ int kamui_ptr_trace(void);            /* SA1_KAMUI_DUMP: this frame is being tra
 draw_vertex *kamui_direct_strip(uint32_t n, uint32_t *first);
 /* A native mesh for this frame (native_land.c): fill the returned vertices;
  * *rec goes into a type-6 marker of kind 1 (word 0 0xC0000001, word 1 rec). */
-draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const uint16_t *idx, uint32_t ni, uint32_t *rec);
+draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const float bound[4], const uint16_t *idx, uint32_t ni, uint32_t *rec);
 /* native_land.c (docs/native-renderer.md) */
-extern int hle_renderer_native, hle_renderer_cli, hle_renderer_force, native_land_window;
-int native_land_model_ok(uint32_t model);
+extern int hle_renderer_native, hle_renderer_cli, hle_renderer_force, native_land_window, native_land_noland;
+int native_land_decide(sh4_ctx *c, uint32_t model);   /* the transform's wrapper: 1 = natively */
+int native_land_model_ok(uint32_t model);                /* the decided model */
+int native_land_skip_light(uint32_t model);
+void native_land_lit(sh4_ctx *c, uint32_t model);
 int native_land_set(sh4_ctx *c, uint32_t model, uint32_t set, uint32_t ta, uint32_t *ta_out);
 void native_land_init(void);
 void native_land_report(void);

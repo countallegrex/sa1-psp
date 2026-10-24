@@ -76,8 +76,8 @@ void hle_settings_load(void) {
                 hle_event_skip = strcmp(v, "off") != 0 && strcmp(v, "0") != 0;
                 sa1_log("settings: event_skip %s", hle_event_skip ? "on" : "off");
             } else if (!strcmp(k, "renderer")) {
-                hle_renderer_native = !strcmp(v, "native");
-                sa1_log("settings: renderer %s", hle_renderer_native ? "native" : "ta");
+                hle_renderer_native = !strcmp(v, "native") ? 1 : !strcmp(v, "noland") ? 2 : 0;
+                sa1_log("settings: renderer %s", hle_renderer_native == 1 ? "native" : hle_renderer_native == 2 ? "noland" : "ta");
             } else if (!strcmp(k, "frame_skip")) {
                 int m = hle_parse_frame_skip(v, NULL);
                 if (m != -3) { hle_frame_skip = m; sa1_log("settings: frame_skip = %s", v); }

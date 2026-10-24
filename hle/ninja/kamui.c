@@ -209,7 +209,7 @@ static int in_range2d(uint32_t p) {
 
 static draw_vertex *dverts; static uint32_t ndverts, dverts_cap;   /* the TA bypass's host strips (docs/ta-direct.md) */
 /* native meshes (native_land.c): this frame's vertices and draw records */
-typedef struct { float m[16]; uint32_t first, nv; const uint16_t *idx; uint32_t ni; } native_rec;
+typedef struct { float m[16], bound[4]; uint32_t first, nv; const uint16_t *idx; uint32_t ni; } native_rec;
 static draw_mesh_vertex *mverts;
 static uint32_t nmverts, mverts_cap;
 static native_rec *nrecs;
@@ -645,11 +645,12 @@ draw_vertex *kamui_direct_strip(uint32_t n, uint32_t *first) {
 
 /* Native meshes (native_land.c): vertices and draw records for this frame,
  * drawn where their marker sits in a list, with that list's header state. */
-draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const uint16_t *idx, uint32_t ni, uint32_t *rec) {
+draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const float bound[4], const uint16_t *idx, uint32_t ni, uint32_t *rec) {
     if (!grow((void **)&mverts, &mverts_cap, nmverts + nv, sizeof *mverts) ||
         !grow((void **)&nrecs, &nrecs_cap, nnrecs + 1, sizeof *nrecs)) return NULL;
     native_rec *r = &nrecs[nnrecs];
     memcpy(r->m, m, sizeof r->m);
+    memcpy(r->bound, bound, sizeof r->bound);
     r->first = nmverts; r->nv = nv; r->idx = idx; r->ni = ni;
     *rec = nnrecs++;
     nmverts += nv;
@@ -915,7 +916,7 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
             if (pc.list == want_list && !pc.modvol && !pc.sprite && !sorted && r < nnrecs) {
                 const native_rec *nr = &nrecs[r];
                 draw_set_state(&pc.state);
-                draw_mesh(nr->m, mverts + nr->first, (int)nr->nv, nr->idx, (int)nr->ni);
+                draw_mesh(nr->m, nr->bound, mverts + nr->first, (int)nr->nv, nr->idx, (int)nr->ni);
                 if (pc.list < 3) stat_strips[pc.list == 2 ? 1 : pc.list]++;
             }
             p += 32;
