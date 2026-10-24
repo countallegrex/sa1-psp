@@ -92,6 +92,10 @@ void draw_gu_set_split(float z);
 void draw_gu_set_lod_bias(float b);
 void draw_gu_set_max_mip(int n);
 void draw_gu_set_tex_pool(int on, int reserve_kb);
+void vmu_store_psp_init(const char *dir);   /* vmu_store_psp.c */
+const char *vmu_store_psp_dir(void);
+static int vmu_mode;                        /* -1 --no-vmu, 1 --vmu-dir, 0 default */
+static const char *vmu_dir_arg;
 void draw_gu_set_ge_pipeline(int on);
 void draw_gu_set_stall_every(int n);
 uint32_t hle_task_running(void);
@@ -510,6 +514,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--gu-split") && i + 1 < args_c) draw_gu_set_split((float)atof(av[++i]));
         else if (!strcmp(av[i], "--gu-lod-bias") && i + 1 < args_c) draw_gu_set_lod_bias((float)atof(av[++i]));
         else if (!strcmp(av[i], "--gu-max-mip") && i + 1 < args_c) draw_gu_set_max_mip(atoi(av[++i]));
+        else if (!strcmp(av[i], "--no-vmu")) vmu_mode = -1;
+        else if (!strcmp(av[i], "--vmu-dir") && i + 1 < args_c) { vmu_dir_arg = av[++i]; vmu_mode = 1; }
         else if (!strcmp(av[i], "--tex-pool") && i + 1 < args_c) draw_gu_set_tex_pool(strcmp(av[++i], "off") != 0, -1);   /* draw_gu.c: texture chunks */
         else if (!strcmp(av[i], "--tex-reserve") && i + 1 < args_c) draw_gu_set_tex_pool(1, atoi(av[++i]));       /* KB of heap the pool leaves free */
         else if (!strcmp(av[i], "--env") && i + 1 < args_c) {   /* NAME=VALUE, e.g. SA1_COLL_REC=1: a same-binary A/B */
@@ -647,6 +653,15 @@ int main(int argc, char **argv) {
         sa1_log("fpu: FCSR 0x%08x, rounds %s", now, fpu_zero ? "toward zero, as the console" : "to nearest (a tape recorded before round-toward-zero)");
     }
     plat_set_data_root(root);
+    /* VMU in port A1 (hle/shinobi/vmu_store.h): its files in "vmu" beside the
+     * EBOOT, unless --no-vmu or a strict run (tapes keep "no VMU"). */
+    if (vmu_mode > 0 || (vmu_mode == 0 && !hle_strict)) {
+        char vd[300];
+        if (vmu_dir_arg) snprintf(vd, sizeof vd, "%s", vmu_dir_arg);
+        else abs_path(vd, sizeof vd, "vmu");
+        vmu_store_psp_init(vd);
+        sa1_log("VMU A1: %s", vmu_store_psp_dir());
+    }
     sa1_log("step: hle_init");
     hle_init();
     sa1_log("step: function map");
