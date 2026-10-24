@@ -63,46 +63,51 @@ static in world space, so all of that can be done once.
 
 ### 3.1 Offline converter (launcher side, the user's own data)
 
-`tools/land_convert.py` reads `ADV00` (decompressed with tools/prs.py) and
-the level table in `1ST_READ.BIN`, and writes `data/native/LAND_<lv>_<act>.BIN`
-per land table.  For every COL with the visible bit:
-
-- the model's vertices pre-transformed to world space by the COL object's
-  translation and XYZ rotation, computed exactly as the game's matrix
-  helpers do (same float operation order, the fsca table, sh4_trig.h), plus
-  the rotated normals for the runtime lighting bake;
-- strips turned into indexed triangle lists per material (16-bit indices),
-  merged across COLs per material where the draw order allows: opaque
-  batches in any order, translucent ones in the game's order;
-- materials reduced to what the backend needs: texture-list index, opaque or
-  translucent, alpha, IGNORE_LIGHT, ENV, specular, flip/clamp;
-- the COL index, so the runtime can draw exactly the game's visible list.
-
-Data goes only to the user's data folder, never into the repository (it is
-game data).
+`tools/land_convert.py --data DUMP/data --out DATA` reads `ADV00`
+(decompressed with tools/prs.py) and the level table in `1ST_READ.BIN`,
+and writes `DATA/native/LAND_<level>_<act>.BIN` per land table (Station
+Square: six tables, 43-698 KB; act 0 has 240 drawn COLs, 11,468 triangles,
+679 mesh sets).  For every COL with the visible bit, each mesh set of its
+model becomes indexed triangles (16-bit indices) in model space, keyed by
+the model's address and the set's index, with each vertex's UV (the game's
+UV scale applied) and the index of the model point it came from.  Raw
+material words travel along for checks.  `--world` writes world-space
+positions instead (the COL object's njTranslate and njRotateXYZ), for a
+later one-matrix draw.  Data goes only to the user's data folder, never
+into the repository (it is game data).
 
 ### 3.2 Runtime (HLE)
 
-- A hook on the land draw fn_8c051e56: with the native renderer on and a
-  converted file for the current land table, it runs the game's setup and
-  matrix calls as today (njPushMatrix, njSetTexture, the context), then,
-  instead of drawing each model through the pipeline, records the visible
-  COLs (read from the game's list) and asks the backend to draw their
-  batches with the current view.  Matrix pushes and pops stay balanced as in
-  the original, so the guest state after the draw is the same as today's
-  apart from the draw scratch (the frame-skip proof showed which addresses
-  those are; tapes and RAM compares check it).
-- Vertex colours are baked at the first draw of a land table and again when
-  the palette or the light changes (a 32-byte compare per frame): the game's
-  palette and light from guest RAM, applied to the converted normals with
-  the game's own formula, so the colours match the pipeline's to the bit.
-- Fog, the projection (Ninja screen distance and centre) and the far and
-  near planes come from the same guest state the pipeline uses.
+The cleanest hook is inside our native mesh-set loop (hle/ninja/ta_mesh.c,
+0x8C0376D0), which already runs for every land model:
+
+- An HLE override of the land task 0x8C051E00 (`sa1_register_fn`; the game
+  calls it through a task pointer) marks the land window and runs the
+  game's own task: the cull, the visible list, njPushMatrix/njSetTexture,
+  every COL's njTranslate/njRotateXYZ and the context, exactly as today.
+- In that window the vertex transform 0x8C037294 returns at once (as on a
+  skipped frame).  The lighting 0x8C037350 still runs, so each model point's
+  base and offset colours are the game's own, bit for bit; caching them per
+  model while the light and palette stay the same is the next saving.
+- The mesh-set loop still computes each set's polygon header words, the
+  texture and the material alpha, but instead of calling a strip writer it
+  hands the set's converted triangles to the backend with that header (its
+  draw state through kamui's header decoding), the per-point colours, and
+  the game's matrix for that COL (XMTRX) combined with the screen scale and
+  centre (0x8C8FFE00..).  One matrix per COL, no CPU transform, no TA bytes,
+  no parse, no CPU clip.
+- The guest state after the land draw differs from today's only in draw
+  scratch (the transformed-vertex buffer, TA pointers, header words), as on
+  a skipped frame; tapes and RAM compares check it.
 
 ### 3.3 Backend interface
 
-A new call next to `draw_strip`: `draw_mesh(mesh, view, proj)`. The backend
-keeps the converted mesh in its own memory and draws its batches with
+A new call next to `draw_strip`: `draw_mesh(matrix, vertices, indices)`,
+where the matrix takes a model-space point to the homogeneous vector the
+strip path already feeds the backend, (x z, y z, -(z + 1), z) for screen
+x, y and depth z: that map is linear, so the backend's own projection,
+depth and fog stay as they are and its hardware clips at the near plane.
+The backend keeps the converted mesh in its own memory and draws it with
 hardware transform:
 
 - PSP: indexed triangles, GU_TRANSFORM_3D, one model-view matrix for the
