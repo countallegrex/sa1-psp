@@ -7,8 +7,8 @@
  * (backend/desktop/vmu_store_desktop.c) unless the run is --strict or
  * --no-vmu.
  *
- * PSP: TODO (sa1-psp-g) - implement these five on ms0: and set
- * hle_vmu_store before hle_init; until then the PSP build has no VMU.
+ * PSP: backend/psp/vmu_store_psp.c (vmu/ beside the EBOOT), set the same
+ * way by main_psp.c.
  *
  * Names are VMU file names: up to 12 characters [A-Za-z0-9_.-], NUL
  * terminated.  Sizes are bytes; the bu layer rounds to 512-byte blocks.
