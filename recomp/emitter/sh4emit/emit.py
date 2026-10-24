@@ -72,15 +72,21 @@ class Program:
         return self.sdk_range is not None and self.sdk_range[0] <= phys(addr) < self.sdk_range[1]
 
     def pointer_words(self, candidates):
-        """Candidates whose P1 address (0x8C...) is an aligned 32-bit word
-        anywhere in the image: a function pointer in a data table, or in a
-        literal pool that code stores into an object (an instruction pair
-        that happens to spell one only costs an extra C function)."""
+        """Candidates whose address is an aligned 32-bit word anywhere in the
+        image, as P1 (0x8C...) or area 0 (0x0C...): a function pointer in a
+        data table, or in a literal pool that code stores into an object (an
+        instruction pair that happens to spell one only costs an extra C
+        function).  The PRS overlays are linked at 0x0C900000/0x0CB80000, so
+        their pointers have the 0x0C... form (ADV00's DisplaySub 0x0c90b2e0,
+        reached otherwise only by a branch from its MainSub, was merged into
+        it and trapped when the pause screen's display pass called it)."""
         import struct
         found = set()
         if not candidates:
             return found
         want = {(e | 0x80000000) & 0xFFFFFFFF for e in candidates}
+        if self.image.base >= 0x0C800000:   # an overlay slot; the main image (0x8C010000) keeps its fixed layout
+            want |= {phys(e) for e in candidates}
         data = self.image.data
         for off in range(0, len(data) - 3, 4):
             w = struct.unpack_from("<I", data, off)[0]
