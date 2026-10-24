@@ -6,7 +6,8 @@
 
 Reads 1ST_READ.BIN (the per-level land table pointers at 0x8C19E9FC, the UV
 scale at 0x8C038F10) and the level's code overlay (SONICADV/ADV00.PRS for
-Station Square, loaded at 0x8C900000), and writes DATA_DIR/native/
+Station Square, STG01.PRS for Emerald Coast, level 1; both loaded at
+0x8C900000), and writes DATA_DIR/native/
 LAND_<level>_<act>.BIN for each act's land table: every COL with the visible
 bit, each mesh set of its model as indexed triangles in model space, keyed
 by the model's address and the set's index.  The runtime draws a set from
@@ -41,7 +42,7 @@ from prs import prs_decompress  # noqa: E402
 BIN_BASE = 0x8C010000
 LEVEL_TABLE = 0x8C19E9FC          # land table pointers [level * 8 + act]
 UV_SCALE = 0x8C038F10
-OVERLAYS = {26: ("ADV00.PRS", 0x8C900000), 27: ("ADV00.PRS", 0x8C900000), 28: ("ADV00.PRS", 0x8C900000)}
+OVERLAYS = {1: ("STG01.PRS", 0x8C900000), 26: ("ADV00.PRS", 0x8C900000), 27: ("ADV00.PRS", 0x8C900000), 28: ("ADV00.PRS", 0x8C900000)}
 TURN = 2.0 * math.pi / 65536.0
 VISIBLE = 0x80000000
 
@@ -108,8 +109,8 @@ def xform(m, v, w):
 def convert(img, lt, level, act, world=False):
     ncol = img.s16(lt)
     cols = img.u32(lt + 12)
-    mats, mat_index, batches, verts, idx = [], {}, [], [], []
-    stats = {"cols": ncol, "visible": 0, "tris": 0, "skipped": 0}
+    mats, mat_index, batches, verts, idx, seen = [], {}, [], [], [], set()
+    stats = {"cols": ncol, "visible": 0, "tris": 0, "skipped": 0, "nonstrip": 0}
     for ci in range(ncol):
         col = cols + 0x24 * ci
         flags = img.u32(col + 32)
@@ -120,7 +121,14 @@ def convert(img, lt, level, act, world=False):
         if not model or model == 0x195 or not img.has(model, 40):
             stats["skipped"] += 1
             continue
+        msets, nmset = img.u32(model + 12), img.u16(model + 20)
+        if any(img.u16(msets + 24 * si) >> 14 != 3 for si in range(nmset)):
+            stats["nonstrip"] += 1          # triangle, quad or N-gon sets (Emerald Coast act 1): left to the TA way
+            continue
         stats["visible"] += 1
+        if not world and model in seen:
+            continue                        # another COL with the same model: model space, the same batches
+        seen.add(model)
         m = object_matrix(img, obj) if world else [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
         points, normals, npoint = img.u32(model), img.u32(model + 4), img.s32(model + 8)
         msets, mtab, nmset = img.u32(model + 12), img.u32(model + 16), img.u16(model + 20)
@@ -208,8 +216,9 @@ def main(argv=None):
         path = os.path.join(a.out, "native", "LAND_%d_%d.BIN" % (a.level, act))
         size = write(path, lt, st["cols"], uvscale, mats, batches, verts, idx)
         print("land_convert: act %d land table 0x%08x: %d COLs, %d drawn, %d batches, %d materials, %d vertices, "
-              "%d triangles -> %s (%d KB)" % (act, lt, st["cols"], st["visible"], len(batches), len(mats), len(verts),
-                                             st["tris"], path, size // 1024))
+              "%d triangles -> %s (%d KB)%s" % (act, lt, st["cols"], st["visible"], len(batches), len(mats), len(verts),
+                                               st["tris"], path, size // 1024,
+                                               "; %d models with non-strip sets left out" % st["nonstrip"] if st["nonstrip"] else ""))
     return 0
 
 

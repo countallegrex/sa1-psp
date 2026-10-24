@@ -33,7 +33,19 @@
  *     set drew with (native_land_captured).  With every set's state known the
  *     persistent copy is made (draw_model_create): vertices, kept colours and
  *     states, never gathered again.
+ *   - SPLIT (MODEL or SETS for a model with translucent or env-mapped mesh
+ *     sets besides opaque ones, iteration 4): the opaque sets go as MODEL or
+ *     SETS (one persistent list for those sets), but the transform and the
+ *     lighting run as on the TA path and the other sets are drawn by the
+ *     game's strip writers (kamui's translucent sort untouched).
  *   - otherwise the TA path, untouched.
+ * Kept colours and persistent copies are per lighting (nl_var: a model
+ * under COLs that turn it is lit per turn), and a model whose textures
+ * change while persistent (animated texture lists) goes the TA way.
+ * The converted file stays on the card: its tables are read at the land
+ * table's change, a model's vertices and indices only for its per-set
+ * draws (freed once its persistent copy is drawn), so no copy of the file
+ * stays in memory.
  * The guest state differs from the TA path's only in draw scratch, as on a
  * skipped frame (hle/game/frame_skip.c): tapes and RAM compares check it.
  * renderer = noland (a measurement aid, never a default) treats every land
@@ -82,32 +94,50 @@ int hle_parse_land_decide(const char *v) {
 
 typedef struct { uint32_t model; uint16_t set, col, mat, pad; uint32_t vfirst, vcount, ifirst, icount; } nl_batch;
 typedef struct { float x, y, z, nx, ny, nz, u, v; uint32_t pt; } nl_vert;
+/* A mesh set of a converted model: where it is in the file (vertex and
+ * index numbers) and, for an opaque one, in the model's staging copy. */
+typedef struct { uint32_t fv, vcount, fi, icount, sv, si, tex[2]; uint8_t nat; } nl_set;
+/* One lighting of a model: the game lights a model's normals from the light
+ * direction in model space (ta_xform.c 0x8C037350: the light at 0x8C038F24
+ * through XMTRX's first three columns), so instances under COLs that turn
+ * it differently are lit differently.  Each such light (to MODEL_LIGHT_EPS)
+ * gets its kept colours and its own persistent copy. */
+#define MAX_VARS 16u
+#define MODEL_LIGHT_EPS 1e-5f
+typedef struct {
+    float ml[3];                    /* the light in model space */
+    uint32_t *col, *ocol;           /* kept lighting: base and offset colour per point */
+    uint32_t nst;                   /* opaque sets drawn per set with these colours (the build at ngroup) */
+    uint32_t handle;                /* draw_model_create's, 0: none yet */
+    int failed;                     /* draw_model_create refused: the per-set way from now on */
+} nl_var;
 typedef struct {
     uint32_t model;                 /* guest address, 0x1FFFFFFF-masked */
     float bound[4];                 /* model-space sphere over its points */
-    uint32_t ntri;                  /* converted triangles (0: none) */
-    int conv;                       /* converted, opaque, not environment-mapped: may go natively */
-    uint32_t b0, nb;                /* its batches in L.b, one per mesh set in order */
+    uint32_t ntri;                  /* converted triangles, every set (0: none) */
+    uint32_t gtri;                  /* of those, in the opaque sets (the ones drawn natively) */
+    int conv;                       /* converted with an opaque, not environment-mapped set: may go natively */
+    int mixed;                      /* conv, and translucent or env-mapped sets too: those go the TA way (SPLIT) */
+    nl_set *sets;                   /* per mesh set (nset), from the file */
+    uint32_t nset, ngroup;          /* mesh sets; of those opaque */
+    uint32_t snv, sni;              /* the opaque sets' vertices and indices */
+    nl_vert *sv;                    /* staging: the opaque sets' vertices, then their indices (six); NULL when not read */
+    uint16_t *six;
     uint32_t npt;                   /* points lit (the model's point count) */
-    uint32_t *col, *ocol;           /* kept lighting: base and offset colour per point */
-    draw_state *st;                 /* per mesh set, as kamui drew it once */
+    draw_state *st;                 /* per mesh set, as kamui drew it (the same for every lighting) */
     uint8_t *zoff;                  /* per mesh set: the zero offset colours (IGNORE_LIGHT) */
-    uint32_t nst;                   /* sets whose state is known */
-    uint32_t handle;                /* draw_model_create's, 0: none yet */
-    int failed;                     /* draw_model_create refused: the per-set way from now on */
+    nl_var *var;                    /* its lightings (nvar), MAX_VARS at most */
+    uint32_t nvar, nbuilt;          /* lightings; of those with a persistent copy */
+    int failed;                     /* a build failed: staging stays (that lighting draws per set) */
     int alpha;                      /* has a translucent material */
-    uint8_t why;                    /* not converted: 0 not in the file, 1 translucent or env-mapped, 2 sets differ */
+    uint8_t why;                    /* not converted: 0 not in the file, 1 no opaque set, 2 sets differ, 3 more lightings than MAX_VARS (by draw), 4 texture animated */
     uint32_t ta_draws, out_draws;   /* this land table's draws the TA way, out of view */
 } nl_model;
 
 static struct {
     uint32_t lt;                    /* the land table this is for (0: none loaded) */
-    uint8_t *file;
-    const uint32_t *mats;           /* 4 words each */
-    nl_batch *b;                    /* sorted by model, set */
-    const nl_vert *v;
-    const uint16_t *idx;
-    uint32_t nb, nmat, nv, ni;
+    char path[64];                  /* its converted file */
+    uint32_t voff, ioff, nv, ni;    /* the file's vertex and index arrays: offsets, counts */
     nl_model *models;               /* sorted by model */
     uint32_t nmodels;
     uint32_t *keys;                 /* models[i].model, packed: the search touches 4 bytes a probe, not a model */
@@ -122,14 +152,21 @@ static uint32_t chk_dec, chk_mis, chk_mis_logged, pc_miss, n_decide, n_range, n_
 
 enum { DEC_NONE, DEC_OUT, DEC_MODEL, DEC_SETS };
 static nl_model *dec;               /* the model the game is drawing now, if not the TA way */
+static nl_var *dvar;                /* its lighting (MODEL, SETS) */
 static int dec_kind, dec_marked;
 static float dec_m[16];
-static struct { uint32_t out, model, sets, ta_test[5], ta_other, built, out_tris, model_tris, ta_tris; } st;
+static struct { uint32_t out, model, sets, split, ta_test[5], ta_other, ta_var, built, animated, out_tris, model_tris, ta_tris, split_ta_tris; } st;
+/* memory held here (bytes): staging copies now and at most, kept colours and
+ * states, the file's tables; persistent models in the PSP backend's layout
+ * (draw_gu.c draw_model_create: 24-byte vertices, 16 more where a set has an
+ * offset colour, u16 indices, GMODEL_LIST_PER_SET list bytes a set) */
+static struct { uint32_t src, src_peak, kept, tables, psp_est, psp_sets, staged, freed; } mem;
 
 static int cmp_batch(const void *a, const void *b) {
     const nl_batch *x = a, *y = b;
     if (x->model != y->model) return x->model < y->model ? -1 : 1;
-    return (int)x->set - (int)y->set;
+    if (x->set != y->set) return (int)x->set - (int)y->set;
+    return x->vfirst < y->vfirst ? -1 : x->vfirst > y->vfirst;   /* a model under two COLs: its first copy first */
 }
 static int cmp_u32(const void *a, const void *b) {
     uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
@@ -146,21 +183,53 @@ static void report_ta(void) {
         if (!best) break;
         sa1_log("native land: TA model 0x%08x: %u draws (%u out of view), %u points, %u sets, sphere r %.0f, %s",
                 best->model, best->ta_draws, best->out_draws, best->npt, (unsigned)hle_rd16((best->model | 0x80000000u) + 20u), best->bound[3],
-                best->conv ? "converted (GE refused)" : best->why == 0 ? "not in the file" : best->why == 1 ? "translucent or env-mapped" : "sets differ");
+                best->conv ? "converted (GE refused)" : best->why == 0 ? "not in the file" : best->why == 1 ? "no opaque mesh set" : best->why == 3 ? "lit per COL" : best->why == 4 ? "texture animated" : "sets differ");
         best->ta_draws = 0;
     }
+}
+
+static void free_src(nl_model *md) {
+    if (!md->sv) return;
+    free(md->sv);
+    md->sv = NULL; md->six = NULL;
+    mem.src -= md->snv * (uint32_t)sizeof(nl_vert) + md->sni * 2u;
+}
+
+static void free_var_kept(const nl_model *md, nl_var *v) {
+    if (v->col) mem.kept -= md->npt * 8u;
+    free(v->col); free(v->ocol);
+    v->col = v->ocol = NULL;
+}
+
+/* What only the per-set draws and the builds use, once every lighting of
+ * the model has its persistent copy (never with SA1_NATIVE_CHECK or
+ * native-sets, which keep drawing per set): called from a decision, which
+ * runs after the replay that built the last copy, so no record still points
+ * into the staging copy.  A lighting met later reads it again (load_src). */
+static void free_model_src(nl_model *md) {
+    if (md->sv) mem.freed++;
+    free_src(md);
+    if (md->st) mem.kept -= md->nset * (uint32_t)(sizeof *md->st + 1);
+    free(md->st); free(md->zoff);
+    md->st = NULL; md->zoff = NULL;
 }
 
 static void unload(void) {
     report_ta();
     for (uint32_t i = 0; i < L.nmodels; i++) {
         nl_model *md = &L.models[i];
-        free(md->col); free(md->ocol); free(md->st); free(md->zoff);
-        if (md->handle) draw_model_destroy(md->handle);
+        free_model_src(md);
+        for (uint32_t k = 0; k < md->nvar; k++) {
+            free_var_kept(md, &md->var[k]);
+            if (md->var[k].handle) draw_model_destroy(md->var[k].handle);
+        }
+        free(md->var);
+        free(md->sets);
     }
-    free(L.file); free(L.models); free(L.keys);
+    free(L.models); free(L.keys);
     memset(&L, 0, sizeof L);
-    dec = NULL;
+    mem.tables = mem.psp_est = mem.psp_sets = 0;
+    dec = NULL; dvar = NULL;
 }
 
 /* Every COL object's model in the land table, with a sphere over its points. */
@@ -238,54 +307,104 @@ static nl_model *model_of(uint32_t model) {
     return NULL;
 }
 
-/* The converted meshes (native only): each model's batches, one per set. */
+/* The converted meshes (native only): the file's tables (header, materials,
+ * batches) are read here, each model's sets noted with their place in the
+ * file; vertices and indices stay on the card until load_src.  A model under
+ * several COLs has a copy of its batches per COL (model space, the same
+ * bytes): the first copy is taken.  A model is converted when every one of
+ * its mesh sets is in the file and one at least is opaque and not
+ * environment-mapped (only those go natively: SPLIT when there are others). */
 static void load_file(uint32_t lt) {
-    char path[64];
-    snprintf(path, sizeof path, "native/LAND_%u_%u.BIN", (unsigned)hle_rd16(LV_ACT), (unsigned)hle_rd16(LV_ACT + 2));
-    uint32_t size = 0;
-    if (sa1_plat_file_size(path, &size) != 0 || size < 36) {
+    char *path = L.path;
+    snprintf(path, sizeof L.path, "native/LAND_%u_%u.BIN", (unsigned)hle_rd16(LV_ACT), (unsigned)hle_rd16(LV_ACT + 2));
+    uint32_t size = 0, h[9];
+    if (sa1_plat_file_size(path, &size) != 0 || size < 36 || sa1_plat_file_read(path, 0, h, 36) != 36) {
         sa1_log("native land: no %s for land table 0x%08x; its models are culled or drawn the TA way", path, lt);
         return;
     }
-    uint8_t *f = malloc(size);
-    if (!f || sa1_plat_file_read(path, 0, f, size) != (int)size) { free(f); return; }
-    uint32_t h[8];
-    memcpy(h, f + 4, sizeof h);     /* version, lt, ncol, nbatch, nmat, nvert, nidx, uv scale */
-    size_t need = 36 + (size_t)h[4] * 16 + (size_t)h[3] * sizeof(nl_batch) + (size_t)h[5] * sizeof(nl_vert) + (size_t)h[6] * 2;
-    if (memcmp(f, "SA1N", 4) || h[0] != 1 || (h[1] & 0x1FFFFFFFu) != (lt & 0x1FFFFFFFu) || need > size) {
+    /* "SA1N", version, lt, ncol, nbatch, nmat, nvert, nidx, uv scale */
+    const uint32_t nb = h[4], nmat = h[5], nv = h[6], ni = h[7];
+    const uint64_t need = 36 + (uint64_t)nmat * 16 + (uint64_t)nb * sizeof(nl_batch) + (uint64_t)nv * sizeof(nl_vert) + (uint64_t)ni * 2;
+    if (memcmp(h, "SA1N", 4) || h[1] != 1 || (h[2] & 0x1FFFFFFFu) != (lt & 0x1FFFFFFFu) || need > size) {
         sa1_log("native land: %s does not match land table 0x%08x; its models are culled or drawn the TA way", path, lt);
-        free(f);
         return;
     }
-    L.file = f;
-    L.nmat = h[4]; L.nb = h[3]; L.nv = h[5]; L.ni = h[6];
-    L.mats = (const uint32_t *)(const void *)(f + 36);
-    L.b = (nl_batch *)(void *)(f + 36 + (size_t)L.nmat * 16);
-    L.v = (const nl_vert *)(const void *)((uint8_t *)L.b + (size_t)L.nb * sizeof(nl_batch));
-    L.idx = (const uint16_t *)(const void *)((const uint8_t *)L.v + (size_t)L.nv * sizeof(nl_vert));
-    for (uint32_t i = 0; i < L.nb; i++) L.b[i].model &= 0x1FFFFFFFu;
-    qsort(L.b, L.nb, sizeof *L.b, cmp_batch);
-    uint32_t nconv = 0;
-    for (uint32_t i = 0; i < L.nb; ) {
-        uint32_t m = L.b[i].model, j = i;
-        int ok = 1;
-        uint32_t ntri = 0;
-        for (; j < L.nb && L.b[j].model == m; j++) {
-            if (L.b[j].mat >= L.nmat || (L.mats[4 * L.b[j].mat + 1] & (USE_ALPHA | ENV_MAP))) ok = 0;
-            if (L.b[j].vfirst + L.b[j].vcount > L.nv || L.b[j].ifirst + L.b[j].icount > L.ni || L.b[j].set != j - i) ok = 0;
-            ntri += L.b[j].icount / 3;
-        }
+    uint32_t *mats = malloc((nmat ? nmat : 1) * 16u);
+    nl_batch *b = malloc((nb ? nb : 1) * sizeof *b);
+    if (!mats || !b || sa1_plat_file_read(path, 36, mats, nmat * 16u) != (int)(nmat * 16u) ||
+        sa1_plat_file_read(path, 36 + nmat * 16u, b, nb * (uint32_t)sizeof *b) != (int)(nb * sizeof *b)) {
+        free(mats); free(b);
+        sa1_log("native land: %s could not be read; its models are culled or drawn the TA way", path);
+        return;
+    }
+    L.nv = nv; L.ni = ni;
+    L.voff = 36 + nmat * 16u + nb * (uint32_t)sizeof *b;
+    L.ioff = L.voff + nv * (uint32_t)sizeof(nl_vert);
+    for (uint32_t i = 0; i < nb; i++) b[i].model &= 0x1FFFFFFFu;
+    qsort(b, nb, sizeof *b, cmp_batch);
+    uint32_t nwhole = 0, nsplit = 0, nnone = 0, ndiff = 0, ndup = 0;
+    for (uint32_t i = 0; i < nb; ) {
+        const uint32_t m = b[i].model;
+        uint32_t j = i;
+        while (j < nb && b[j].model == m) j++;
         nl_model *md = model_of(m);
-        uint32_t nset = hle_rd16((m | 0x80000000u) + 20u);
-        if (md) md->why = ok ? 2 : 1;
-        if (md && ok && j - i == nset && nset <= MAX_SETS) {
-            md->conv = 1; md->b0 = i; md->nb = j - i; md->ntri = ntri;
-            nconv++;
+        const uint32_t nset = hle_rd16((m | 0x80000000u) + 20u);
+        if (!md) { i = j; continue; }
+        nl_set *sets = nset && nset <= MAX_SETS ? calloc(nset, sizeof *sets) : NULL;
+        uint32_t k = 0, ntri = 0, gtri = 0, ng = 0, snv = 0, sni = 0;
+        int ok = sets != NULL, dup = 0;
+        for (uint32_t q = i; q < j && ok; q++) {
+            const nl_batch *x = &b[q];
+            if (k && x->set == k - 1) { dup = 1; continue; }   /* another COL's copy */
+            if (x->set != k || k >= nset || x->mat >= nmat || x->vfirst + x->vcount > nv || x->ifirst + x->icount > ni ||
+                x->vfirst + x->vcount < x->vfirst || x->ifirst + x->icount < x->ifirst) { ok = 0; break; }
+            nl_set *s = &sets[k++];
+            s->fv = x->vfirst; s->vcount = x->vcount; s->fi = x->ifirst; s->icount = x->icount;
+            s->nat = !(mats[4 * x->mat + 1] & (USE_ALPHA | ENV_MAP));
+            ntri += x->icount / 3;
+            if (s->nat) { s->sv = snv; s->si = sni; snv += x->vcount; sni += x->icount; gtri += x->icount / 3; ng++; }
         }
+        if (k != nset) ok = 0;
+        ndup += dup;
+        md->ntri = ok ? ntri : 0;
+        md->why = ok ? 1 : 2;
+        if (ok && ng && md - L.models < 4096) {   /* native_land_set's tag holds the model's index in 12 bits */
+            md->conv = 1; md->mixed = ng < nset; md->sets = sets; sets = NULL;
+            md->nset = nset; md->ngroup = ng; md->snv = snv; md->sni = sni; md->gtri = gtri;
+            mem.tables += nset * (uint32_t)sizeof *md->sets;
+            if (md->mixed) nsplit++; else nwhole++;
+        } else if (ok) nnone++;
+        else ndiff++;
+        free(sets);
         i = j;
     }
-    sa1_log("native land: %s for land table 0x%08x: %u mesh sets, %u vertices, %u triangles; %u of %u models can go natively (the rest translucent or environment-mapped)",
-            path, lt, L.nb, L.nv, L.ni / 3, nconv, L.nmodels);
+    free(mats); free(b);
+    sa1_log("native land: %s for land table 0x%08x: %u mesh sets, %u vertices, %u triangles", path, lt, nb, nv, ni / 3);
+    sa1_log("native land: of %u models %u go natively whole, %u split (opaque sets natively, the rest the TA way), %u have no opaque set, %u sets differ, %u not in the file; %u under several COLs",
+            L.nmodels, nwhole, nsplit, nnone, ndiff, L.nmodels - nwhole - nsplit - nnone - ndiff, ndup);
+}
+
+/* A model's opaque sets from the file, for its per-set draws and the build:
+ * read at its first native draw, freed after its persistent copy is drawn
+ * (free_model_src).  0: not read (then the TA way). */
+static int load_src(nl_model *md) {
+    if (md->sv) return 1;
+    const uint32_t vb = md->snv * (uint32_t)sizeof(nl_vert), bytes = vb + md->sni * 2u;
+    uint8_t *p = malloc(bytes ? bytes : 1);
+    if (!p) return 0;
+    nl_vert *v = (nl_vert *)(void *)p;
+    uint16_t *ix = (uint16_t *)(void *)(p + vb);
+    for (uint32_t s = 0; s < md->nset; s++) {
+        const nl_set *x = &md->sets[s];
+        if (!x->nat) continue;
+        const uint32_t n1 = x->vcount * (uint32_t)sizeof(nl_vert), n2 = x->icount * 2u;
+        if ((n1 && sa1_plat_file_read(L.path, L.voff + x->fv * (uint32_t)sizeof(nl_vert), v + x->sv, n1) != (int)n1) ||
+            (n2 && sa1_plat_file_read(L.path, L.ioff + x->fi * 2u, ix + x->si, n2) != (int)n2)) { free(p); return 0; }
+    }
+    md->sv = v; md->six = ix;
+    mem.src += bytes; mem.staged++;
+    if (mem.src > mem.src_peak) mem.src_peak = mem.src;
+    return 1;
 }
 
 static nl_model *find_model(uint32_t model) {
@@ -377,11 +496,33 @@ static int view_out_fast(const sh4_ctx *c, const float *b) {
     return 0;
 }
 
+/* The texture an opaque set of the model would bind now, as ta_mesh.c's
+ * mesh_638 finds it: the current texture list's entry for the material's
+ * texture number, its texture pointer and that texture's first word.  Water
+ * and shore textures are animated by changing the list's entries (Emerald
+ * Coast: one material's texture cycles every few frames), which a persistent
+ * copy's states would freeze. */
+#define TEXLIST_CUR 0x8c673480u
+static void tex_now(uint32_t model, uint32_t set, uint32_t *t) {
+    const uint32_t g = model | 0x80000000u;
+    const uint32_t mi = (uint32_t)hle_rd16(hle_rd32(g + 12u) + 24u * set) & 0x3FFFu, mat = hle_rd32(g + 16u) + 20u * mi;
+    t[0] = t[1] = 0;
+    uint32_t fl = hle_rd32(mat + 16u);
+    if (hle_rd32(0x8c8ffe1cu)) fl = (fl & hle_rd32(0x8c8ffe20u)) | hle_rd32(0x8c8ffe24u);
+    if (!(fl & 0x00200000u)) return;
+    const uint32_t tl = hle_rd32(TEXLIST_CUR);
+    if (!hle_in_ram(tl) || !hle_in_ram(hle_rd32(tl))) return;
+    const uint32_t e = hle_rd32(tl) + 12u * (hle_rd32(mat + 12u) & 0x3fffffffu) + 8u;
+    if (!hle_in_ram(e)) return;
+    t[0] = hle_rd32(e);
+    if (hle_in_ram(t[0])) t[1] = hle_rd32(t[0]);
+}
+
 /* From the transform's wrapper, XMTRX set: 1 = not the TA way (the transform
  * is skipped), 0 = the TA way.  The answer stands until the next model's
  * transform (lighting and mesh loop ask native_land_model_ok). */
 int native_land_decide(sh4_ctx *c, uint32_t model) {
-    dec = NULL; dec_kind = DEC_NONE; dec_marked = 0; native_land_all_sets = 0;
+    dec = NULL; dvar = NULL; dec_kind = DEC_NONE; dec_marked = 0; native_land_all_sets = 0;
     if (!native_land_window) return 0;
     n_decide++;
     nl_model *md = find_model(model);
@@ -414,9 +555,52 @@ int native_land_decide(sh4_ctx *c, uint32_t model) {
     if (!decide_old) game_matrix(c, dec_m);   /* only the native renderer reads it */
     const int p = draw_mesh_test(dec_m, md->bound);
     if (p < 0) { st.ta_test[-p]++; st.ta_tris += md->ntri; md->ta_draws++; return 0; }
+    /* the lighting: the light in model space, as the lighting will take it */
+    const float lx = hle_rdf(0x8c038f24u), ly = hle_rdf(0x8c038f28u), lz = hle_rdf(0x8c038f2cu);
+    const float *x = c->xf;
+    const float ml[3] = { lx * x[0] + ly * x[1] + lz * x[2], lx * x[4] + ly * x[5] + lz * x[6], lx * x[8] + ly * x[9] + lz * x[10] };
+    nl_var *v = NULL;
+    for (uint32_t k = 0; k < md->nvar && !v; k++) {
+        const float *q = md->var[k].ml;
+        if (fabsf(q[0] - ml[0]) <= MODEL_LIGHT_EPS && fabsf(q[1] - ml[1]) <= MODEL_LIGHT_EPS && fabsf(q[2] - ml[2]) <= MODEL_LIGHT_EPS) v = &md->var[k];
+    }
+    if (!v) {
+        if (!md->var) md->var = calloc(MAX_VARS, sizeof *md->var);
+        if (!md->var || md->nvar == MAX_VARS) { st.ta_var++; st.ta_tris += md->ntri; md->ta_draws++; md->why = 3; return 0; }
+        v = &md->var[md->nvar++];
+        memcpy(v->ml, ml, sizeof ml);
+    }
+    const int kind = v->handle && !check ? DEC_MODEL : DEC_SETS;
+    if (kind == DEC_SETS && !load_src(md)) { md->conv = 0; st.ta_other++; st.ta_tris += md->ntri; md->ta_draws++; return 0; }
+    {   /* the textures the opaque sets bind: noted while no copy is made (the
+         * states a build keeps are those), compared once one is; a change (an
+         * animated texture) sends the model the TA way for good (its copies
+         * are freed with the land table: a record of this frame may hold one) */
+        int moved = 0;
+        for (uint32_t s = 0; s < md->nset; s++) {
+            if (!md->sets[s].nat) continue;
+            uint32_t t[2];
+            tex_now(md->model, s, t);
+            if (!md->nbuilt) { md->sets[s].tex[0] = t[0]; md->sets[s].tex[1] = t[1]; }
+            else if (t[0] != md->sets[s].tex[0] || t[1] != md->sets[s].tex[1]) moved = 1;
+        }
+        if (moved) {
+            md->conv = 0; md->why = 4; st.animated++;
+            st.ta_other++; st.ta_tris += md->ntri; md->ta_draws++;
+            return 0;
+        }
+    }
+    if (kind == DEC_MODEL && !nopersist) {
+        free_var_kept(md, v);
+        if (md->nbuilt == md->nvar && !md->failed && (md->sv || md->st)) free_model_src(md);
+    }
     dec = md;
-    dec_kind = md->handle && !check ? DEC_MODEL : DEC_SETS;
-    if (dec_kind == DEC_MODEL) { st.model++; st.model_tris += md->ntri; } else st.sets++;
+    dvar = v;
+    dec_kind = kind;
+    if (dec_kind == DEC_MODEL) { st.model++; st.model_tris += md->gtri; } else st.sets++;
+    /* SPLIT: the game transforms (its strip writers draw the other sets from
+     * the transformed points); the opaque sets still go natively */
+    if (md->mixed) { st.split++; st.split_ta_tris += md->ntri - md->gtri; return 0; }
     return 1;
 }
 
@@ -427,36 +611,39 @@ int native_land_model_ok(uint32_t model) {
 /* From the lighting's wrapper for a model not drawn the TA way: 1 = skip the
  * lighting, 0 = run it, then call native_land_lit(). */
 int native_land_skip_light(uint32_t model) {
-    if (!native_land_model_ok(model)) return 0;
-    return dec_kind != DEC_SETS || (dec->col != NULL && !(check && dec->handle));
+    if (!native_land_model_ok(model) || dec->mixed) return 0;   /* SPLIT: the TA sets need the lighting */
+    return dec_kind != DEC_SETS || (dvar->col != NULL && !(check && dvar->handle));
 }
 void native_land_lit(sh4_ctx *c, uint32_t model) {
-    if (check && native_land_model_ok(model) && dec_kind == DEC_SETS && dec->col && dec->handle) {
+    if (!native_land_model_ok(model) || dec_kind != DEC_SETS || !dvar) return;
+    nl_var *v = dvar;
+    if (check && v->col && v->handle) {
         const uint32_t vbuf = hle_rd32(c->gbr + 60), offs = hle_rd32(c->gbr + 64);
         uint32_t bad = 0;
         for (uint32_t i = 0; i < dec->npt; i++)
-            if (dec->col[i] != hle_rd32(vbuf + 16u * i + 12u) || (offs && dec->ocol[i] != hle_rd32(offs + 4u * i))) bad++;
+            if (v->col[i] != hle_rd32(vbuf + 16u * i + 12u) || (offs && v->ocol[i] != hle_rd32(offs + 4u * i))) bad++;
         chk_lit++;
-        if (bad) { chk_col++; if (chk_logged++ < 20) sa1_log("native check: model 0x%08x: %u of %u kept colours differ", dec->model, bad, dec->npt); }
+        if (bad) { chk_col++; if (chk_logged++ < 20) sa1_log("native check: model 0x%08x lighting %u: %u of %u kept colours differ", dec->model, (unsigned)(v - dec->var), bad, dec->npt); }
         return;
     }
-    if (!native_land_model_ok(model) || dec_kind != DEC_SETS || dec->col || !dec->npt) return;
+    if (v->col || !dec->npt) return;
     uint32_t *col = malloc(dec->npt * 4u), *ocol = malloc(dec->npt * 4u);
     if (!col || !ocol) { free(col); free(ocol); return; }
+    mem.kept += dec->npt * 8u;
     const uint32_t vbuf = hle_rd32(c->gbr + 60), offs = hle_rd32(c->gbr + 64);
     for (uint32_t i = 0; i < dec->npt; i++) {
         col[i] = hle_rd32(vbuf + 16u * i + 12u);
         ocol[i] = offs ? hle_rd32(offs + 4u * i) : 0;
     }
-    dec->col = col; dec->ocol = ocol;
+    v->col = col; v->ocol = ocol;
 }
 
-/* One converted vertex with the kept colours. */
-static void vertex(const nl_model *md, const nl_vert *s, int zero_off, draw_mesh_vertex *o) {
+/* One converted vertex with a lighting's kept colours. */
+static void vertex(const nl_model *md, const nl_var *lv, const nl_vert *s, int zero_off, draw_mesh_vertex *o) {
     o->x = s->x; o->y = s->y; o->z = s->z; o->u = s->u; o->v = s->v;
-    const int k = md->col && s->pt < md->npt;
-    o->color = k ? md->col[s->pt] : 0xFFFFFFFFu;
-    o->ocolor = k && !zero_off ? md->ocol[s->pt] : 0;
+    const int k = lv->col && s->pt < md->npt;
+    o->color = k ? lv->col[s->pt] : 0xFFFFFFFFu;
+    o->ocolor = k && !zero_off ? lv->ocol[s->pt] : 0;
 }
 
 /* Mesh set `set` of the model being drawn: returns 1 and the TA pointer
@@ -465,9 +652,13 @@ static void vertex(const nl_model *md, const nl_vert *s, int zero_off, draw_mesh
 int native_land_set(sh4_ctx *c, uint32_t model, uint32_t set, uint32_t ta, uint32_t *ta_out) {
     if (!native_land_model_ok(model)) return 0;
     if (dec_kind == DEC_OUT) { *ta_out = ta; return 1; }
-    if (dec_kind == DEC_MODEL) {    /* one marker for the whole model, at its first set */
+    /* not one of the model's opaque sets (the material override cleared its
+     * USE_ALPHA): not in the persistent copy, so the TA way (SPLIT models
+     * only: a model without such sets never has one) */
+    if (set >= dec->nset || !dec->sets[set].nat) return 0;
+    if (dec_kind == DEC_MODEL) {    /* one marker for the model's opaque sets, at the first */
         uint32_t rec;
-        if (!dec_marked && kamui_native_model(dec->handle, dec_m, &rec)) {
+        if (!dec_marked && kamui_native_model(dvar->handle, dec_m, &rec)) {
             hle_wr32(ta, 0xC0000002u);   /* kamui: a persistent model record (type 6, kind 2) */
             hle_wr32(ta + 4, rec);
             hle_wr32(ta + 8, 0);
@@ -478,21 +669,22 @@ int native_land_set(sh4_ctx *c, uint32_t model, uint32_t set, uint32_t ta, uint3
         return 1;
     }
     nl_model *md = dec;
-    if (set >= md->nb) return 0;
-    const nl_batch *b = &L.b[md->b0 + set];
+    const nl_set *b = &md->sets[set];
+    if (!md->sv) return 0;
     if (!md->st) {
-        md->st = calloc(md->nb, sizeof *md->st);
-        md->zoff = calloc(md->nb, 1);
+        md->st = calloc(md->nset, sizeof *md->st);
+        md->zoff = calloc(md->nset, 1);
         if (!md->st || !md->zoff) { free(md->st); free(md->zoff); md->st = NULL; md->zoff = NULL; }
+        else mem.kept += md->nset * (uint32_t)(sizeof *md->st + 1);
     }
     const uint32_t ocol = hle_rd32(c->gbr + 56);
     const int zero_off = ocol == ZERO_OFFS || !ocol;
     if (md->zoff) md->zoff[set] = (uint8_t)zero_off;
     uint32_t rec;
-    const uint32_t tag = (uint32_t)(md - L.models) << 12 | set;
-    draw_mesh_vertex *out = kamui_native_mesh(b->vcount, dec_m, md->bound, L.idx + b->ifirst, b->icount, tag, &rec);
+    const uint32_t tag = (uint32_t)(md - L.models) << 20 | (uint32_t)(dvar - md->var) << 12 | set;
+    draw_mesh_vertex *out = kamui_native_mesh(b->vcount, dec_m, md->bound, md->six + b->si, b->icount, tag, &rec);
     if (!out) return 0;
-    for (uint32_t i = 0; i < b->vcount; i++) vertex(md, &L.v[b->vfirst + i], zero_off, &out[i]);
+    for (uint32_t i = 0; i < b->vcount; i++) vertex(md, dvar, &md->sv[b->sv + i], zero_off, &out[i]);
     hle_wr32(ta, 0xC0000001u);       /* kamui: a native mesh record (type 6, kind 1) */
     hle_wr32(ta + 4, rec);
     hle_wr32(ta + 8, 0);
@@ -500,35 +692,45 @@ int native_land_set(sh4_ctx *c, uint32_t model, uint32_t set, uint32_t ta, uint3
     return 1;
 }
 
-/* The persistent copy, once every set's state is known. */
-static void build(nl_model *md) {
-    uint32_t nv = 0, ni = 0;
-    for (uint32_t s = 0; s < md->nb; s++) { nv += L.b[md->b0 + s].vcount; ni += L.b[md->b0 + s].icount; }
+/* A lighting's persistent copy, once every opaque set has drawn with it. */
+static void build(nl_model *md, nl_var *lv) {
+    const uint32_t nv = md->snv, ni = md->sni;
     draw_mesh_vertex *v = malloc((nv ? nv : 1) * sizeof *v);
     uint16_t *ix = malloc((ni ? ni : 1) * 2u);
-    draw_model_set *sets = malloc(md->nb * sizeof *sets);
-    if (v && ix && sets) {
-        uint32_t vo = 0, io = 0;
-        for (uint32_t s = 0; s < md->nb; s++) {
-            const nl_batch *b = &L.b[md->b0 + s];
-            for (uint32_t i = 0; i < b->vcount; i++) vertex(md, &L.v[b->vfirst + i], md->zoff[s], &v[vo + i]);
-            memcpy(ix + io, L.idx + b->ifirst, b->icount * 2u);
-            sets[s].state = md->st[s];
-            sets[s].vfirst = vo; sets[s].vcount = b->vcount; sets[s].ifirst = io; sets[s].icount = b->icount;
-            vo += b->vcount; io += b->icount;
+    draw_model_set *sets = malloc(md->ngroup * sizeof *sets);
+    if (v && ix && sets && md->sv && md->st && md->zoff) {
+        uint32_t n = 0;
+        int off = 0;
+        for (uint32_t s = 0; s < md->nset; s++) {
+            const nl_set *b = &md->sets[s];
+            if (!b->nat) continue;
+            for (uint32_t i = 0; i < b->vcount; i++) {
+                vertex(md, lv, &md->sv[b->sv + i], md->zoff[s], &v[b->sv + i]);
+                if (md->st[s].texture && (v[b->sv + i].ocolor & 0x00FFFFFFu)) off = 1;
+            }
+            sets[n].state = md->st[s];
+            sets[n].vfirst = b->sv; sets[n].vcount = b->vcount; sets[n].ifirst = b->si; sets[n].icount = b->icount;
+            n++;
         }
-        md->handle = draw_model_create(v, (int)nv, ix, (int)ni, sets, (int)md->nb, md->bound);
-        if (md->handle) st.built++;
+        memcpy(ix, md->six, ni * 2u);
+        lv->handle = draw_model_create(v, (int)nv, ix, (int)ni, sets, (int)n, md->bound);
+        if (lv->handle) {
+            st.built++; md->nbuilt++;
+            mem.psp_sets += n;   /* draw_gu.c's layout, 64-byte rounded */
+            mem.psp_est += ((nv * 24u + 63u) & ~63u) + (off ? ((nv * 16u + 63u) & ~63u) : 0u) + ((ni * 2u + 63u) & ~63u) + 768u * n + 64u + 48u * n;
+        }
     }
-    if (!md->handle) md->failed = 1;
+    if (!lv->handle) { lv->failed = 1; md->failed = 1; }
     free(v); free(ix); free(sets);
 }
 
 void native_land_captured(uint32_t tag, const draw_state *s) {
-    const uint32_t i = tag >> 12, set = tag & 0xFFFu;
+    const uint32_t i = tag >> 20, vi = (tag >> 12) & 0xFFu, set = tag & 0xFFFu;
     if (i >= L.nmodels) return;
     nl_model *md = &L.models[i];
-    if (check && md->handle && md->st && set < md->nb) {
+    if (vi >= md->nvar || set >= md->nset || !md->st || !md->sets[set].nat || nopersist) return;
+    nl_var *v = &md->var[vi];
+    if (check && md->nbuilt) {      /* the states kept: one for every lighting */
         chk_sets++;
         if (memcmp(&md->st[set], s, sizeof *s)) {
             chk_state++;
@@ -539,11 +741,9 @@ void native_land_captured(uint32_t tag, const draw_state *s) {
                         k->shade, s->shade, k->filter, s->filter, k->clamp_u, k->clamp_v, s->clamp_u, s->clamp_v,
                         k->flip_u, k->flip_v, s->flip_u, s->flip_v, k->use_alpha, s->use_alpha, k->layer, s->layer, k->cull, s->cull);
         }
-        return;
-    }
-    if (!md->st || set >= md->nb || md->handle || md->failed || nopersist) return;
-    md->st[set] = *s;
-    if (++md->nst == md->nb) build(md);
+    } else md->st[set] = *s;
+    if (v->handle || v->failed) return;
+    if (++v->nst == md->ngroup) build(md, v);
 }
 
 void native_land_init(void) {
@@ -577,9 +777,17 @@ void native_land_report(void) {
     if (cull_check) sa1_log("land check: %u of %u cull decisions differ from view_out's", chk_mis, chk_dec);
     if (n_decide) sa1_log("native land: %u transforms asked, %u in the land range, %u land models (%u by the hint); plane normals made %u times", n_decide, n_inr, n_range, n_hint, pc_miss);
     if (check) sa1_log("native check: %u of %u set draws with another state than kept, %u of %u lightings with other colours", chk_state, chk_sets, chk_col, chk_lit);
-    const uint32_t ta = st.ta_other + st.ta_test[0] + st.ta_test[1] + st.ta_test[2] + st.ta_test[3] + st.ta_test[4];
+    const uint32_t ta = st.ta_other + st.ta_var + st.ta_test[0] + st.ta_test[1] + st.ta_test[2] + st.ta_test[3] + st.ta_test[4];
     if (st.out || st.model || st.sets || ta)
-        sa1_log("native land: model draws: out of view %u (%u tris), persistent %u (%u tris), per-set %u, TA %u (%u tris; GE refused: near plane %u, guard band %u, depth split %u, other %u; not converted %u); %u models made persistent",
-                st.out, st.out_tris, st.model, st.model_tris, st.sets, ta, st.ta_tris,
-                st.ta_test[2], st.ta_test[3], st.ta_test[4], st.ta_test[1] + st.ta_test[0], st.ta_other, st.built);
+    {   /* three lines: sa1_log cuts a line at 255 characters */
+        sa1_log("native land: model draws: out of view %u (%u tris), persistent %u (%u tris), per-set %u; split %u (their translucent or env-mapped sets the TA way: %u tris)",
+                st.out, st.out_tris, st.model, st.model_tris, st.sets, st.split, st.split_ta_tris);
+        sa1_log("native land: model draws the TA way %u (%u tris): GE refused near plane %u, guard band %u, depth split %u, other %u; not converted %u; past %u lightings %u",
+                ta, st.ta_tris, st.ta_test[2], st.ta_test[3], st.ta_test[4], st.ta_test[1] + st.ta_test[0], st.ta_other, MAX_VARS, st.ta_var);
+        sa1_log("native land: %u persistent copies made (a model's, per lighting), %u models dropped (texture animated)", st.built, st.animated);
+    }
+    if (mode == 1)
+        sa1_log("native land: memory: file tables %u KB, staging %u KB now (%u KB at most; %u models read, %u freed), kept colours and states %u KB; "
+                "persistent models %u sets, %u KB in the PSP backend's layout (vertices, indices, call lists)",
+                mem.tables / 1024u, mem.src / 1024u, mem.src_peak / 1024u, mem.staged, mem.freed, mem.kept / 1024u, mem.psp_sets, mem.psp_est / 1024u);
 }

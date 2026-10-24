@@ -246,6 +246,55 @@ What iteration 3 does (`hle/ninja/native_land.c`, `backend/psp/draw_gu.c`):
   compared) found 0 differing states and 0 differing colours over 193k set
   draws of sonic_to_ec1_start.
 
+### 6.1 Iteration 4 (2026-10-24): Emerald Coast's models
+
+With Emerald Coast converted (`land_convert.py --level 1`: STG01.PRS) only
+5 of its models went persistent on the console; ~16k land draws a stage
+start went the TA way as "not converted".  The scoping study blamed the
+translucent and environment-mapped sets of mixed models; the desktop's
+reason counter found three causes, the split being the smallest:
+
+- **Models under several COLs** (19 of 102 in act 0, 25 in Station
+  Square's act 0): the converter wrote a copy of the model's batches per
+  COL, which the loader read as "sets differ".  The converter now writes a
+  model once (act 0: 1,320 -> 696 KB); the loader keeps the first copy of
+  older files.
+- **Their lighting**: the lighting takes the light into model space
+  through XMTRX (ta_xform.c 0x8C037350), so a model turned differently
+  under another COL is lit differently.  A model now keeps one lighting per
+  model-space light (to 1e-5, `MAX_VARS` = 16 a model, the rest the TA
+  way), each with its own kept colours and persistent copy.
+- **Animated textures**: Emerald Coast's shore cycles a texture by
+  rewriting the texture list's entry, which a persistent copy's state
+  would freeze.  The textures the opaque sets would bind are noted while a
+  model draws per set and compared at every persistent decision; a change
+  sends the model the TA way for good.
+- **The split**: a model with translucent or env-mapped sets besides
+  opaque ones (17 in act 0) puts its opaque sets in the persistent copy
+  and leaves the others to the game's strip writers (transform and
+  lighting run as on the TA path; kamui's translucent sort is untouched).
+  The GE test stays per model.
+
+Memory: the converted file no longer stays loaded.  Its tables (header,
+materials, batches: 14 KB) are read at the land table's change, a model's
+opaque vertices and indices only for its per-set draws and freed once all
+its lightings have a copy (staging at most 146 KB at the stage start); the
+copies in the PSP layout come to 280 KB at Emerald Coast's start, 381 KB
+after the scripted walks, 277 KB in Station Square (`native land: memory`
+at exit; draw_gu.c's model report gives the bytes made).  Desktop, stage
+start (700 frames, desktop GE test always accepts): Emerald Coast 19,560
+persistent model draws of 24,525 (TA 3,918: no opaque set or animated; 981 out of view;
+29 copies, 6 models dropped as animated), Station Square 18,054 of 37,034 with 16,700
+out of view (50 copies).  Checks:
+`SA1_NATIVE_CHECK=1` over sonic_to_ec1_start 0 of 699,509 set states and
+0 of 200,590 lightings differ; the tapes pass with default, `force:native`
+and `--land-cull opaque`; desktop pictures native against ta at most 1
+level apart but for a handful of edge pixels (<= 0.001 %).
+
+The strip clipper (draw_gu.c strip_split) drops a triangle wholly past one
+edge of what any projection shows before clipping or cutting it; the
+console counts them beside the guard-band strips.
+
 One pspsdk trap: `sceGuDepthOffset` re-sends the depth range from the
 current context's stored planes, which a GU_CALL context never had; every
 list left a 0..0 range behind (4.7 % of pixels wrong) until the list starts

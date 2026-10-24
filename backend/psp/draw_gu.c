@@ -79,7 +79,7 @@ static const char *shot_path;
 static int cull_flip;                         /* --cull-flip (main_psp.c): the other winding convention */
 
 /* Counters for the report beyond draw_stats. */
-static struct { uint32_t list_high, pool_high, pool_full, dropped, offscreen, mirrors, mirror_fail, downscaled, frames;
+static struct { uint32_t list_high, pool_high, pool_full, dropped, offscreen, unseen, mirrors, mirror_fail, downscaled, frames;
                 uint32_t flush_state, flush_proj, flush_offset, last_strips, last_draws, last_states;
                 uint32_t mesh_ge, mesh_cpu;   /* draw_mesh_accepts: yes, no */
                 uint32_t mesh_no[4];          /* why not: other, near plane, guard band, depth split */
@@ -902,11 +902,11 @@ void draw_gu_report(void) {
                                            gs.mesh_ge, gs.mesh_cpu, gs.mesh_no[0], gs.mesh_no[1], gs.mesh_no[2], gs.mesh_no[3]);
     if (tex_pool_on) pool_log("report");
     sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, list replay %.2f ms/frame, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB, vertices %u KB (%u strips over); "
-            "%u strips dropped (list full), %u clipped to the GE's guard band",
+            "%u strips dropped (list full), %u clipped to the GE's guard band (%u triangles out of view not clipped)",
             gs.frames, gs.frames ? gs.frame_us_sum / 1000.0 / gs.frames : 0.0, gs.frame_us_max / 1000.0,
             gs.frames ? gs.replay_us / 1000.0 / gs.frames : 0.0,
             gs.frames ? gs.gpu_wait_us / 1000.0 / gs.frames : 0.0, gs.frames ? gs.swap_wait_us / 1000.0 / gs.frames : 0.0,
-            gs.list_high / 1024u, gs.pool_high / 1024u, gs.pool_full, gs.dropped, gs.offscreen);
+            gs.list_high / 1024u, gs.pool_high / 1024u, gs.pool_full, gs.dropped, gs.offscreen, gs.unseen);
     sa1_log("draw: last frame %u strips -> %u GE draws, %u state changes; batch breaks by state %u, projection %u; "
             "%u mirrors (%u too big), %u textures downscaled", gs.last_strips, gs.last_draws, gs.last_states,
             gs.flush_state, gs.flush_proj, gs.mirrors, gs.mirror_fail, gs.downscaled);
@@ -914,7 +914,7 @@ void draw_gu_report(void) {
             depth_split, gs.zmin_win < 1e29f ? gs.zmin_win : 0.0f, gs.znear_verts[0], gs.znear_verts[1], gs.znear_verts[2], gs.znear_verts[3]);
     gs.zmin_win = 1e30f; memset(gs.znear_verts, 0, sizeof gs.znear_verts);
     gs.flush_state = gs.flush_proj = gs.flush_offset = 0;
-    gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = gs.swap_wait_us = gs.replay_us = 0; gs.dropped = gs.offscreen = 0;
+    gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = gs.swap_wait_us = gs.replay_us = 0; gs.dropped = gs.offscreen = gs.unseen = 0;
 }
 
 /* ---- state ---------------------------------------------------------------------- */
@@ -1451,7 +1451,15 @@ static void substrip_emit(int pass, const draw_vertex *v, int i, int j) {
 /* Triangle by triangle: clipped to the guard band when guard, cut at the
  * split, each piece to its pass.  Runs of triangles inside the band on one
  * side of the split go out as sub-strips, unclipped: of the ~300 guard-band
- * strips a frame in Station Square most triangles are inside. */
+ * strips a frame in Station Square most triangles are inside.  A triangle
+ * wholly past one edge of what any projection shows (the wide 3D layer's x
+ * range, which holds the 4:3 area and the full-width 2D one, y 0..480; an
+ * 8-pixel margin) is dropped before the clipper: in Emerald Coast every
+ * land triangle with a vertex past the band was out of view (f6 scope). */
+#define VIEW_X0 (DRAW_WIDE_LEFT - 8.0f)
+#define VIEW_X1 (DRAW_WIDE_RIGHT + 8.0f)
+#define VIEW_Y0 (-8.0f)
+#define VIEW_Y1 488.0f
 static void strip_split(const draw_vertex *v, int n, int guard) {
     if (guard) gs.offscreen++;
     float ws = depth_ws;
@@ -1464,6 +1472,11 @@ static void strip_split(const draw_vertex *v, int n, int guard) {
                 pass = p; j++;
             }
             if (j - i >= 2) { substrip_emit(pass, v, i, j - 1); i = j - 1; continue; }
+        }
+        {   /* wholly past one edge of the view: nothing of it is seen, so it is neither clipped nor cut */
+            const draw_vertex *a = &v[i], *b = &v[i + 1], *e = &v[i + 2];
+            if ((a->x < VIEW_X0 && b->x < VIEW_X0 && e->x < VIEW_X0) || (a->x > VIEW_X1 && b->x > VIEW_X1 && e->x > VIEW_X1) ||
+                (a->y < VIEW_Y0 && b->y < VIEW_Y0 && e->y < VIEW_Y0) || (a->y > VIEW_Y1 && b->y > VIEW_Y1 && e->y > VIEW_Y1)) { gs.unseen++; continue; }
         }
         draw_vertex poly[2][16];
         const draw_vertex *t0 = &v[(i & 1) ? i + 1 : i], *t1 = &v[(i & 1) ? i : i + 1], *t2 = &v[i + 2];
@@ -1897,7 +1910,7 @@ typedef struct {
 } gmodel;
 static gmodel gmodels[GMODEL_MAX];
 static uint32_t gmodel_free_later[GMODEL_MAX], ngmodel_free_later;
-static struct { uint32_t created, draws, lists, list_max, gone; } gms;
+static struct { uint32_t created, draws, lists, list_max, gone, bytes; } gms;
 
 static void model_release(uint32_t h) {
     gmodel *g = &gmodels[h];
@@ -1959,6 +1972,7 @@ uint32_t draw_model_create(const draw_mesh_vertex *v, int nv, const uint16_t *id
     g->nsets = nsets;
     memcpy(g->bound, bound, sizeof g->bound);
     gms.created++;
+    gms.bytes += vb + ob + ib + g->list_cap + (uint32_t)nsets * (uint32_t)sizeof *g->sets;
     return h;
 }
 
@@ -2049,6 +2063,6 @@ static void model_call(uint32_t h) {
 
 static void model_report(void) {
     if (gms.created || gms.draws)
-        sa1_log("draw: models %u created, %u draws, %u lists built (largest %u bytes)", gms.created, gms.draws, gms.lists, gms.list_max);
+        sa1_log("draw: models %u created (%u KB made in all), %u draws, %u lists built (largest %u bytes)", gms.created, gms.bytes / 1024u, gms.draws, gms.lists, gms.list_max);
     gms.draws = gms.lists = 0;
 }
