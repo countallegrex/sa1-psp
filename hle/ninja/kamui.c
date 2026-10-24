@@ -1028,7 +1028,7 @@ void sdk_8c642440(sh4_ctx *c) {
     HLE_ENTER(0x8c642440u, "kmRender");
     (void)c;
     if (!bufs[0].base) return;
-    if (hle_render_skip()) return;   /* frame skip: no picture this frame; kmFlip keeps the last one */
+    if (hle_draw_skip) return;   /* frame skip (hle/game/frame_skip.c): no picture; kmFlip keeps the last one */
     if (ptr_trace())
         sa1_log("kamui: kmRender (frame %u) op 0x%08x tr 0x%08x pt 0x%08x", hle_frame_count(), kamui_buffer_ptr(0), kamui_buffer_ptr(1), kamui_buffer_ptr(2));
     render_lists();
@@ -1049,6 +1049,7 @@ void sdk_8c641f00(sh4_ctx *c) {
         frame_rendered_count++;
     }
     buffers_reset();
+    hle_frame_skip_decide();
     RET(0);
 }
 void sdk_8c6433e0(sh4_ctx *c) {         /* no-draw frame: keep the picture, drop the lists */
@@ -1057,6 +1058,7 @@ void sdk_8c6433e0(sh4_ctx *c) {         /* no-draw frame: keep the picture, drop
     if (ptr_trace())
         sa1_log("kamui: kmSkipFrame (frame %u) tr 0x%08x", hle_frame_count(), kamui_buffer_ptr(1));
     buffers_reset();
+    hle_frame_skip_decide();
 }
 
 void kamui_set_screenshot(const char *path) { screenshot_path = path; }

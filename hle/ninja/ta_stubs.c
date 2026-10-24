@@ -103,6 +103,7 @@ static void ta_bt_leave(uint32_t tr) {       /* at exit: the wanted header lies 
 void fn_8c037294_orig(sh4_ctx *c);
 void fn_8c037294_ta(sh4_ctx *c);
 void fn_8c037294(sh4_ctx *c) {
+    if (hle_draw_skip) return;   /* frame skip: no picture this frame (hle/game/frame_skip.c) */
     if (hle_ta_direct && !kamui_ptr_trace()) {
         HLE_ENTER(0x8c037294u, "TA writer fn_8c037294");
         ta_xform_8c037294(c);
@@ -119,6 +120,7 @@ TA_PASS(8c037294)
 void fn_8c037350_orig(sh4_ctx *c);
 void fn_8c037350(sh4_ctx *c) {
     HLE_ENTER(0x8c037350u, "model lighting fn_8c037350");
+    if (hle_draw_skip) return;   /* frame skip */
     if (hle_ta_direct && !kamui_ptr_trace()) ta_xform_8c037350(c);
     else fn_8c037350_orig(c);
 }
@@ -136,6 +138,7 @@ void fn_8c0376d0_orig(sh4_ctx *c);
 static int mesh_rec = -1;
 void fn_8c0376d0(sh4_ctx *c) {
     HLE_ENTER(0x8c0376d0u, "model mesh-set loop fn_8c0376d0");
+    if (hle_draw_skip) return;   /* frame skip */
     if (mesh_rec < 0) mesh_rec = getenv("SA1_MESH_REC") != NULL;
     if (hle_ta_direct && !mesh_rec && !kamui_ptr_trace()) ta_mesh_8c0376d0(c);
     else fn_8c0376d0_orig(c);

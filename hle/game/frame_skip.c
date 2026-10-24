@@ -1,11 +1,19 @@
 /* frame_skip.c - game logic every frame, the picture only when there is time.
  *
- * kmRender (hle/ninja/kamui.c) asks hle_render_skip() once a frame; on a
- * skipped frame it neither parses the frame's TA lists nor draws, and kmFlip
- * keeps the last picture.  Nothing the game reads comes from there (the
- * lists are read, never written, and kmFlip still resets the buffers), so the
- * game runs exactly as without the skip: the replay tapes and a guest-RAM
- * compare check that (tests/replay/README.md).
+ * At the end of each frame (kmFlip, or the game's own kmSkipFrame;
+ * hle/ninja/kamui.c) hle_frame_skip_decide() sets hle_draw_skip for the next
+ * one.  On a skipped frame the model pipeline returns at once (the vertex
+ * transform 0x8C037294, the lighting 0x8C037350 and the mesh-set loop
+ * 0x8C0376D0, hle/ninja/ta_stubs.c), kmRender neither parses the TA lists nor
+ * draws, and kmFlip keeps the last picture.  Everything else runs: every
+ * object's MainSub and display code (matrices, timers, motion), the other TA
+ * writers (callers use the TA pointer they return), kmFlip's buffer reset and
+ * the frame counter.  The pipeline writes only draw scratch that the next
+ * drawn frame rewrites (the transformed vertices at 0x8C7AC8E0, the offset
+ * colours at 0x8C03D760, its own stack), so the game runs exactly as without
+ * the skip: the replay tapes and guest-RAM compares at the drawn frames
+ * check that.  (The game has no separate display pass in normal play: its
+ * DisplaySubs run inside each MainSub.)
  *
  * Modes (sa1psp.ini frame_skip = auto | off | N, or the backend's
  * --frame-skip, which wins):
@@ -29,11 +37,13 @@ int hle_frame_skip = -1;          /* sa1psp.ini: -1 auto, 0 off, N >= 2 */
 int hle_frame_skip_cli = -2;      /* backend option, wins: -2 unset, else as above */
 int hle_frame_skip_force;         /* backend: also in strict runs (tests) */
 
+int hle_draw_skip;                /* this frame draws nothing (set by the previous frame's end) */
+
 static uint64_t sched_t0;
 static uint32_t sched_f0, run, n_skipped, n_drawn;
 static int sched_on;
 
-int hle_render_skip(void) {
+static int decide(void) {
     int mode = hle_frame_skip_cli != -2 ? hle_frame_skip_cli : hle_frame_skip;
     if (!mode || (hle_strict && !hle_frame_skip_force)) return 0;
     uint32_t f = hle_frame_count();
@@ -50,6 +60,8 @@ int hle_render_skip(void) {
     if (skip) n_skipped++; else n_drawn++;
     return skip;
 }
+
+void hle_frame_skip_decide(void) { hle_draw_skip = decide(); }
 
 void hle_frame_skip_report(void) {
     int mode = hle_frame_skip_cli != -2 ? hle_frame_skip_cli : hle_frame_skip;

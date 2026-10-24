@@ -121,7 +121,8 @@ void hle_event_skip_poll(sh4_ctx *c);
 /* Frame skip (hle/game/frame_skip.c): logic every frame, the picture when
  * there is time; never in strict runs unless forced. */
 extern int hle_frame_skip, hle_frame_skip_cli, hle_frame_skip_force;
-int hle_render_skip(void);
+extern int hle_draw_skip;          /* the current frame draws nothing */
+void hle_frame_skip_decide(void);   /* at a frame's end: whether the next one draws */
 void hle_frame_skip_report(void);
 int hle_parse_frame_skip(const char *v, int *force);   /* settings.c: auto|off|N[, force:...]; -3 = bad */
 /* Runs a guest function from native code (callbacks): r4..r7 = a0..a3. */
