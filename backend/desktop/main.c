@@ -63,6 +63,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
+extern int hle_renderer_cli, hle_renderer_force;   /* hle/ninja/native_land.c */
 #include "../draw.h"
 #include "input_tape.h"
 #include "platform_desktop.h"
@@ -487,6 +488,12 @@ int main(int argc, char **argv) {
             int v = hle_parse_voice(argv[++i]);
             if (v < -1) { fprintf(stderr, "--voice: en, ja or game\n"); return 2; }
             snd_voice_lang_cli = v;
+        }
+        else if (!strcmp(argv[i], "--renderer") && i + 1 < argc) {   /* hle/ninja/native_land.c */
+            const char *v = argv[++i];
+            if (!strncmp(v, "force:", 6)) { hle_renderer_force = 1; v += 6; }
+            if (!strcmp(v, "native")) hle_renderer_cli = 1; else if (!strcmp(v, "ta")) hle_renderer_cli = 0;
+            else { fprintf(stderr, "--renderer: ta, native or force:native\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--frame-skip") && i + 1 < argc) {   /* hle/game/frame_skip.c: auto|off|N|force:... */
             int m = hle_parse_frame_skip(argv[++i], &hle_frame_skip_force);

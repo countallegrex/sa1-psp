@@ -51,6 +51,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
+extern int hle_renderer_cli, hle_renderer_force;   /* hle/ninja/native_land.c */
 #include "../draw.h"
 #include "../desktop/input_tape.h"
 #include "../desktop/savestate.h"
@@ -532,6 +533,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--cull-flip")) draw_gu_set_cull_flip(1);
         else if (!strcmp(av[i], "--ta-direct")) hle_ta_direct = 1;
         else if (!strcmp(av[i], "--no-ta-direct")) hle_ta_direct = 0;
+        else if (!strcmp(av[i], "--renderer") && i + 1 < args_c) {   /* hle/ninja/native_land.c */
+            const char *v = av[++i];
+            if (!strncmp(v, "force:", 6)) { hle_renderer_force = 1; v += 6; }
+            if (!strcmp(v, "native")) hle_renderer_cli = 1; else if (!strcmp(v, "ta")) hle_renderer_cli = 0;
+            else { sa1_log("--renderer %s: not ta, native or force:native; ignored", v); }
+        }
         else if (!strcmp(av[i], "--frame-skip") && i + 1 < args_c) {   /* hle/game/frame_skip.c: auto|off|N|force:... */
             int m = hle_parse_frame_skip(av[++i], &hle_frame_skip_force);
             if (m == -3) sa1_log("--frame-skip %s: not auto, off, 2-60 or force:...; ignored", av[i]); else

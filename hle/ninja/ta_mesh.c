@@ -182,6 +182,8 @@ void ta_mesh_8c0376d0(sh4_ctx *c) {
     const uint8_t *ovr = HP(0x8c8ffe1cu), *lens = HP(0x8c037980u);
     r15 -= 4u;
     WK32(r15, 0, 0u);                       /* sts.l pr,@-r15: the emitted pr is 0 */
+    const uint32_t model = c->r[4];
+    const int native = native_land_window && native_land_model_ok(model);   /* native_land.c */
     {
         const uint32_t r4 = c->r[4];
         r2 = RD32(r4, 12);
@@ -241,7 +243,10 @@ void ta_mesh_8c0376d0(sh4_ctx *c) {
         r6 = RD32(r5, 16);
         r0 = H32(lens, r9);
         HW32(G, 84, r0);
-        if (r13 == 0) {
+        uint32_t nta;
+        if (native && !(H32(G, 44) & 0x00500000u) && native_land_set(c, model, (r2 - RD32(model, 12)) / 24u, r14, &nta)) {
+            r0 = nta;               /* the TA pointer a strip writer would hand back */
+        } else if (r13 == 0) {
             if (r6 & 0x00200000u) {
                 c->r[0] = r0; c->r[2] = r2; c->r[3] = r3; c->r[6] = r6; c->r[14] = r14; c->r[15] = r15;
                 ta_direct_8c037990(c);

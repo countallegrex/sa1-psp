@@ -3,6 +3,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
+#include "ninja/ninja.h"
 #include <stdlib.h>
 #include "state.h"
 
@@ -63,6 +64,7 @@ void hle_init(void) {
     hle_settings_load();
     if (snd_voice_lang_cli >= -1) snd_voice_lang = snd_voice_lang_cli;
     snd_host_init();
+    native_land_init();
 }
 
 /* Save states: every module's state, in one fixed order (the inventory in

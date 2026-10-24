@@ -208,10 +208,17 @@ static int in_range2d(uint32_t p) {
 }
 
 static draw_vertex *dverts; static uint32_t ndverts, dverts_cap;   /* the TA bypass's host strips (docs/ta-direct.md) */
+/* native meshes (native_land.c): this frame's vertices and draw records */
+typedef struct { float m[16]; uint32_t first, nv; const uint16_t *idx; uint32_t ni; } native_rec;
+static draw_mesh_vertex *mverts;
+static uint32_t nmverts, mverts_cap;
+static native_rec *nrecs;
+static uint32_t nnrecs, nrecs_cap;
 
 static void buffers_reset(void) {
     nranges2d[0] = nranges2d[1] = nranges2d[2] = 0; mark_depth = 0;
     ndverts = 0;
+    nmverts = 0; nnrecs = 0;
     for (int i = 0; i < 3; i++) if (bufs[i].base) kamui_buffer_set(i, bufs[i].base);
     /* the game-visible copies too, so a stale pointer is never reused */
     hle_wr32(KM_CTX_PTR_OP, bufs[0].base); hle_wr32(KM_CTX_PTR_TR, bufs[1].base); hle_wr32(KM_CTX_PTR_PT, bufs[2].base);
@@ -636,6 +643,19 @@ draw_vertex *kamui_direct_strip(uint32_t n, uint32_t *first) {
     return dverts + *first;
 }
 
+/* Native meshes (native_land.c): vertices and draw records for this frame,
+ * drawn where their marker sits in a list, with that list's header state. */
+draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const uint16_t *idx, uint32_t ni, uint32_t *rec) {
+    if (!grow((void **)&mverts, &mverts_cap, nmverts + nv, sizeof *mverts) ||
+        !grow((void **)&nrecs, &nrecs_cap, nnrecs + 1, sizeof *nrecs)) return NULL;
+    native_rec *r = &nrecs[nnrecs];
+    memcpy(r->m, m, sizeof r->m);
+    r->first = nmverts; r->nv = nv; r->idx = idx; r->ni = ni;
+    *rec = nnrecs++;
+    nmverts += nv;
+    return mverts + r->first;
+}
+
 static void flush_strip(parse_ctx *pc, int sorted) {
     uint32_t n = nverts - pc->strip_start;
     if (n < 3) { nverts = pc->strip_start; return; }
@@ -890,6 +910,17 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
         }
         /* a global parameter ends any open strip */
         if (in_strip) { flush_strip(&pc, sorted); in_strip = 0; }
+        if (type == 6 && (TRD32(p) & 0xFFu) == 1) {        /* a native mesh (native_land.c): opaque lists only */
+            uint32_t r = TRD32(p + 4);
+            if (pc.list == want_list && !pc.modvol && !pc.sprite && !sorted && r < nnrecs) {
+                const native_rec *nr = &nrecs[r];
+                draw_set_state(&pc.state);
+                draw_mesh(nr->m, mverts + nr->first, (int)nr->nv, nr->idx, (int)nr->ni);
+                if (pc.list < 3) stat_strips[pc.list == 2 ? 1 : pc.list]++;
+            }
+            p += 32;
+            continue;
+        }
         if (type == 6) {                                   /* a TA-bypass strip (ta_direct.c): host vertices */
             uint32_t first = TRD32(p + 4), n = TRD32(p + 8);
             if (pc.list == want_list && !pc.modvol && !pc.sprite && first <= ndverts && n <= ndverts - first)
@@ -1085,6 +1116,7 @@ static void mark_finish(void) {
 void kamui_report(void) {
     if (!sh4_fsca_authentic) sa1_log("fsca: NOT the console's table (host libm): this run is not authentic");
     hle_frame_skip_report();
+    native_land_report();
     sa1_log("render: %u frames presented; last frame %u draw calls, %u triangles, polygons op %u tr %u pt %u; "
             "per frame on average: polygons op %u tr %u pt %u, strips op %u tr %u",
             frame_rendered_count, last_calls, last_tris, last_polys[0], last_polys[1], last_polys[2],

@@ -706,6 +706,66 @@ void draw_strip(const draw_vertex *v, int n) {
 #endif
 }
 
+/* ---- meshes (draw.h draw_mesh) --------------------------------------------- */
+#ifndef SA1_NO_SDL
+static void mesh_vec(const float *m, const draw_mesh_vertex *p, float *h) {
+    for (int r = 0; r < 4; r++) h[r] = m[r] * p->x + m[4 + r] * p->y + m[8 + r] * p->z + m[12 + r];
+}
+#endif
+
+int draw_mesh_supported(void) { return 1; }
+
+void draw_mesh(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
+    if (ni < 3) return;
+    stats.draw_calls++; stats.triangles += (uint32_t)(ni / 3);
+#ifndef SA1_NO_SDL
+    if (headless) return;
+    if (cur_proj != PROJ_3D) { glMatrixMode(GL_PROJECTION); glLoadMatrixf(proj[PROJ_3D]); glMatrixMode(GL_MODELVIEW); cur_proj = PROJ_3D; }
+    int any_off = 0;
+    glBegin(GL_TRIANGLES);
+    for (int i = 0; i < ni; i++) {
+        if (idx[i] >= nv) continue;
+        const draw_mesh_vertex *p = &v[idx[i]];
+        uint32_t c = p->color;
+        unsigned a = cur.use_alpha ? (c >> 24) & 255 : 255;
+        if (!cur.texture) {
+            uint32_t o = p->ocolor;
+            unsigned r = ((c >> 16) & 255) + ((o >> 16) & 255), g = ((c >> 8) & 255) + ((o >> 8) & 255), b = (c & 255) + (o & 255);
+            glColor4ub(r > 255 ? 255 : (GLubyte)r, g > 255 ? 255 : (GLubyte)g, b > 255 ? 255 : (GLubyte)b, (GLubyte)a);
+        } else {
+            glColor4ub((GLubyte)((c >> 16) & 255), (GLubyte)((c >> 8) & 255), (GLubyte)(c & 255), (GLubyte)a);
+            if (p->ocolor & 0x00FFFFFFu) any_off = 1;
+        }
+        float h[4]; mesh_vec(m, p, h);
+        glTexCoord2f(p->u, p->v);
+        glVertex4f(h[0], h[1], h[2], h[3]);
+    }
+    glEnd();
+    if (!any_off) return;
+    /* the offset colour, added as emit_offset does for strips */
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE);
+    glDepthFunc(GL_LEQUAL); glDepthMask(GL_FALSE);
+    glDisable(GL_ALPHA_TEST);
+    glBegin(GL_TRIANGLES);
+    for (int i = 0; i < ni; i++) {
+        if (idx[i] >= nv) continue;
+        const draw_mesh_vertex *p = &v[idx[i]];
+        uint32_t o = p->ocolor;
+        unsigned a = (cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA) ? (p->color >> 24) & 255 : 255;
+        glColor4ub((GLubyte)(((o >> 16) & 255) * a / 255), (GLubyte)(((o >> 8) & 255) * a / 255), (GLubyte)((o & 255) * a / 255), 255);
+        float h[4]; mesh_vec(m, p, h);
+        glVertex4f(h[0], h[1], h[2], h[3]);
+    }
+    glEnd();
+    stats.draw_calls++;
+    cur_valid = 0;
+    draw_set_state(&cur);
+#else
+    (void)m; (void)v; (void)nv; (void)idx;
+#endif
+}
+
 void draw_line_strip(const draw_vertex *v, int n) {
     if (n < 2) return;
     stats.draw_calls++;

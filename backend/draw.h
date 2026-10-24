@@ -111,6 +111,16 @@ void draw_line_strip(const draw_vertex *v, int n);
 /* Textures.  width/height are powers of two from 8 to 1024.  pixels holds
  * width*height texels in the given format, the CLUT (for T4/T8) follows
  * as 16-bit entries in clut_fmt.  Returns 0 on failure. */
+/* Indexed triangles with the current state, transformed by the backend
+ * (docs/native-renderer.md): m (column-major) takes a vertex to the
+ * homogeneous vector the strip path feeds the rasteriser, (x z, y z,
+ * -(z + 1), z) for screen x, y in DC pixels and depth z, so projection,
+ * depth and fog are the strip path's and the hardware clips at the near
+ * plane.  draw_mesh_supported() is 0 where a backend has no such path yet. */
+typedef struct draw_mesh_vertex { float x, y, z, u, v; uint32_t color, ocolor; } draw_mesh_vertex;
+int draw_mesh_supported(void);
+void draw_mesh(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni);
+
 uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels, int clut_fmt, const void *clut);
 void draw_texture_destroy(uint32_t handle);
 /* Debug: dump the current frame buffer as a PPM (desktop only; PSP returns -1). */

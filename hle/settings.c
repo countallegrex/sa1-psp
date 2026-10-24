@@ -10,12 +10,16 @@
  *                              take their length
  *   event_skip = on | off      on (default): START skips a story event
  *                              (hle/game/event_skip.c; never in strict runs)
+ *   renderer = ta | native     native: the land table from converted meshes
+ *                              with hardware transform (hle/ninja/native_land.c;
+ *                              off by default, never in strict runs)
  *   frame_skip = auto | off | N  auto (default): skip pictures when behind,
  *                              logic runs every frame (hle/game/frame_skip.c;
  *                              never in strict runs); N: draw one frame in N
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
+#include "ninja/ninja.h"
 #include "sound/snd_host.h"
 #include <string.h>
 #include <ctype.h>
@@ -71,6 +75,9 @@ void hle_settings_load(void) {
             } else if (!strcmp(k, "event_skip")) {
                 hle_event_skip = strcmp(v, "off") != 0 && strcmp(v, "0") != 0;
                 sa1_log("settings: event_skip %s", hle_event_skip ? "on" : "off");
+            } else if (!strcmp(k, "renderer")) {
+                hle_renderer_native = !strcmp(v, "native");
+                sa1_log("settings: renderer %s", hle_renderer_native ? "native" : "ta");
             } else if (!strcmp(k, "frame_skip")) {
                 int m = hle_parse_frame_skip(v, NULL);
                 if (m != -3) { hle_frame_skip = m; sa1_log("settings: frame_skip = %s", v); }

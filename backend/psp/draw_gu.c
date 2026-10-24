@@ -887,6 +887,14 @@ void draw_end_frame(void) {
 }
 
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
+/* draw.h draw_mesh: the GE path (hardware transform, display lists) is the
+ * slice's console step (docs/native-renderer.md); until then the native
+ * renderer stays off on the PSP. */
+int draw_mesh_supported(void) { return 0; }
+void draw_mesh(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
+    (void)m; (void)v; (void)nv; (void)idx; (void)ni;
+}
+
 void draw_gu_report(void) {
     if (tex_pool_on) pool_log("report");
     sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, list replay %.2f ms/frame, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB, vertices %u KB (%u strips over); "
