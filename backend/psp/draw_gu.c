@@ -894,6 +894,65 @@ void draw_end_frame(void) {
     swap_vcount = sceDisplayGetVcount();
 }
 
+/* --ge-near-test PATH (main_psp.c): what the GE does with triangles that
+ * need clipping (docs/native-renderer.md s.6.2), a console-only question
+ * (PPSSPP's GL path draws what the console may not).  On a grey background,
+ * GU_CLIP_PLANES on (draw_init), the far pass's 3D projection (z from the
+ * split), identity model and view matrices, vertices as the strip path
+ * feeds them (DC x z, y z, -z), no texture, blend, cull, fog or depth test,
+ * each triangle its own flat colour; DC 640x480 positions:
+ *   yellow  (4) control, wholly in view at z 40, top left
+ *   red     (1) two vertices at z 40, one behind the eye (z -10), top middle
+ *   magenta (5) two at z 40, one in front of the eye but nearer than the
+ *           far pass's near plane (z 4), top right
+ *   green   (2) wholly behind the eye (z -20), bottom middle
+ *   blue    (3) two in view at z 40, one at DC x 6000 (past the 4096-pixel
+ *           window), in front of the near plane, bottom right
+ *   cyan    (6) one vertex past the window and one behind the eye, bottom left
+ * Then the frame goes to PATH (PPM, 480x272) and to the screen. */
+int draw_gu_ge_near_test(const char *path) {
+    if (headless) return -1;
+    static const struct { float x, y, z; uint32_t abgr; } t[] = {
+        { 40, 40, 40, 0xFF00FFFFu }, { 180, 40, 40, 0xFF00FFFFu }, { 110, 160, 40, 0xFF00FFFFu },
+        { 250, 60, 40, 0xFF0000FFu }, { 400, 60, 40, 0xFF0000FFu }, { 325, 200, -10, 0xFF0000FFu },
+        { 450, 60, 40, 0xFFFF00FFu }, { 600, 60, 40, 0xFFFF00FFu }, { 525, 200, 4, 0xFFFF00FFu },
+        { 250, 300, -20, 0xFF00FF00u }, { 400, 300, -20, 0xFF00FF00u }, { 325, 440, -20, 0xFF00FF00u },
+        { 450, 300, 40, 0xFFFF0000u }, { 600, 300, 40, 0xFFFF0000u }, { 6000, 440, 40, 0xFFFF0000u },
+        { 40, 300, 40, 0xFFFFFF00u }, { -6000, 380, 40, 0xFFFFFF00u }, { 110, 440, -10, 0xFFFFFF00u },
+    };
+    const int n = (int)(sizeof t / sizeof t[0]);
+    ge_wait();
+    sceGuStart(GU_DIRECT, list);
+    sceGuScissor(0, 0, SCR_W, SCR_H);
+    sceGuDepthMask(GU_FALSE);
+    sceGuClearColor(0xFF404040u); sceGuClearDepth(0);
+    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    sceGuDisable(GU_TEXTURE_2D); sceGuDisable(GU_BLEND); sceGuDisable(GU_CULL_FACE); sceGuDisable(GU_FOG);
+    sceGuDisable(GU_ALPHA_TEST); sceGuDisable(GU_DEPTH_TEST);
+    sceGuEnable(GU_CLIP_PLANES);
+    sceGuShadeModel(GU_FLAT);
+    sceGuSetMatrix(GU_PROJECTION, &proj[PASS_FAR][PROJ_3D]);
+    static const ScePspFMatrix4 id = { {1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1} };
+    sceGuSetMatrix(GU_MODEL, &id);
+    sceGuSetMatrix(GU_VIEW, &id);
+    gu_vtx *v = sceGuGetMemory((int)(n * sizeof *v));
+    for (int i = 0; i < n; i++) {
+        v[i].u = v[i].v = 0.0f; v[i].color = t[i].abgr;
+        v[i].x = t[i].x * t[i].z; v[i].y = t[i].y * t[i].z; v[i].z = -t[i].z;
+        sa1_log("ge near test: triangle %d vertex %d: DC (%.0f, %.0f) z %.0f, colour 0x%08x", i / 3, i % 3, t[i].x, t[i].y, t[i].z, (unsigned)t[i].abgr);
+    }
+    for (int i = 0; i < n; i += 3) sceGuDrawArray(GU_TRIANGLES, VTX_FMT, 3, NULL, v + i);
+    sceGuFinish();
+    sceGuSync(0, 0);
+    shot_path = path;
+    write_shot();
+    shot_path = NULL;
+    sceGuSwapBuffers();
+    draw_fb ^= FB_BYTES;
+    sa1_log("ge near test: done (depth split z %.1f, far pass projection)", depth_split);
+    return 0;
+}
+
 static void model_report(void);
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
 void draw_gu_report(void) {
@@ -1330,10 +1389,10 @@ static inline __attribute__((always_inline)) void conv_pair(gu_vtx *o, gu_ovtx *
  * and w = 1/z are linear there, the texture coordinates and colours are
  * interpolated through w (perspective-correct, as the GE does).  The same
  * clipper cuts a strip at the depth split (w = 1/split). */
-#define GUARD_X0 (-2000.0f)
-#define GUARD_X1 2640.0f
-#define GUARD_Y0 (-2000.0f)
-#define GUARD_Y1 2480.0f
+#define GUARD_X0 DRAW_GE_GUARD_X0      /* draw.h: the desktop applies the same rules */
+#define GUARD_X1 DRAW_GE_GUARD_X1
+#define GUARD_Y0 DRAW_GE_GUARD_Y0
+#define GUARD_Y1 DRAW_GE_GUARD_Y1
 
 static int in_guard(const draw_vertex *v, int n) {
     for (int i = 0; i < n; i++)
@@ -1817,22 +1876,20 @@ static int mesh_pass(const float *m, const float *bound) {
 }
 
 static int mesh_geo(const float *m, const float *bound) {
-    float mn[4], mx[4];
-    for (int r = 0; r < 4; r++) {
-        float b = m[r] * bound[0] + m[4 + r] * bound[1] + m[8 + r] * bound[2] + m[12 + r];
-        float e = bound[3] * sqrtf(m[r] * m[r] + m[4 + r] * m[4 + r] + m[8 + r] * m[8 + r]);
-        mn[r] = b - e; mx[r] = b + e;
+    return draw_ge_geo(m, bound, depth_zn, depth_split);   /* draw.h (PASS_* are DRAW_PASS_*) */
+}
+
+/* The CPU path (draw.h draw_cpu_tri): the triangles idx[0..ni) of v through
+ * m, near-clipped as the game does, into the strip path with the current
+ * state, where the guard band and the split are clipped as for any strip. */
+static draw_cell_stats cst;
+static void cpu_tris(const float *m, const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
+    draw_vertex t[4];
+    for (int i = 0; i + 2 < ni; i += 3) {
+        if (idx[i] >= nv || idx[i + 1] >= nv || idx[i + 2] >= nv) continue;
+        int k = draw_cpu_tri(m, &v[idx[i]], &v[idx[i + 1]], &v[idx[i + 2]], t);
+        if (k) draw_strip(t, k);
     }
-    if (mn[3] < depth_zn) return DRAW_MESH_NO_NEAR;
-    float xs[4] = { mn[0] / mn[3], mn[0] / mx[3], mx[0] / mn[3], mx[0] / mx[3] };
-    float ys[4] = { mn[1] / mn[3], mn[1] / mx[3], mx[1] / mn[3], mx[1] / mx[3] };
-    float x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
-    for (int k = 1; k < 4; k++) { x0 = xs[k] < x0 ? xs[k] : x0; x1 = xs[k] > x1 ? xs[k] : x1; y0 = ys[k] < y0 ? ys[k] : y0; y1 = ys[k] > y1 ? ys[k] : y1; }
-    if (!(x0 > GUARD_X0 && x1 < GUARD_X1 && y0 > GUARD_Y0 && y1 < GUARD_Y1)) return DRAW_MESH_NO_GUARD;
-    if (!depth_split) return PASS_NEAR;
-    if (mn[3] >= depth_split) return PASS_FAR;
-    if (mx[3] <= depth_split) return PASS_NEAR;
-    return DRAW_MESH_NO_SPLIT;
 }
 
 int draw_mesh_test(const float m[16], const float bound[4]) { return headless ? DRAW_MESH_NO_OTHER : mesh_geo(m, bound); }
@@ -1846,7 +1903,12 @@ int draw_mesh_accepts(const float m[16], const float bound[4]) {
 void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
     if (headless || !list_open || !cur_valid || ni < 3 || nv <= 0 || ni > 65535 || list_full()) return;
     int pass = mesh_pass(m, bound);
-    if (pass < 0) { gs.dropped++; return; }    /* the caller asked draw_mesh_accepts with the same m and bound */
+    if (pass < 0) {                            /* refused whole (a model drawn per set before its cells): the CPU path */
+        if (pass == DRAW_MESH_NO_OTHER || cur.layer != DRAW_LAYER_3D) { gs.dropped++; return; }
+        cst.mesh_cpu_tris += (uint32_t)(ni / 3);
+        cpu_tris(m, v, nv, idx, ni);
+        return;
+    }
     int mode = conv_mode(), off = 0;
     uint32_t aor = (mode & CONV_ALPHA) ? 0u : 0xFF000000u;
     if (cur.texture) for (int i = 0; i < nv && !off; i++) if (v[i].ocolor & 0x00FFFFFFu) off = 1;
@@ -1899,30 +1961,49 @@ void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *
  * and its textures are touched in the pool every frame it is drawn. */
 #define GMODEL_MAX 1024
 #define GMODEL_LIST_PER_SET 768u
-typedef struct { draw_state st; uint32_t vfirst, vcount, ifirst, icount; int off; } gmset;
+typedef struct { draw_state st; uint32_t vfirst, vcount, ifirst, icount; int off; uint32_t sp0, sp1; } gmset;
 typedef struct {
     gmset *sets; int nsets;
     gu_vtx *v; gu_ovtx *ov; uint16_t *ix;     /* one allocation: mem */
     void *mem;
+    /* cells (draw.h): their spheres, the spans (sets[].sp0..sp1), and the
+     * vertices' colours as given (unconverted: base, offset) for the CPU path,
+     * which takes positions and UVs from v; one allocation */
+    draw_model_cell *cells; draw_model_span *spans; uint32_t *col; int ncells, nspans;
+    /* draw_model_variant: owner is the model whose vertices, indices and cells
+     * this one draws (0: its own); refs the variants drawing this one's, which
+     * keep them (zombie: released, kept for those) */
+    uint32_t owner; int refs, zombie;
     uint32_t *list; uint32_t list_cap, list_epoch; int list_ok;
     float bound[4];
     int dying;
 } gmodel;
 static gmodel gmodels[GMODEL_MAX];
 static uint32_t gmodel_free_later[GMODEL_MAX], ngmodel_free_later;
-static struct { uint32_t created, draws, lists, list_max, gone, bytes; } gms;
+static struct { uint32_t created, draws, lists, list_max, gone, bytes, cell_bytes, variants; } gms;
 
 static void model_release(uint32_t h) {
     gmodel *g = &gmodels[h];
-    free(g->mem); free(g->list); free(g->sets);
+    free(g->list); free(g->sets);
+    g->list = NULL; g->sets = NULL;
+    if (g->owner) {                 /* a variant: the owner's memory, kept while it has variants */
+        gmodel *o = &gmodels[g->owner];
+        if (--o->refs == 0 && o->zombie) { free(o->mem); free(o->cells); memset(o, 0, sizeof *o); }
+        memset(g, 0, sizeof *g);
+        return;
+    }
+    if (g->refs > 0) { g->zombie = 1; g->dying = 0; return; }
+    free(g->mem); free(g->cells);
     memset(g, 0, sizeof *g);
 }
 
+#define GMODEL_CELL_MAX 16384
 uint32_t draw_model_create(const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni,
-                           const draw_model_set *sets, int nsets, const float bound[4]) {
+                           const draw_model_set *sets, int nsets, const float bound[4],
+                           const draw_model_cell *cells, int ncells, const draw_model_span *spans, int nspans) {
     if (headless || nv <= 0 || ni < 3 || nsets <= 0 || ni > 65535 * 4) return 0;
     uint32_t h = 1;
-    while (h < GMODEL_MAX && (gmodels[h].sets || gmodels[h].dying)) h++;
+    while (h < GMODEL_MAX && (gmodels[h].sets || gmodels[h].dying || gmodels[h].zombie)) h++;
     if (h == GMODEL_MAX) return 0;
     gmodel *g = &gmodels[h];
     int any_off = 0;
@@ -1971,8 +2052,68 @@ uint32_t draw_model_create(const draw_mesh_vertex *v, int nv, const uint16_t *id
     }
     g->nsets = nsets;
     memcpy(g->bound, bound, sizeof g->bound);
+    uint32_t cb = 0;
+    if (cells && spans && ncells > 0 && ncells <= GMODEL_CELL_MAX && nspans > 0) {
+        int ok = 1;                 /* spans in set order, inside their set's indices */
+        for (int k = 0; k < nspans && ok; k++) {
+            const draw_model_span *q = &spans[k];
+            ok = q->set < nsets && q->cell < ncells && (k == 0 || q->set >= spans[k - 1].set) &&
+                 q->ifirst >= sets[q->set].ifirst && q->ifirst + q->icount <= sets[q->set].ifirst + sets[q->set].icount && q->icount % 3 == 0;
+        }
+        cb = (uint32_t)ncells * sizeof *cells + (uint32_t)nspans * sizeof *spans + (uint32_t)nv * 8u;
+        uint8_t *c = ok ? malloc(cb) : NULL;
+        if (c) {
+            g->cells = (draw_model_cell *)(void *)c;
+            g->spans = (draw_model_span *)(void *)(c + (uint32_t)ncells * sizeof *cells);
+            g->col = (uint32_t *)(void *)(c + (uint32_t)ncells * sizeof *cells + (uint32_t)nspans * sizeof *spans);
+            memcpy(g->cells, cells, (size_t)ncells * sizeof *cells);
+            memcpy(g->spans, spans, (size_t)nspans * sizeof *spans);
+            for (int i = 0; i < nv; i++) { g->col[2 * i] = v[i].color; g->col[2 * i + 1] = v[i].ocolor; }
+            g->ncells = ncells; g->nspans = nspans;
+            for (int s = 0; s < nsets; s++) g->sets[s].sp0 = g->sets[s].sp1 = 0;
+            for (int k = 0; k < nspans; k++) {
+                gmset *q = &g->sets[spans[k].set];
+                if (q->sp1 == 0) q->sp0 = (uint32_t)k;
+                q->sp1 = (uint32_t)k + 1;
+            }
+        } else cb = 0;
+    }
     gms.created++;
-    gms.bytes += vb + ob + ib + g->list_cap + (uint32_t)nsets * (uint32_t)sizeof *g->sets;
+    gms.bytes += vb + ob + ib + g->list_cap + (uint32_t)nsets * (uint32_t)sizeof *g->sets + cb;
+    gms.cell_bytes += cb;
+    return h;
+}
+
+/* A model drawing base's vertices with other states (draw.h): the colour
+ * rules of every set (conv_mode's inputs) must be base's, only the texture
+ * and what goes with it differ. */
+uint32_t draw_model_variant(uint32_t base, const draw_state *states, int nstates) {
+    if (headless || base == 0 || base >= GMODEL_MAX || !gmodels[base].sets || gmodels[base].dying || gmodels[base].owner) return 0;
+    gmodel *b = &gmodels[base];
+    if (nstates != b->nsets) return 0;
+    for (int s = 0; s < nstates; s++) {
+        const draw_state *x = &b->sets[s].st, *y = &states[s];
+        if (!x->texture != !y->texture || x->use_alpha != y->use_alpha || x->shade != y->shade || x->ignore_tex_alpha != y->ignore_tex_alpha ||
+            x->blend_dst != y->blend_dst) return 0;
+    }
+    uint32_t h = 1;
+    while (h < GMODEL_MAX && (gmodels[h].sets || gmodels[h].dying || gmodels[h].zombie)) h++;
+    if (h == GMODEL_MAX) return 0;
+    gmodel *g = &gmodels[h];
+    g->sets = malloc((size_t)nstates * sizeof *g->sets);
+    g->list_cap = b->list_cap;
+    g->list = memalign(64, g->list_cap);
+    if (!g->sets || !g->list) { free(g->sets); free(g->list); memset(g, 0, sizeof *g); return 0; }
+    sceKernelDcacheWritebackInvalidateRange(g->list, g->list_cap);
+    memcpy(g->sets, b->sets, (size_t)nstates * sizeof *g->sets);
+    for (int s = 0; s < nstates; s++) g->sets[s].st = states[s];
+    g->nsets = nstates;
+    g->v = b->v; g->ov = b->ov; g->ix = b->ix;
+    g->cells = b->cells; g->spans = b->spans; g->col = b->col; g->ncells = b->ncells; g->nspans = b->nspans;
+    memcpy(g->bound, b->bound, sizeof g->bound);
+    g->owner = base; b->refs++;
+    gms.created++; gms.variants++;
+    gms.bytes += g->list_cap + (uint32_t)nstates * (uint32_t)sizeof *g->sets;
     return h;
 }
 
@@ -1990,10 +2131,12 @@ static void model_retire(void) {
     ngmodel_free_later = 0;
 }
 
+static int model_cells(gmodel *g, const float *m);
 int draw_model(uint32_t h, const float m[16]) {
     if (headless || !list_open || h == 0 || h >= GMODEL_MAX || !gmodels[h].sets || gmodels[h].dying || list_full()) return 0;
     gmodel *g = &gmodels[h];
     int pass = mesh_geo(m, g->bound);
+    if (pass < 0 && g->ncells && pass != DRAW_MESH_NO_OTHER) return model_cells(g, m);
     if (pass < 0 || nmesh_mats >= MESH_MAT_MAX) return 0;
     if (nitems[pass] == ITEM_MAX) { gs.dropped++; return 0; }
     batch_flush();
@@ -2012,6 +2155,114 @@ int draw_model(uint32_t h, const float m[16]) {
     }
     gms.draws++;
     return 1;
+}
+
+/* A model the GE refuses whole, cell by cell (draw.h): the cells it takes
+ * as indexed draws of the persistent copy in the far pass (runs of
+ * neighbouring cells of a set merged into one draw, each set's state as a
+ * recorded state), the others through the CPU path with the set's state;
+ * cells out of view are skipped.  The current state is put back. */
+static uint8_t cell_cls[GMODEL_CELL_MAX];
+static void model_cpu_tris(const gmodel *g, const gmset *ms, const float *m, uint32_t ifirst, uint32_t icount) {
+    const gu_vtx *v = g->v + ms->vfirst;
+    const uint32_t *col = g->col + 2u * ms->vfirst;
+    const uint16_t *ix = g->ix + ifirst;
+    draw_mesh_vertex q[3];
+    draw_vertex t[4];
+    for (uint32_t i = 0; i + 2 < icount; i += 3) {
+        for (int k = 0; k < 3; k++) {
+            const uint32_t j = ix[i + (uint32_t)k];
+            if (j >= ms->vcount) goto next;
+            q[k].x = v[j].x; q[k].y = v[j].y; q[k].z = v[j].z; q[k].u = v[j].u; q[k].v = v[j].v;
+            q[k].color = col[2 * j]; q[k].ocolor = col[2 * j + 1];
+        }
+        {
+            int k = draw_cpu_tri(m, &q[0], &q[1], &q[2], t);
+            if (k) draw_strip(t, k);
+        }
+    next:;
+    }
+}
+
+static int model_cells(gmodel *g, const float *m) {
+    draw_cell_view cv;
+    const float zf = depth_split > depth_zn ? depth_split : depth_zn;
+    const int gpass = depth_split ? PASS_FAR : PASS_NEAR;
+    draw_cell_prep(&cv, m, zf);
+    int any = 0;
+    for (int c = 0; c < g->ncells; c++) {
+        int k = draw_cell_class(&cv, &g->cells[c]);
+        cell_cls[c] = (uint8_t)k;
+        cst.cells[k]++;
+        any |= k;
+    }
+    cst.models++;
+    if (!any) {                         /* every cell out of view */
+        for (int k = 0; k < g->nspans; k++) cst.tris[0] += g->spans[k].icount / 3u;
+        return 1;
+    }
+    const draw_state keep = cur;
+    const int keep_valid = cur_valid;
+    int mat = -1;
+    for (int s = 0; s < g->nsets; s++) {
+        const gmset *ms = &g->sets[s];
+        if (ms->sp1 <= ms->sp0) {       /* no spans (not expected): the CPU path whole */
+            if (!ms->icount) continue;
+            draw_set_state(&ms->st);
+            if (!cur_valid) break;
+            cst.tris[2] += ms->icount / 3u;
+            model_cpu_tris(g, ms, m, ms->ifirst, ms->icount);
+            continue;
+        }
+        int need = 0;
+        for (uint32_t k = ms->sp0; k < ms->sp1 && !need; k++) need = cell_cls[g->spans[k].cell] != DRAW_CELL_OUT;
+        if (!need) { for (uint32_t k = ms->sp0; k < ms->sp1; k++) cst.tris[0] += g->spans[k].icount / 3u; continue; }
+        draw_set_state(&ms->st);
+        if (!cur_valid) break;
+        uint32_t t = ms->st.texture;
+        if (t && t < TEX_MAX && texs[t].pblk) texpool_touch(texs[t].pblk - 1);
+        uint32_t run0 = 0, runn = 0;
+        for (uint32_t k = ms->sp0; k <= ms->sp1; k++) {
+            const draw_model_span *q = k < ms->sp1 ? &g->spans[k] : NULL;
+            const int cls = q ? cell_cls[q->cell] : -1;
+            if (cls == DRAW_CELL_GE && runn && run0 + runn == q->ifirst && runn + q->icount <= 65532u) { runn += q->icount; cst.tris[1] += q->icount / 3u; continue; }
+            if (runn) {                 /* the run so far: one indexed draw of the persistent copy */
+                batch_flush();
+                cur_proj = PROJ_3D;
+                if (mat < 0 && nmesh_mats < MESH_MAT_MAX) {
+                    ScePspFMatrix4 *mm = &mesh_mats[nmesh_mats];
+                    mm->x.x = m[0];  mm->x.y = m[1];  mm->x.z = -m[3];  mm->x.w = 0.0f;
+                    mm->y.x = m[4];  mm->y.y = m[5];  mm->y.z = -m[7];  mm->y.w = 0.0f;
+                    mm->z.x = m[8];  mm->z.y = m[9];  mm->z.z = -m[11]; mm->z.w = 0.0f;
+                    mm->w.x = m[12]; mm->w.y = m[13]; mm->w.z = -m[15]; mm->w.w = 1.0f;
+                    mat = nmesh_mats++;
+                }
+                if (mat >= 0 && nitems[gpass] < ITEM_MAX && nrstates) {
+                    gu_item *it = &items[gpass][nitems[gpass]++];
+                    it->state = (uint16_t)(nrstates - 1); it->proj = PROJ_3D; it->prim = GU_TRIANGLES;
+                    it->n = (uint16_t)runn; it->on = ms->off && g->ov ? (uint16_t)runn : 0;
+                    it->v = g->v + ms->vfirst; it->ov = g->ov ? g->ov + ms->vfirst : NULL; it->ix = g->ix + run0; it->mat = (int16_t)mat;
+                    stats.draw_calls++; stats.triangles += runn / 3u;
+                } else gs.dropped++;
+                runn = 0;
+            }
+            if (!q) break;
+            if (cls == DRAW_CELL_GE) { run0 = q->ifirst; runn = q->icount; cst.tris[1] += q->icount / 3u; }
+            else if (cls == DRAW_CELL_CPU) {
+                cst.tris[2] += q->icount / 3u;
+                model_cpu_tris(g, ms, m, q->ifirst, q->icount);
+            } else cst.tris[0] += q->icount / 3u;
+        }
+    }
+    if (keep_valid) draw_set_state(&keep);
+    else { cur = keep; cur_valid = 0; }
+    gms.draws++;
+    return 1;
+}
+
+void draw_cell_stats_take(draw_cell_stats *out) {
+    *out = cst;
+    memset(&cst, 0, sizeof cst);
 }
 
 /* The model's call list: built inside the open GU_DIRECT list (replay). */
@@ -2063,6 +2314,7 @@ static void model_call(uint32_t h) {
 
 static void model_report(void) {
     if (gms.created || gms.draws)
-        sa1_log("draw: models %u created (%u KB made in all), %u draws, %u lists built (largest %u bytes)", gms.created, gms.bytes / 1024u, gms.draws, gms.lists, gms.list_max);
+        sa1_log("draw: models %u created (%u of them texture variants; %u KB made in all, %u KB of it cells), %u draws, %u lists built (largest %u bytes)",
+                gms.created, gms.variants, gms.bytes / 1024u, gms.cell_bytes / 1024u, gms.draws, gms.lists, gms.list_max);
     gms.draws = gms.lists = 0;
 }

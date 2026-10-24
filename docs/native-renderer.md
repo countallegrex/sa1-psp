@@ -328,3 +328,69 @@ Square (native 40.4 against 27.75 with no land): the models the GE refuses
 whole (near plane, guard band; about 12 a frame), the translucent and
 environment-mapped models (about 26 a frame, not converted), and the
 translucent ones no longer culled.
+
+### 6.2 Iteration 5 (2026-10-24): cells, the CPU path, animated textures
+
+Console counters at b263c92 (Emerald Coast start, f460): of the land draws
+the TA way, 1,297 were models the GE refuses whole (near plane 1,079, guard
+band 218) and 2,361 "not converted".  The desktop, which now applies the
+PSP's rule (`draw_mesh_test` is `draw.h draw_ge_geo` on both backends),
+splits the latter into models with no opaque set (translucent or
+environment-mapped only: water, shadows; 1,926 draws, 44k tris over 700
+frames) and models with an animated texture (1,920 draws, 258k tris: the
+shore's opaque sets, whose texture list entry cycles).  No model was left
+out of the file for its mesh set types: the 45 "not in the file" are
+invisible COLs, never drawn.
+
+- **Cells** (`land_convert.py`, file version 2, `--cell 32`): each model's
+  opaque triangles are binned by centroid into 32-unit cubes in model
+  space, ordered by cell within each set (a cell is one index range per
+  set, a span), and each cell gets a sphere and its longest edge.  The
+  converter also takes triangle and quad lists (types 0, 1: fixed lengths 3
+  and 4 at 0x8C037980) and N-gons, so Emerald Coast act 1 converts.
+  Version 1 files still load (no cells: refused models go the TA way).
+- **Per-cell rule** (`draw_model`, both backends): a model `mesh_geo`
+  refuses whole is classified cell by cell (draw.h `draw_cell_class`):
+  wholly outside a view plane: skipped; in view with every vertex at z >=
+  max(split, 1 + 2 x longest edge) and the sphere inside the guard band: an
+  indexed draw of the persistent copy in the far pass (neighbouring cells of
+  a set merged into one draw, the set's state recorded as for a strip); the
+  rest: the CPU path (`draw_cpu_tri`): the vertices through the game's
+  matrix, cut at z = 1 with attributes linear in view space and dropped
+  when wholly nearer, as the game's clipper 0x8C037EE0 and its writer
+  0x8C037CCC do, then `draw_strip` (guard band, split).  So no visible
+  triangle that needs clipping reaches the GE.  The whole-model test is the
+  pretest: per-cell tests run only for refused models.  The per-set draws
+  that capture a refused model's states go the CPU way whole (`draw_mesh`).
+- **Animated textures**: the textures the opaque sets bind (`tex_now`) are
+  part of the variant key beside the light (`MAX_VARS` 32); a new set of
+  textures under a lighting already copied becomes `draw_model_variant`: the
+  copy's vertices, indices and cells with the new states (only its call
+  list is its own).  Emerald Coast's shore makes 84 such variants at the
+  start.
+
+Desktop, 700 frames, `--renderer native` (the PSP's GE rule):
+
+| | Emerald Coast start | Station Square (act 3) |
+|---|---|---|
+| persistent whole | 21,432 draws, 1.91M tris | 18,404, 855k |
+| refused whole, by cells | 1,962 (near 1,635, guard 327); cells out 51.8k / GE 27.5k / CPU 23.0k; tris out 273k / GE 107k / CPU 87k | 5,367 (near 3,670, guard 1,697); cells out 84.0k / GE 8.0k / CPU 39.6k; tris out 167k / GE 27k / CPU 72k |
+| TA way | 1,962 (45k tris), all "no opaque set" | 1,943 (25k), all "no opaque set" |
+| split models' TA sets | 248k tris | 48k tris |
+| land tris drawn: GE / CPU path / TA | 84 % / 4 % / 12 % | 86 % / 7 % / 7 % |
+| persistent memory (PSP layout) | 587 KB (cells 89 KB) | 334 KB (cells 56 KB) |
+
+At b263c92 the same runs made 280 and 277 KB.  Checks: the tapes pass with
+default, `force:native` and `--land-cull opaque`; `SA1_NATIVE_CHECK=1` over
+sonic_to_ec1_start: 0 of 731,352 set states and 0 of 211,352 lightings
+differ (that mode draws every refused model the CPU way); desktop pictures
+native against ta: Emerald Coast start 0.002 % of pixels more than 1 level
+apart (the shore water, now on the GE, is 1 level off on 1.6 %), Station
+Square 0.001 % (max 2), walks w1/w3 at most 0.002 %.
+
+`--ge-near-test FILE.ppm` (PSP only, main_psp.c) draws six flat triangles
+through sceGu with the far pass's projection and GU_CLIP_PLANES (crossing
+the eye plane, crossing the far pass's near plane in front of the eye,
+wholly behind the eye, past the 4096-pixel window, both, and a control),
+writes the frame and exits: what the console's GE does with them decides
+whether the CPU path's share could be handed back to the GE.

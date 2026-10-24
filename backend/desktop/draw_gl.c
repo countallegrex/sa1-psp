@@ -715,10 +715,34 @@ static void mesh_vec(const float *m, const draw_mesh_vertex *p, float *h) {
 
 int draw_mesh_supported(void) { return 1; }
 int draw_mesh_accepts(const float m[16], const float bound[4]) { (void)m; (void)bound; return 1; }   /* GL clips everything */
-int draw_mesh_test(const float m[16], const float bound[4]) { (void)m; (void)bound; return 0; }
+/* GL clips everything, but the test is the PSP's (draw.h draw_ge_geo, its
+ * near plane and split), so the native renderer takes the same paths here:
+ * its counts are the console's and the CPU path's pictures are checked. */
+int draw_mesh_test(const float m[16], const float bound[4]) { return draw_ge_geo(m, bound, 1.0f, DRAW_GE_SPLIT); }
 
+static draw_cell_stats cst;
+/* The CPU path (draw.h draw_cpu_tri), as draw_gu.c's cpu_tris. */
+static void cpu_tris(const float *m, const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
+    draw_vertex t[4];
+    for (int i = 0; i + 2 < ni; i += 3) {
+        if (idx[i] >= nv || idx[i + 1] >= nv || idx[i + 2] >= nv) continue;
+        int k = draw_cpu_tri(m, &v[idx[i]], &v[idx[i + 1]], &v[idx[i + 2]], t);
+        if (k) draw_strip(t, k);
+    }
+}
+
+static void mesh_emit(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni);
 void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
-    (void)bound;
+    if (ni < 3) return;
+    if (cur.layer == DRAW_LAYER_3D && draw_ge_geo(m, bound, 1.0f, DRAW_GE_SPLIT) < 0) {   /* as the PSP: refused whole, the CPU path */
+        cst.mesh_cpu_tris += (uint32_t)(ni / 3);
+        cpu_tris(m, v, nv, idx, ni);
+        return;
+    }
+    mesh_emit(m, v, nv, idx, ni);
+}
+
+static void mesh_emit(const float m[16], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
     if (ni < 3) return;
     stats.draw_calls++; stats.triangles += (uint32_t)(ni / 3);
 #ifndef SA1_NO_SDL
@@ -771,12 +795,14 @@ void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *
 
 /* Persistent models: copies of what the caller gave, drawn set by set with
  * draw_mesh (the desktop is the reference for pictures, not for speed). */
-typedef struct { draw_mesh_vertex *v; uint16_t *idx; draw_model_set *sets; int nv, ni, nsets; float bound[4]; } dmodel;
+typedef struct { draw_mesh_vertex *v; uint16_t *idx; draw_model_set *sets; int nv, ni, nsets; float bound[4];
+                 draw_model_cell *cells; draw_model_span *spans; int ncells, nspans; } dmodel;
 #define DMODEL_MAX 4096
 static dmodel dmodels[DMODEL_MAX];
 
 uint32_t draw_model_create(const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni,
-                           const draw_model_set *sets, int nsets, const float bound[4]) {
+                           const draw_model_set *sets, int nsets, const float bound[4],
+                           const draw_model_cell *cells, int ncells, const draw_model_span *spans, int nspans) {
     for (uint32_t h = 1; h < DMODEL_MAX; h++) {
         dmodel *d = &dmodels[h];
         if (d->sets) continue;
@@ -785,28 +811,103 @@ uint32_t draw_model_create(const draw_mesh_vertex *v, int nv, const uint16_t *id
         memcpy(d->v, v, (size_t)nv * sizeof *v); memcpy(d->idx, idx, (size_t)ni * 2); memcpy(d->sets, sets, (size_t)nsets * sizeof *sets);
         d->nv = nv; d->ni = ni; d->nsets = nsets;
         memcpy(d->bound, bound, sizeof d->bound);
+        if (cells && spans && ncells > 0 && nspans > 0) {
+            int ok = 1;             /* spans in set order, inside their set's indices (as draw_gu.c) */
+            for (int k = 0; k < nspans && ok; k++) {
+                const draw_model_span *q = &spans[k];
+                ok = q->set < nsets && q->cell < ncells && (k == 0 || q->set >= spans[k - 1].set) &&
+                     q->ifirst >= sets[q->set].ifirst && q->ifirst + q->icount <= sets[q->set].ifirst + sets[q->set].icount && q->icount % 3 == 0;
+            }
+            d->cells = ok ? malloc((size_t)ncells * sizeof *cells) : NULL;
+            d->spans = ok ? malloc((size_t)nspans * sizeof *spans) : NULL;
+            if (d->cells && d->spans) {
+                memcpy(d->cells, cells, (size_t)ncells * sizeof *cells);
+                memcpy(d->spans, spans, (size_t)nspans * sizeof *spans);
+                d->ncells = ncells; d->nspans = nspans;
+            } else { free(d->cells); free(d->spans); d->cells = NULL; d->spans = NULL; }
+        }
         return h;
     }
     return 0;
 }
 
+/* draw.h: a copy of base with other states (the desktop copies; the rules
+ * checked are the PSP's, so both refuse the same variants). */
+uint32_t draw_model_variant(uint32_t base, const draw_state *states, int nstates) {
+    if (base == 0 || base >= DMODEL_MAX || !dmodels[base].sets || nstates != dmodels[base].nsets) return 0;
+    const dmodel *b = &dmodels[base];
+    for (int s = 0; s < nstates; s++) {
+        const draw_state *x = &b->sets[s].state, *y = &states[s];
+        if (!x->texture != !y->texture || x->use_alpha != y->use_alpha || x->shade != y->shade || x->ignore_tex_alpha != y->ignore_tex_alpha ||
+            x->blend_dst != y->blend_dst) return 0;
+    }
+    draw_model_set *sets = malloc((size_t)nstates * sizeof *sets);
+    if (!sets) return 0;
+    memcpy(sets, b->sets, (size_t)nstates * sizeof *sets);
+    for (int s = 0; s < nstates; s++) sets[s].state = states[s];
+    uint32_t h = draw_model_create(b->v, b->nv, b->idx, b->ni, sets, nstates, b->bound, b->cells, b->ncells, b->spans, b->nspans);
+    free(sets);
+    return h;
+}
+
 void draw_model_destroy(uint32_t h) {
     if (h == 0 || h >= DMODEL_MAX || !dmodels[h].sets) return;
-    free(dmodels[h].v); free(dmodels[h].idx); free(dmodels[h].sets);
+    free(dmodels[h].v); free(dmodels[h].idx); free(dmodels[h].sets); free(dmodels[h].cells); free(dmodels[h].spans);
     memset(&dmodels[h], 0, sizeof dmodels[h]);
+}
+
+/* A model the PSP's GE would refuse whole, cell by cell as draw_gu.c's
+ * model_cells: cells out of view skipped, the GE's cells drawn from the copy,
+ * the others through the CPU path. */
+static uint8_t *cell_cls;
+static int cell_cls_cap;
+static int model_cells(const dmodel *d, const float *m) {
+    if (d->ncells > cell_cls_cap) {
+        uint8_t *c = realloc(cell_cls, (size_t)d->ncells);
+        if (!c) return 0;
+        cell_cls = c; cell_cls_cap = d->ncells;
+    }
+    draw_cell_view cv;
+    draw_cell_prep(&cv, m, DRAW_GE_SPLIT);
+    for (int c = 0; c < d->ncells; c++) { int k = draw_cell_class(&cv, &d->cells[c]); cell_cls[c] = (uint8_t)k; cst.cells[k]++; }
+    cst.models++;
+    const draw_state keep = cur;
+    int k = 0;
+    for (int s = 0; s < d->nsets; s++) {
+        const draw_model_set *ms = &d->sets[s];
+        const draw_mesh_vertex *v = d->v + ms->vfirst;
+        int set_on = 0;
+        for (; k < d->nspans && d->spans[k].set == s; k++) {
+            const draw_model_span *q = &d->spans[k];
+            const int cls = cell_cls[q->cell];
+            cst.tris[cls] += q->icount / 3u;
+            if (cls == DRAW_CELL_OUT) continue;
+            if (!set_on) { draw_set_state(&ms->state); set_on = 1; }
+            if (cls == DRAW_CELL_GE) mesh_emit(m, v, (int)ms->vcount, d->idx + q->ifirst, (int)q->icount);
+            else cpu_tris(m, v, (int)ms->vcount, d->idx + q->ifirst, (int)q->icount);
+        }
+    }
+    draw_set_state(&keep);
+    return 1;
 }
 
 int draw_model(uint32_t h, const float m[16]) {
     if (h == 0 || h >= DMODEL_MAX || !dmodels[h].sets) return 0;
     const dmodel *d = &dmodels[h];
+    if (d->ncells && draw_ge_geo(m, d->bound, 1.0f, DRAW_GE_SPLIT) < 0) return model_cells(d, m);
     const draw_state keep = cur;
     for (int s = 0; s < d->nsets; s++) {
         const draw_model_set *ms = &d->sets[s];
         draw_set_state(&ms->state);
-        draw_mesh(m, d->bound, d->v + ms->vfirst, (int)ms->vcount, d->idx + ms->ifirst, (int)ms->icount);
+        mesh_emit(m, d->v + ms->vfirst, (int)ms->vcount, d->idx + ms->ifirst, (int)ms->icount);
     }
     draw_set_state(&keep);
     return 1;
+}
+
+void draw_cell_stats_take(draw_cell_stats *out) {
+    *out = cst;
+    memset(&cst, 0, sizeof cst);
 }
 
 void draw_line_strip(const draw_vertex *v, int n) {

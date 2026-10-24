@@ -22,6 +22,9 @@
  *   --no-ta-direct  the recompiled TA strip writers instead of the native ones (docs/ta-direct.md)
  *   --gu-split Z    the depth passes' split (draw_gu.c, default 16; 0: one pass)
  *   --gu-debug N    renderer bisection switches (draw_gu.c)
+ *   --ge-near-test FILE.ppm  after the draw set-up, draw the GE clipping test
+ *                   triangles (draw_gu.c draw_gu_ge_near_test), write the
+ *                   frame to FILE and exit (a console-only question)
  *   --no-ge-pipeline  wait for the GE at the end of each frame (default: it
  *                   draws frame N while the game runs N+1; draw_gu.c)
  *   --ge-stall-every N  move the GE's stall address every N draws (default
@@ -91,6 +94,7 @@ void kamui_set_screenshot(const char *path);
 void draw_gu_report(void);
 void draw_gu_set_cull_flip(int on);
 void draw_gu_set_debug(int flags);
+int draw_gu_ge_near_test(const char *path);
 void draw_gu_set_split(float z);
 void draw_gu_set_lod_bias(float b);
 void draw_gu_set_max_mip(int n);
@@ -100,6 +104,7 @@ const char *vmu_store_psp_dir(void);
 static int vmu_mode;                        /* -1 --no-vmu, 1 --vmu-dir, 0 default */
 static const char *vmu_dir_arg;
 static const char *dump_trig_path;   /* --dump-trig FILE: libm sinf/cosf of every 16-bit angle, then exit */
+static const char *ge_near_test_path;   /* --ge-near-test FILE: the GE clipping test (draw_gu.c), then exit */
 
 /* The libm's sinf and cosf of (float)i * TURN for i = 0..65535, under
  * round-to-nearest then round-toward-zero (FCSR.RM 0 and 1): 4 arrays of
@@ -570,6 +575,7 @@ int main(int argc, char **argv) {
             if (eq) { *eq = 0; setenv(av[i], eq + 1, 1); *eq = '='; }
         }
         else if (!strcmp(av[i], "--no-ge-pipeline")) draw_gu_set_ge_pipeline(0);
+        else if (!strcmp(av[i], "--ge-near-test") && i + 1 < args_c) ge_near_test_path = av[++i];
         else if (!strcmp(av[i], "--ge-stall-every") && i + 1 < args_c) draw_gu_set_stall_every(atoi(av[++i]));
         else if (!strcmp(av[i], "--stats") && i + 1 < args_c) stats_every = atoi(av[++i]);
         else if (!strcmp(av[i], "--mem") && i + 1 < args_c && nmem < 16) mem_frames[nmem++] = (uint32_t)strtoul(av[++i], NULL, 0);
@@ -718,6 +724,13 @@ int main(int argc, char **argv) {
     draw_init(1, headless);
     sa1_log("step: draw_set_aspect");
     draw_set_aspect(hle_aspect_wide);
+    if (ge_near_test_path) {
+        draw_gu_ge_near_test(ge_near_test_path);
+        sceKernelDelayThread(2000000);      /* two seconds on screen */
+        plat_log_flush();
+        sceKernelExitGame();
+        return 0;
+    }
     sa1_log("step: watchdog");
     plat_watchdog_start(hle_frame_count, 10);
     mem_report("boot");

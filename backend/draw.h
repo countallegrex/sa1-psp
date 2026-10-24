@@ -119,7 +119,8 @@ void draw_line_strip(const draw_vertex *v, int n);
  * plane.  bound is a model-space sphere (x, y, z, radius) holding every
  * vertex: draw_mesh_accepts(m, bound) says whether this backend draws such a
  * mesh in hardware (the caller decides before it transforms anything, and
- * draws it the strip way otherwise); draw_mesh draws only what it accepts.
+ * draws it the strip way otherwise); draw_mesh draws a mesh the GE refuses
+ * (near plane, guard band, split) through the CPU path (draw_cpu_tri).
  * draw_mesh_supported() is 0 where a backend has no such path yet. */
 typedef struct draw_mesh_vertex { float x, y, z, u, v; uint32_t color, ocolor; } draw_mesh_vertex;
 int draw_mesh_supported(void);
@@ -136,11 +137,158 @@ void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *
  * draw_model draws one with matrix m as draw_mesh would, its sets' own
  * states (the current state is not used and stays); 0 when it could not
  * (the caller then draws it another way).  Handles are > 0. */
+/* Cells (docs/native-renderer.md s.6.2): a persistent model's triangles
+ * binned in model space (tools/land_convert.py), each cell one index range
+ * per set (a span: ifirst into the model's indices, of sets[set]), spans in
+ * set order and, within a set, contiguous.  A model the GE cannot take whole
+ * (draw_mesh_test < 0) is then drawn cell by cell: a cell wholly out of view
+ * is skipped, one the GE takes safely (in view, every vertex at z >=
+ * max(split, 1 + 2 * its longest edge), inside the guard band) goes from
+ * the persistent copy, and the rest through the CPU path (draw_cpu_tri:
+ * the strip path's picture, near-clipped at z = 1 as the game's clipper
+ * 0x8C037EE0 does, then the strip clipper), so no visible triangle that
+ * needs clipping reaches the GE.  Without cells (ncells 0) a model draws
+ * only where the GE takes it whole. */
+typedef struct draw_model_cell { float bound[4]; float edge; } draw_model_cell;
+typedef struct draw_model_span { uint32_t ifirst, icount; uint16_t cell, set; } draw_model_span;
 typedef struct draw_model_set { draw_state state; uint32_t vfirst, vcount, ifirst, icount; } draw_model_set;
 uint32_t draw_model_create(const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni,
-                           const draw_model_set *sets, int nsets, const float bound[4]);
+                           const draw_model_set *sets, int nsets, const float bound[4],
+                           const draw_model_cell *cells, int ncells, const draw_model_span *spans, int nspans);
+/* A model drawing base's vertices, indices and cells with other set states
+ * (an animated texture's next frame: the texture differs, the colour rules
+ * do not); 0 when the rules differ or it cannot (then draw_model_create).
+ * It stays valid if base is destroyed first. */
+uint32_t draw_model_variant(uint32_t base, const draw_state *states, int nstates);
 void draw_model_destroy(uint32_t handle);
 int draw_model(uint32_t handle, const float m[16]);
+
+/* Per-cell counters since the last call (cells and triangles: out of view,
+ * on the GE, through the CPU path; models drawn by cells; triangles drawn
+ * the CPU way by draw_mesh), then reset. */
+typedef struct draw_cell_stats { uint32_t models, cells[3], tris[3], mesh_cpu_tris; } draw_cell_stats;
+void draw_cell_stats_take(draw_cell_stats *out);
+
+/* The GE's limits as the PSP backend has them (draw_gu.c), shared so the
+ * desktop can apply the same rules for its counts and pictures.  The guard
+ * band is in the game's 640x480 screen space. */
+#define DRAW_GE_GUARD_X0 (-2000.0f)
+#define DRAW_GE_GUARD_X1 2640.0f
+#define DRAW_GE_GUARD_Y0 (-2000.0f)
+#define DRAW_GE_GUARD_Y1 2480.0f
+#define DRAW_GE_SPLIT 16.0f          /* the 16-bit depth passes' split (draw_gu.c depth_split) */
+enum { DRAW_PASS_FAR = 0, DRAW_PASS_NEAR = 1 };
+
+/* draw_mesh_test's rule (the PSP's mesh_geo): the pass a mesh with matrix m
+ * and sphere bound draws in, or DRAW_MESH_NO_*.  zn the near limit, split 0
+ * for no split. */
+static inline int draw_ge_geo(const float *m, const float *bound, float zn, float split) {
+    float mn[4], mx[4];
+    for (int r = 0; r < 4; r++) {
+        float b = m[r] * bound[0] + m[4 + r] * bound[1] + m[8 + r] * bound[2] + m[12 + r];
+        float q = m[r] * m[r] + m[4 + r] * m[4 + r] + m[8 + r] * m[8 + r];
+        float e = bound[3] * __builtin_sqrtf(q);
+        mn[r] = b - e; mx[r] = b + e;
+    }
+    if (mn[3] < zn) return DRAW_MESH_NO_NEAR;
+    float xs[4] = { mn[0] / mn[3], mn[0] / mx[3], mx[0] / mn[3], mx[0] / mx[3] };
+    float ys[4] = { mn[1] / mn[3], mn[1] / mx[3], mx[1] / mn[3], mx[1] / mx[3] };
+    float x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
+    for (int k = 1; k < 4; k++) { x0 = xs[k] < x0 ? xs[k] : x0; x1 = xs[k] > x1 ? xs[k] : x1; y0 = ys[k] < y0 ? ys[k] : y0; y1 = ys[k] > y1 ? ys[k] : y1; }
+    if (!(x0 > DRAW_GE_GUARD_X0 && x1 < DRAW_GE_GUARD_X1 && y0 > DRAW_GE_GUARD_Y0 && y1 < DRAW_GE_GUARD_Y1)) return DRAW_MESH_NO_GUARD;
+    if (!split) return DRAW_PASS_NEAR;
+    if (mn[3] >= split) return DRAW_PASS_FAR;
+    if (mx[3] <= split) return DRAW_PASS_NEAR;
+    return DRAW_MESH_NO_SPLIT;
+}
+
+/* The per-cell test for one matrix: rows 0, 1, 3 of m (x z, y z, z), their
+ * lengths and those of the five view planes (native_land.c view_out's: z >=
+ * 0, the wide view's x range and y 0..480, an 8-pixel margin). */
+typedef struct draw_cell_view { const float *m; float n0, n1, n3, pn[5]; float zfloor; } draw_cell_view;
+static const float draw_cell_planes[5][3] = {   /* coefficients of x z, y z, z */
+    { 0, 0, 1 }, { 1, 0, -(DRAW_WIDE_LEFT - 8.0f) }, { -1, 0, DRAW_WIDE_RIGHT + 8.0f }, { 0, 1, 8.0f }, { 0, -1, 488.0f } };
+static inline void draw_cell_prep(draw_cell_view *cv, const float *m, float zfloor) {
+    cv->m = m; cv->zfloor = zfloor;
+    cv->n0 = __builtin_sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]);
+    cv->n1 = __builtin_sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
+    cv->n3 = __builtin_sqrtf(m[3] * m[3] + m[7] * m[7] + m[11] * m[11]);
+    for (int k = 0; k < 5; k++) {
+        const float *p = draw_cell_planes[k];
+        float a0 = p[0] * m[0] + p[1] * m[1] + p[2] * m[3], a1 = p[0] * m[4] + p[1] * m[5] + p[2] * m[7], a2 = p[0] * m[8] + p[1] * m[9] + p[2] * m[11];
+        cv->pn[k] = __builtin_sqrtf(a0 * a0 + a1 * a1 + a2 * a2);
+    }
+}
+enum { DRAW_CELL_OUT = 0, DRAW_CELL_GE = 1, DRAW_CELL_CPU = 2 };
+static inline int draw_cell_class(const draw_cell_view *cv, const draw_model_cell *c) {
+    const float *m = cv->m, *b = c->bound, r = b[3];
+    const float h0 = m[0] * b[0] + m[4] * b[1] + m[8] * b[2] + m[12];
+    const float h1 = m[1] * b[0] + m[5] * b[1] + m[9] * b[2] + m[13];
+    const float h3 = m[3] * b[0] + m[7] * b[1] + m[11] * b[2] + m[15];
+    for (int k = 0; k < 5; k++) {
+        const float *p = draw_cell_planes[k];
+        if (p[0] * h0 + p[1] * h1 + p[2] * h3 < -r * cv->pn[k]) return DRAW_CELL_OUT;
+    }
+    const float zmin = h3 - r * cv->n3, zmax = h3 + r * cv->n3, zs = 1.0f + 2.0f * c->edge * cv->n3;   /* the edge in view units */
+    if (zmin < cv->zfloor || zmin < zs) return DRAW_CELL_CPU;
+    const float x0 = h0 - r * cv->n0, x1 = h0 + r * cv->n0, y0 = h1 - r * cv->n1, y1 = h1 + r * cv->n1;
+    if (!(x0 > DRAW_GE_GUARD_X0 * zmin && x0 > DRAW_GE_GUARD_X0 * zmax && x1 < DRAW_GE_GUARD_X1 * zmin && x1 < DRAW_GE_GUARD_X1 * zmax &&
+          y0 > DRAW_GE_GUARD_Y0 * zmin && y0 > DRAW_GE_GUARD_Y0 * zmax && y1 < DRAW_GE_GUARD_Y1 * zmin && y1 < DRAW_GE_GUARD_Y1 * zmax)) return DRAW_CELL_CPU;
+    return DRAW_CELL_GE;
+}
+
+/* The CPU path's triangle: a, b, c through m to the strip path's vertices
+ * (x, y in DC pixels, w = 1/z), cut at z = 1 where it crosses (attributes
+ * linear in view space, as the game's clipper), dropped when every vertex
+ * is nearer than z = 1 (the game's strip writer 0x8C037CCC).  Writes a strip
+ * of 3 or 4 vertices into out (the winding of a, b, c) and returns its
+ * length, 0 when nothing is left. */
+static inline uint32_t draw_lerp_argb(uint32_t a, uint32_t b, float t) {
+    if (a == b) return a;
+    uint32_t o = 0;
+    for (int s = 0; s < 32; s += 8) {
+        float x = (float)((a >> s) & 255u), y = (float)((b >> s) & 255u);
+        int v = (int)(x + (y - x) * t + 0.5f);
+        o |= (uint32_t)(v < 0 ? 0 : v > 255 ? 255 : v) << s;
+    }
+    return o;
+}
+static inline int draw_cpu_tri(const float *m, const draw_mesh_vertex *a, const draw_mesh_vertex *b, const draw_mesh_vertex *c, draw_vertex *out) {
+    const draw_mesh_vertex *p[3] = { a, b, c };
+    float h[3][3];
+    int in = 0;
+    for (int i = 0; i < 3; i++) {
+        const draw_mesh_vertex *q = p[i];
+        h[i][0] = m[0] * q->x + m[4] * q->y + m[8] * q->z + m[12];
+        h[i][1] = m[1] * q->x + m[5] * q->y + m[9] * q->z + m[13];
+        h[i][2] = m[3] * q->x + m[7] * q->y + m[11] * q->z + m[15];
+        in |= (h[i][2] >= 1.0f) << i;
+    }
+    if (!in) return 0;
+    draw_vertex poly[4];
+    int k = 0;
+    for (int i = 0; i < 3; i++) {
+        const int j = i == 2 ? 0 : i + 1, ii = (in >> i) & 1, ij = (in >> j) & 1;
+        if (ii) {
+            const float z = h[i][2], iz = 1.0f / z;
+            poly[k].x = h[i][0] * iz; poly[k].y = h[i][1] * iz; poly[k].w = iz;
+            poly[k].u = p[i]->u; poly[k].v = p[i]->v; poly[k].color = p[i]->color; poly[k].ocolor = p[i]->ocolor;
+            k++;
+        }
+        if (ii != ij) {
+            const float t = (1.0f - h[i][2]) / (h[j][2] - h[i][2]);
+            poly[k].x = h[i][0] + (h[j][0] - h[i][0]) * t; poly[k].y = h[i][1] + (h[j][1] - h[i][1]) * t; poly[k].w = 1.0f;
+            poly[k].u = p[i]->u + (p[j]->u - p[i]->u) * t; poly[k].v = p[i]->v + (p[j]->v - p[i]->v) * t;
+            poly[k].color = draw_lerp_argb(p[i]->color, p[j]->color, t);
+            poly[k].ocolor = draw_lerp_argb(p[i]->ocolor, p[j]->ocolor, t);
+            k++;
+        }
+    }
+    out[0] = poly[0]; out[1] = poly[1];
+    if (k == 3) { out[2] = poly[2]; return 3; }
+    out[2] = poly[3]; out[3] = poly[2];          /* the quad 0 1 2 3 as the strip 0 1 3 2 */
+    return 4;
+}
 
 uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels, int clut_fmt, const void *clut);
 void draw_texture_destroy(uint32_t handle);
