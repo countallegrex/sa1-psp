@@ -287,12 +287,20 @@ static void test_tones(void) {
     midi(sh, 0, 0x83, 60, 0); midi(sh, 0, 0xE3, 0, 0x40);
     snd_core_render(core, out, SND_RATE / 10);
     /* program 1 (ADPCM, one-shot of 0.1 s at 441 Hz): sounds, then ends by itself */
-    midi(sh, 1, 0xB0, 32, 4); midi(sh, 1, 0xC0, 1, 0); midi(sh, 1, 0x90, 72, 127);
+    midi(sh, 1, 0xB0, 32, 4); midi(sh, 1, 0xC0, 1, 0); midi(sh, 1, 0xB0, 7, 127); midi(sh, 1, 0x90, 72, 127);
     snd_core_render(core, out, SND_RATE / 20);
     double f4 = freq_of(out, SND_RATE / 20), r4 = rms_of(out, SND_RATE / 20);
     CHECK(fabs(f4 - 441) < 10 && r4 > 3000, "ADPCM tone: %.1f Hz rms %.0f", f4, r4);
     snd_core_render(core, out, SND_RATE / 10);
     CHECK(sh->voices_active == 0, "one-shot still active");
+    /* the driver's level law (snd_core.c tone_att), no bank curve: CC 7 100
+     * gives level ((127+1)(100+1)(256-0)-1) >> 14 = 201, TL 54, 20.25 dB under
+     * CC 7 127 (level 255, TL 0) */
+    midi(sh, 1, 0xB0, 7, 100); midi(sh, 1, 0x90, 72, 127);
+    snd_core_render(core, out, SND_RATE / 20);
+    double r5 = rms_of(out, SND_RATE / 20), db5 = 20 * log10(r5 / r4);
+    CHECK(fabs(db5 + 20.25) < 0.5, "ADPCM tone at CC 7 100: %.2f dB, want -20.25", db5);
+    snd_core_render(core, out, SND_RATE / 10);
     printf("tones: key 72 %.1f Hz, key 60 %.1f Hz, bent %.1f Hz, ADPCM %.1f Hz, releases end\n", f1, f2, f3, f4);
     free(core); free(sh->sound_ram); free(sh);
 }
