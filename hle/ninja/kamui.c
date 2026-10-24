@@ -209,7 +209,9 @@ static int in_range2d(uint32_t p) {
 
 static draw_vertex *dverts; static uint32_t ndverts, dverts_cap;   /* the TA bypass's host strips (docs/ta-direct.md) */
 /* native meshes (native_land.c): this frame's vertices and draw records */
-typedef struct { float m[16], bound[4]; uint32_t first, nv; const uint16_t *idx; uint32_t ni; } native_rec;
+/* kind 1: a mesh set (first, nv, idx, ni; tag for native_land_captured); kind 2: a model (handle) */
+typedef struct { float m[16], bound[4]; uint32_t first, nv; const uint16_t *idx; uint32_t ni, tag, handle; } native_rec;
+static uint32_t stat_model_fail;
 static draw_mesh_vertex *mverts;
 static uint32_t nmverts, mverts_cap;
 static native_rec *nrecs;
@@ -645,13 +647,23 @@ draw_vertex *kamui_direct_strip(uint32_t n, uint32_t *first) {
 
 /* Native meshes (native_land.c): vertices and draw records for this frame,
  * drawn where their marker sits in a list, with that list's header state. */
-draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const float bound[4], const uint16_t *idx, uint32_t ni, uint32_t *rec) {
+/* A persistent model (draw_model) for this frame: *rec for a type-6 marker of kind 2. */
+int kamui_native_model(uint32_t handle, const float m[16], uint32_t *rec) {
+    if (!grow((void **)&nrecs, &nrecs_cap, nnrecs + 1, sizeof *nrecs)) return 0;
+    native_rec *r = &nrecs[nnrecs];
+    memcpy(r->m, m, sizeof r->m);
+    r->handle = handle; r->nv = r->ni = 0; r->idx = NULL;
+    *rec = nnrecs++;
+    return 1;
+}
+
+draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const float bound[4], const uint16_t *idx, uint32_t ni, uint32_t tag, uint32_t *rec) {
     if (!grow((void **)&mverts, &mverts_cap, nmverts + nv, sizeof *mverts) ||
         !grow((void **)&nrecs, &nrecs_cap, nnrecs + 1, sizeof *nrecs)) return NULL;
     native_rec *r = &nrecs[nnrecs];
     memcpy(r->m, m, sizeof r->m);
     memcpy(r->bound, bound, sizeof r->bound);
-    r->first = nmverts; r->nv = nv; r->idx = idx; r->ni = ni;
+    r->first = nmverts; r->nv = nv; r->idx = idx; r->ni = ni; r->tag = tag; r->handle = 0;
     *rec = nnrecs++;
     nmverts += nv;
     return mverts + r->first;
@@ -917,7 +929,17 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
                 const native_rec *nr = &nrecs[r];
                 draw_set_state(&pc.state);
                 draw_mesh(nr->m, nr->bound, mverts + nr->first, (int)nr->nv, nr->idx, (int)nr->ni);
+                native_land_captured(nr->tag, &pc.state);
                 if (pc.list < 3) stat_strips[pc.list == 2 ? 1 : pc.list]++;
+            }
+            p += 32;
+            continue;
+        }
+        if (type == 6 && (TRD32(p) & 0xFFu) == 2) {        /* a persistent model (native_land.c): opaque lists only */
+            uint32_t r = TRD32(p + 4);
+            if (pc.list == want_list && !pc.modvol && !pc.sprite && !sorted && r < nnrecs) {
+                if (draw_model(nrecs[r].handle, nrecs[r].m)) { if (pc.list < 3) stat_strips[pc.list == 2 ? 1 : pc.list]++; }
+                else stat_model_fail++;
             }
             p += 32;
             continue;
@@ -1118,6 +1140,7 @@ void kamui_report(void) {
     if (!sh4_fsca_authentic) sa1_log("fsca: NOT the console's table (host libm): this run is not authentic");
     hle_frame_skip_report();
     native_land_report();
+    if (stat_model_fail) sa1_log("render: %u persistent model draws refused by the backend (not drawn)", stat_model_fail);
     sa1_log("render: %u frames presented; last frame %u draw calls, %u triangles, polygons op %u tr %u pt %u; "
             "per frame on average: polygons op %u tr %u pt %u, strips op %u tr %u",
             frame_rendered_count, last_calls, last_tris, last_polys[0], last_polys[1], last_polys[2],

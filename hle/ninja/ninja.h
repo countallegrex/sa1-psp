@@ -43,9 +43,13 @@ int kamui_ptr_trace(void);            /* SA1_KAMUI_DUMP: this frame is being tra
 draw_vertex *kamui_direct_strip(uint32_t n, uint32_t *first);
 /* A native mesh for this frame (native_land.c): fill the returned vertices;
  * *rec goes into a type-6 marker of kind 1 (word 0 0xC0000001, word 1 rec). */
-draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const float bound[4], const uint16_t *idx, uint32_t ni, uint32_t *rec);
+draw_mesh_vertex *kamui_native_mesh(uint32_t nv, const float m[16], const float bound[4], const uint16_t *idx, uint32_t ni, uint32_t tag, uint32_t *rec);
+/* A persistent model for this frame: *rec goes into a type-6 marker of kind 2 (0xC0000002, rec). */
+int kamui_native_model(uint32_t handle, const float m[16], uint32_t *rec);
 /* native_land.c (docs/native-renderer.md) */
 extern int hle_renderer_native, hle_renderer_cli, hle_renderer_force, native_land_window, native_land_noland;
+extern int hle_land_cull, hle_land_cull_cli;   /* land_cull = on (default) | off */
+extern int native_land_all_sets;   /* the decided model draws nothing: every set, whatever its material */
 int native_land_decide(sh4_ctx *c, uint32_t model);   /* the transform's wrapper: 1 = natively */
 int native_land_model_ok(uint32_t model);                /* the decided model */
 int native_land_skip_light(uint32_t model);
@@ -53,6 +57,8 @@ void native_land_lit(sh4_ctx *c, uint32_t model);
 int native_land_set(sh4_ctx *c, uint32_t model, uint32_t set, uint32_t ta, uint32_t *ta_out);
 void native_land_init(void);
 void native_land_report(void);
+struct draw_state;
+void native_land_captured(uint32_t tag, const struct draw_state *s);   /* kamui: the state a kind-1 set drew with */
 void ta_direct_8c037990(sh4_ctx *c);
 void ta_direct_8c037ccc(sh4_ctx *c);     /* ta_direct_clip.c: the near-plane writer and its clipper */
 void ta_xform_8c037294(sh4_ctx *c);      /* ta_xform.c: the model renderer's vertex transform */

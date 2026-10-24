@@ -82,6 +82,7 @@ static int cull_flip;                         /* --cull-flip (main_psp.c): the o
 static struct { uint32_t list_high, pool_high, pool_full, dropped, offscreen, mirrors, mirror_fail, downscaled, frames;
                 uint32_t flush_state, flush_proj, flush_offset, last_strips, last_draws, last_states;
                 uint32_t mesh_ge, mesh_cpu;   /* draw_mesh_accepts: yes, no */
+                uint32_t mesh_no[4];          /* why not: other, near plane, guard band, depth split */
                 float zmin_frame, zmin_win, zmin_last; uint32_t znear_verts[4];   /* nearest 3D z; vertices with z < 2, 4, 8, 16 */
                 uint64_t gpu_wait_us, swap_wait_us, replay_us, frame_us_sum, frame_us_max, last_end; } gs;
 /* The largest strip w folded into gs.zmin_frame since it was last reset: a
@@ -202,6 +203,7 @@ typedef struct {
 } gtex;
 static gtex texs[TEX_MAX];
 static uint32_t bound_tex;        /* slot whose image is in the GE, 0 = none */
+static uint32_t tex_epoch;        /* bumped whenever a texture's memory changes: the models' lists rebuild */
 static uint32_t free_later[TEX_MAX];
 static unsigned nfree_later;
 
@@ -378,7 +380,7 @@ static void pool_moved(int owner, uint8_t *addr) {
     ge_wait();
     texs[owner].mem = addr;
     sceKernelDcacheWritebackRange(addr, texs[owner].total);
-    bound_tex = 0; tex_flush_pending = 1;
+    bound_tex = 0; tex_flush_pending = 1; tex_epoch++;
 }
 static void texture_release(uint32_t h);
 static void pool_evict(int owner) {
@@ -386,7 +388,7 @@ static void pool_evict(int owner) {
     gtex *t = &texs[owner];
     if (t->parent && texs[t->parent].mirror[t->pk] == (uint32_t)owner) texs[t->parent].mirror[t->pk] = 0;
     texture_release((uint32_t)owner);
-    tex_flush_pending = 1;
+    tex_flush_pending = 1; tex_epoch++;
 }
 /* The top level goes; the rest slide to the block's start (the GE samples
  * by 0..1 coordinates, so the texture only gets blurrier). */
@@ -494,6 +496,7 @@ static int texture_build(int slot, int w, int h, int fmt, const uint8_t *pixels,
     t->clut = clut; t->own_clut = own_clut;
     if (clut) sceKernelDcacheWritebackRange(clut, fmt == DRAW_FMT_T4 ? 32 : 512);
     t->bytes = total + (own_clut ? (fmt == DRAW_FMT_T4 ? 32u : 512u) : 0u);
+    tex_epoch++;                    /* a new mirror variant changes what a model's list binds */
     return 0;
 }
 
@@ -546,6 +549,7 @@ static void texture_release(uint32_t h) {
     tex_mem_free(t);
     if (bound_tex == h) bound_tex = 0;
     memset(t, 0, sizeof *t);
+    tex_epoch++;
 }
 
 void draw_texture_destroy(uint32_t handle) {
@@ -679,9 +683,11 @@ static int ge_swap_thread(SceSize args, void *argp) {
 }
 /* What waits for the GE to finish a frame: the textures destroyed while it
  * might still read them. */
+static void model_retire(void);
 static void ge_retire(void) {
     for (unsigned i = 0; i < nfree_later; i++) texture_release(free_later[i]);
     nfree_later = 0;
+    model_retire();
 }
 static void ge_wait(void) {
     if (!ge_inflight) return;
@@ -888,9 +894,12 @@ void draw_end_frame(void) {
     swap_vcount = sceDisplayGetVcount();
 }
 
+static void model_report(void);
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
 void draw_gu_report(void) {
-    if (gs.mesh_ge || gs.mesh_cpu) sa1_log("draw: meshes accepted for the GE %u, left to the TA path %u", gs.mesh_ge, gs.mesh_cpu);
+    model_report();
+    if (gs.mesh_ge || gs.mesh_cpu) sa1_log("draw: meshes accepted for the GE %u, left to the TA path %u (other %u, near plane %u, guard band %u, depth split %u)",
+                                           gs.mesh_ge, gs.mesh_cpu, gs.mesh_no[0], gs.mesh_no[1], gs.mesh_no[2], gs.mesh_no[3]);
     if (tex_pool_on) pool_log("report");
     sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, list replay %.2f ms/frame, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB, vertices %u KB (%u strips over); "
             "%u strips dropped (list full), %u clipped to the GE's guard band",
@@ -1176,6 +1185,8 @@ static inline void ge_draw(int prim, int vtype, int count, const void *v) {
     }
 }
 
+#define PRIM_MODEL 0xFF                 /* gu_item.prim of a draw_model item: n is the model */
+static void model_call(uint32_t h);
 /* Draws what the frame recorded: the far pass, a depth clear, the near pass. */
 static void replay(void) {
     batch_flush();
@@ -1193,6 +1204,14 @@ static void replay(void) {
         int st = -1, pj = -1, mt = -1;
         for (int i = 0; i < nitems[pass]; i++) {
             gu_item *it = &items[pass][i];
+            if (it->prim == PRIM_MODEL) {     /* a persistent model: its matrix, then its own list */
+                if (it->proj != pj) { set_proj(pass, it->proj); pj = it->proj; }
+                if (it->mat != mt) { sceGuSetMatrix(GU_MODEL, &mesh_mats[it->mat]); mt = it->mat; }
+                model_call(it->n);
+                st = -1;                      /* the list set its own states */
+                stats.draw_calls++;
+                continue;
+            }
             const draw_state *s = &rstates[it->state];
             if (it->state != st) { apply_state(s); st = it->state; }
             if (it->proj != pj) { set_proj(pass, it->proj); pj = it->proj; }
@@ -1772,29 +1791,36 @@ int draw_mesh_supported(void) { return 1; }
 /* The pass a mesh with this matrix and bounding sphere draws in, or -1 when
  * the GE cannot take it whole: the sphere through the rows of m must lie in
  * front of the near plane, inside the guard band and within one pass. */
+static int mesh_geo(const float *m, const float *bound);
 static int mesh_pass(const float *m, const float *bound) {
-    if (cur.layer != DRAW_LAYER_3D || nmesh_mats >= MESH_MAT_MAX) return -1;
+    if (cur.layer != DRAW_LAYER_3D || nmesh_mats >= MESH_MAT_MAX) return DRAW_MESH_NO_OTHER;
+    return mesh_geo(m, bound);
+}
+
+static int mesh_geo(const float *m, const float *bound) {
     float mn[4], mx[4];
     for (int r = 0; r < 4; r++) {
         float b = m[r] * bound[0] + m[4 + r] * bound[1] + m[8 + r] * bound[2] + m[12 + r];
         float e = bound[3] * sqrtf(m[r] * m[r] + m[4 + r] * m[4 + r] + m[8 + r] * m[8 + r]);
         mn[r] = b - e; mx[r] = b + e;
     }
-    if (mn[3] < depth_zn) return -1;
+    if (mn[3] < depth_zn) return DRAW_MESH_NO_NEAR;
     float xs[4] = { mn[0] / mn[3], mn[0] / mx[3], mx[0] / mn[3], mx[0] / mx[3] };
     float ys[4] = { mn[1] / mn[3], mn[1] / mx[3], mx[1] / mn[3], mx[1] / mx[3] };
     float x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
     for (int k = 1; k < 4; k++) { x0 = xs[k] < x0 ? xs[k] : x0; x1 = xs[k] > x1 ? xs[k] : x1; y0 = ys[k] < y0 ? ys[k] : y0; y1 = ys[k] > y1 ? ys[k] : y1; }
-    if (!(x0 > GUARD_X0 && x1 < GUARD_X1 && y0 > GUARD_Y0 && y1 < GUARD_Y1)) return -1;
+    if (!(x0 > GUARD_X0 && x1 < GUARD_X1 && y0 > GUARD_Y0 && y1 < GUARD_Y1)) return DRAW_MESH_NO_GUARD;
     if (!depth_split) return PASS_NEAR;
     if (mn[3] >= depth_split) return PASS_FAR;
     if (mx[3] <= depth_split) return PASS_NEAR;
-    return -1;
+    return DRAW_MESH_NO_SPLIT;
 }
 
+int draw_mesh_test(const float m[16], const float bound[4]) { return headless ? DRAW_MESH_NO_OTHER : mesh_geo(m, bound); }
+
 int draw_mesh_accepts(const float m[16], const float bound[4]) {
-    int ok = !headless && mesh_pass(m, bound) >= 0;
-    if (ok) gs.mesh_ge++; else gs.mesh_cpu++;
+    int p = headless ? DRAW_MESH_NO_OTHER : mesh_geo(m, bound), ok = p >= 0;
+    if (ok) gs.mesh_ge++; else { gs.mesh_cpu++; gs.mesh_no[-p - 1]++; }
     return ok;
 }
 
@@ -1840,4 +1866,183 @@ void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *
     it->n = (uint16_t)ni; it->on = go ? (uint16_t)ni : 0;
     it->v = gv; it->ov = go; it->ix = gi; it->mat = (int16_t)nmesh_mats++;
     stats.draw_calls++; stats.triangles += (uint32_t)(ni / 3);
+}
+
+/* ---- persistent models (draw.h draw_model; docs/native-renderer.md s.6) -----
+ * draw_model_create converts a model's vertices once into the GE layout (per
+ * mesh set, by that set's state: conv_mode's rules) in memory of its own,
+ * written back to RAM by the frame's sceKernelDcacheWritebackAll.  The first
+ * replay that draws it builds a call list in the model's own buffer
+ * (sceGuStart(GU_CALL): every set's state, texture bind and one indexed draw,
+ * the offset-colour draw where a set has one); every draw after that is the
+ * model matrix and a CALL of that list.  The list holds texture addresses: a
+ * change to any texture's memory (tex_epoch) rebuilds it at its next draw,
+ * and its textures are touched in the pool every frame it is drawn. */
+#define GMODEL_MAX 1024
+#define GMODEL_LIST_PER_SET 768u
+typedef struct { draw_state st; uint32_t vfirst, vcount, ifirst, icount; int off; } gmset;
+typedef struct {
+    gmset *sets; int nsets;
+    gu_vtx *v; gu_ovtx *ov; uint16_t *ix;     /* one allocation: mem */
+    void *mem;
+    uint32_t *list; uint32_t list_cap, list_epoch; int list_ok;
+    float bound[4];
+    int dying;
+} gmodel;
+static gmodel gmodels[GMODEL_MAX];
+static uint32_t gmodel_free_later[GMODEL_MAX], ngmodel_free_later;
+static struct { uint32_t created, draws, lists, list_max, gone; } gms;
+
+static void model_release(uint32_t h) {
+    gmodel *g = &gmodels[h];
+    free(g->mem); free(g->list); free(g->sets);
+    memset(g, 0, sizeof *g);
+}
+
+uint32_t draw_model_create(const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni,
+                           const draw_model_set *sets, int nsets, const float bound[4]) {
+    if (headless || nv <= 0 || ni < 3 || nsets <= 0 || ni > 65535 * 4) return 0;
+    uint32_t h = 1;
+    while (h < GMODEL_MAX && (gmodels[h].sets || gmodels[h].dying)) h++;
+    if (h == GMODEL_MAX) return 0;
+    gmodel *g = &gmodels[h];
+    int any_off = 0;
+    for (int s = 0; s < nsets; s++) {
+        if (!sets[s].state.texture) continue;
+        for (uint32_t i = 0; i < sets[s].vcount && !any_off; i++) if (v[sets[s].vfirst + i].ocolor & 0x00FFFFFFu) any_off = 1;
+    }
+    uint32_t vb = ((uint32_t)nv * sizeof(gu_vtx) + 63u) & ~63u, ob = any_off ? (((uint32_t)nv * sizeof(gu_ovtx) + 63u) & ~63u) : 0u;
+    uint32_t ib = ((uint32_t)ni * 2u + 63u) & ~63u;
+    g->mem = memalign(64, vb + ob + ib);
+    g->sets = calloc((size_t)nsets, sizeof *g->sets);
+    g->list_cap = GMODEL_LIST_PER_SET * (uint32_t)nsets + 64u;
+    g->list = memalign(64, g->list_cap);
+    if (!g->mem || !g->sets || !g->list) { model_release(h); return 0; }
+    sceKernelDcacheWritebackInvalidateRange(g->list, g->list_cap);   /* written through the uncached alias only */
+    g->v = (gu_vtx *)g->mem;
+    g->ov = any_off ? (gu_ovtx *)(void *)((uint8_t *)g->mem + vb) : NULL;
+    g->ix = (uint16_t *)(void *)((uint8_t *)g->mem + vb + ob);
+    memcpy(g->ix, idx, (size_t)ni * 2);
+    for (int s = 0; s < nsets; s++) {
+        const draw_model_set *ms = &sets[s];
+        gmset *gs_ = &g->sets[s];
+        const draw_state *st = &ms->state;
+        gs_->st = *st; gs_->vfirst = ms->vfirst; gs_->vcount = ms->vcount; gs_->ifirst = ms->ifirst; gs_->icount = ms->icount;
+        int alpha = st->use_alpha && !(st->texture && st->shade == DRAW_SHADE_DECAL && st->ignore_tex_alpha);
+        int add = !st->texture;
+        uint32_t aor = alpha ? 0u : 0xFF000000u;
+        int scale = st->use_alpha && st->blend_dst == DRAW_BLEND_INV_SRC_ALPHA;
+        for (uint32_t i = 0; i < ms->vcount; i++) {
+            const draw_mesh_vertex *p = &v[ms->vfirst + i];
+            gu_vtx *o = &g->v[ms->vfirst + i];
+            uint32_t t = p->color | aor;
+            if (add) t = (t & 0xFF000000u) | sat_add(p->color, p->ocolor);
+            o->u = p->u; o->v = p->v; o->color = argb_abgr(t);
+            o->x = p->x; o->y = p->y; o->z = p->z;
+            if (st->texture && (p->ocolor & 0x00FFFFFFu)) gs_->off = 1;
+            if (g->ov) {
+                uint32_t oc = st->texture ? p->ocolor : 0;
+                unsigned r = (oc >> 16) & 255, gg = (oc >> 8) & 255, b = oc & 255;
+                if (scale) { unsigned a = (p->color >> 24) & 255; r = mul255(r, a); gg = mul255(gg, a); b = mul255(b, a); }
+                gu_ovtx *q = &g->ov[ms->vfirst + i];
+                q->color = 0xFF000000u | b << 16 | gg << 8 | r;
+                q->x = p->x; q->y = p->y; q->z = p->z;
+            }
+        }
+    }
+    g->nsets = nsets;
+    memcpy(g->bound, bound, sizeof g->bound);
+    gms.created++;
+    return h;
+}
+
+void draw_model_destroy(uint32_t h) {
+    if (h == 0 || h >= GMODEL_MAX || !gmodels[h].sets || gmodels[h].dying) return;
+    /* the GE may still call its list: this frame's, or the last one still running */
+    if ((list_open || ge_inflight) && ngmodel_free_later < GMODEL_MAX) { gmodel_free_later[ngmodel_free_later++] = h; gmodels[h].dying = 1; return; }
+    ge_wait();
+    model_release(h);
+}
+
+/* From ge_retire's callers: the models whose list the GE no longer reads. */
+static void model_retire(void) {
+    for (uint32_t i = 0; i < ngmodel_free_later; i++) model_release(gmodel_free_later[i]);
+    ngmodel_free_later = 0;
+}
+
+int draw_model(uint32_t h, const float m[16]) {
+    if (headless || !list_open || h == 0 || h >= GMODEL_MAX || !gmodels[h].sets || gmodels[h].dying || list_full()) return 0;
+    gmodel *g = &gmodels[h];
+    int pass = mesh_geo(m, g->bound);
+    if (pass < 0 || nmesh_mats >= MESH_MAT_MAX) return 0;
+    if (nitems[pass] == ITEM_MAX) { gs.dropped++; return 0; }
+    batch_flush();
+    ScePspFMatrix4 *mm = &mesh_mats[nmesh_mats];
+    mm->x.x = m[0];  mm->x.y = m[1];  mm->x.z = -m[3];  mm->x.w = 0.0f;
+    mm->y.x = m[4];  mm->y.y = m[5];  mm->y.z = -m[7];  mm->y.w = 0.0f;
+    mm->z.x = m[8];  mm->z.y = m[9];  mm->z.z = -m[11]; mm->z.w = 0.0f;
+    mm->w.x = m[12]; mm->w.y = m[13]; mm->w.z = -m[15]; mm->w.w = 1.0f;
+    gu_item *it = &items[pass][nitems[pass]++];
+    it->state = 0; it->proj = PROJ_3D; it->prim = PRIM_MODEL;
+    it->n = (uint16_t)h; it->on = 0;
+    it->v = it->ov = NULL; it->ix = NULL; it->mat = (int16_t)nmesh_mats++;
+    for (int s = 0; s < g->nsets; s++) {      /* the pool's LRU: these textures are in use */
+        uint32_t t = g->sets[s].st.texture;
+        if (t && t < TEX_MAX && texs[t].pblk) texpool_touch(texs[t].pblk - 1);
+    }
+    gms.draws++;
+    return 1;
+}
+
+/* The model's call list: built inside the open GU_DIRECT list (replay). */
+static void model_build_list(gmodel *g) {
+    sceGuStart(GU_CALL, g->list);
+    /* pspsdk keeps the depth range per context and sceGuDepthOffset re-sends
+     * it from there: the call context needs draw_init's range, or every
+     * set's depth offset would send a range of 0..0 */
+    sceGuDepthRange(65535, 0);
+    for (int s = 0; s < g->nsets; s++) {
+        const gmset *ms = &g->sets[s];
+        bound_tex = 0; tex_su = tex_sv = -1.0f;   /* every set binds in full: the list runs after any state */
+        apply_state(&ms->st);
+        sceGuDrawArray(GU_TRIANGLES, VTX_FMT | GU_INDEX_16BIT, (int)ms->icount, g->ix + ms->ifirst, g->v + ms->vfirst);
+        if (ms->off && g->ov) {
+            sceGuDisable(GU_TEXTURE_2D);
+            sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
+            sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
+            sceGuDisable(GU_ALPHA_TEST);
+            sceGuDrawArray(GU_TRIANGLES, OVTX_FMT | GU_INDEX_16BIT, (int)ms->icount, g->ix + ms->ifirst, g->ov + ms->vfirst);
+            apply_blend_depth(&ms->st);
+        }
+    }
+    uint32_t used = (uint32_t)sceGuFinish();
+    if (used > g->list_cap) {               /* past the end already: stop before more harm */
+        sa1_log("draw: a model's list took %u of %u bytes", used, g->list_cap);
+        g->list_ok = -1;                    /* never called; the bound per set (GMODEL_LIST_PER_SET) is far above need */
+        return;
+    }
+    if (used > gms.list_max) gms.list_max = used;
+    g->list_epoch = tex_epoch; g->list_ok = 1;
+    gms.lists++;
+    bound_tex = 0; tex_su = tex_sv = -1.0f;
+}
+
+static void model_call(uint32_t h) {
+    gmodel *g = &gmodels[h];
+    if (!g->sets) return;
+    if (tex_flush_pending) { sceGuTexFlush(); tex_flush_pending = 0; }
+    if (g->list_ok >= 0 && (!g->list_ok || g->list_epoch != tex_epoch)) model_build_list(g);
+    if (g->list_ok <= 0) return;
+    unsigned int *c = gu_list->current;
+    uint32_t a = (uint32_t)(uintptr_t)g->list;
+    c[0] = (0x10u << 24) | ((a >> 8) & 0xF0000u);     /* BASE */
+    c[1] = (0x0Au << 24) | (a & 0xFFFFFFu);           /* CALL */
+    gu_list->current = c + 2;
+    bound_tex = 0; tex_su = tex_sv = -1.0f;            /* what the list left bound is not tracked */
+}
+
+static void model_report(void) {
+    if (gms.created || gms.draws)
+        sa1_log("draw: models %u created, %u draws, %u lists built (largest %u bytes)", gms.created, gms.draws, gms.lists, gms.list_max);
+    gms.draws = gms.lists = 0;
 }

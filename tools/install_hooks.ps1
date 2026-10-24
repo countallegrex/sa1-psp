@@ -20,7 +20,7 @@ fi
 top=$(git rev-parse --show-toplevel)
 while read -r lref lsha rref rsha; do
   case "$lsha" in *[!0]*) ;; *) continue ;; esac
-  python "$top/tools/ci_local.py" --commit "$lsha" || {
+  python "$top/tools/ci_local.py" --commit "$lsha" < /dev/null || {
     echo "pre-push: local CI FAIL for $lsha; push refused" >&2
     exit 1
   }

@@ -145,6 +145,8 @@ static int mesh_rec = -1;
 void fn_8c0376d0(sh4_ctx *c) {
     HLE_ENTER(0x8c0376d0u, "model mesh-set loop fn_8c0376d0");
     if (hle_draw_skip) return;   /* frame skip */
+    /* native_land.c: a land model wholly out of view draws nothing, as on a skipped frame */
+    if (native_land_all_sets && native_land_model_ok(c->r[4])) return;
     if (mesh_rec < 0) mesh_rec = getenv("SA1_MESH_REC") != NULL;
     if (hle_ta_direct && !mesh_rec && !kamui_ptr_trace()) ta_mesh_8c0376d0(c);
     else fn_8c0376d0_orig(c);

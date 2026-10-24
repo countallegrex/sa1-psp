@@ -51,7 +51,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
-extern int hle_renderer_cli, hle_renderer_force;   /* hle/ninja/native_land.c */
+extern int hle_renderer_cli, hle_renderer_force, hle_land_cull_cli;   /* hle/ninja/native_land.c */
 #include "../draw.h"
 #include "../desktop/input_tape.h"
 #include "../desktop/savestate.h"
@@ -533,11 +533,13 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--cull-flip")) draw_gu_set_cull_flip(1);
         else if (!strcmp(av[i], "--ta-direct")) hle_ta_direct = 1;
         else if (!strcmp(av[i], "--no-ta-direct")) hle_ta_direct = 0;
+        else if (!strcmp(av[i], "--land-cull") && i + 1 < args_c) hle_land_cull_cli = strcmp(av[++i], "off") != 0;   /* hle/ninja/native_land.c */
         else if (!strcmp(av[i], "--renderer") && i + 1 < args_c) {   /* hle/ninja/native_land.c */
             const char *v = av[++i];
             if (!strncmp(v, "force:", 6)) { hle_renderer_force = 1; v += 6; }
             if (!strcmp(v, "native")) hle_renderer_cli = 1; else if (!strcmp(v, "ta")) hle_renderer_cli = 0;
             else if (!strcmp(v, "noland")) hle_renderer_cli = 2;   /* measurement: the land not drawn */
+            else if (!strcmp(v, "native-sets")) hle_renderer_cli = 4;   /* native without persistent models (a check) */
             else { sa1_log("--renderer %s: not ta, native or force:native; ignored", v); }
         }
         else if (!strcmp(av[i], "--frame-skip") && i + 1 < args_c) {   /* hle/game/frame_skip.c: auto|off|N|force:... */

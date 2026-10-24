@@ -63,7 +63,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
-extern int hle_renderer_cli, hle_renderer_force;   /* hle/ninja/native_land.c */
+extern int hle_renderer_cli, hle_renderer_force, hle_land_cull_cli;   /* hle/ninja/native_land.c */
 #include "../draw.h"
 #include "input_tape.h"
 #include "platform_desktop.h"
@@ -489,11 +489,13 @@ int main(int argc, char **argv) {
             if (v < -1) { fprintf(stderr, "--voice: en, ja or game\n"); return 2; }
             snd_voice_lang_cli = v;
         }
+        else if (!strcmp(argv[i], "--land-cull") && i + 1 < argc) hle_land_cull_cli = strcmp(argv[++i], "off") != 0;   /* hle/ninja/native_land.c */
         else if (!strcmp(argv[i], "--renderer") && i + 1 < argc) {   /* hle/ninja/native_land.c */
             const char *v = argv[++i];
             if (!strncmp(v, "force:", 6)) { hle_renderer_force = 1; v += 6; }
             if (!strcmp(v, "native")) hle_renderer_cli = 1; else if (!strcmp(v, "ta")) hle_renderer_cli = 0;
             else if (!strcmp(v, "noland")) hle_renderer_cli = 2;   /* measurement: the land not drawn */
+            else if (!strcmp(v, "native-sets")) hle_renderer_cli = 4;   /* native without persistent models (a check) */
             else { fprintf(stderr, "--renderer: ta, native or force:native\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--frame-skip") && i + 1 < argc) {   /* hle/game/frame_skip.c: auto|off|N|force:... */

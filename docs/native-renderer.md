@@ -6,7 +6,10 @@ vertical slice, Station Square's static scenery (the land table), its
 desktop check, and the go/no-go measured on the console.  Status: NO-GO
 (2026-10-24, section 5): the GE path drew correctly but was not cheaper
 than the TA path; the code stays behind `renderer = native` (off by
-default) and the big lever moves to the Media Engine.
+default) and the big lever moves to the Media Engine.  Iteration 3
+(section 6) found that half of the land the game draws is out of view: the
+view cull (`land_cull`, on by default) and persistent GE models
+(`renderer = native`) take Station Square from 50.2 to 37.6 ms.
 
 Prior art read for ideas only (no code taken): JGR Portable builds GE
 command packets per stage batch once and replays them with sceGuCallList,
@@ -168,3 +171,86 @@ evidence): persistent GE vertex buffers per model (no per-frame gather or
 conversion), prebuilt display lists replayed with one call, and splitting
 the land's large models at convert time so most qualify; even then the bar
 is 12.7 ms out of a 21.2 ms land cost.
+
+## 6. Iteration 3 (2026-10-24): view culling and persistent models
+
+A reason counter on the decision (`draw_mesh_test`; console, `--stage ss`,
+224 frames, 13,568 land model draws, 676k triangles) showed where
+iteration 2's rejections came from: **53 % of the land's model draws (50 %
+of its triangles) lie wholly outside the view**, behind the camera or past
+a screen edge.  The game's land cull (s.2) is a sphere around a point ahead
+of the camera, not a view test, so the TA path transformed, lit, clipped
+and threw away all of them every frame.  The rest: 26 % of the draws
+qualified for the GE whole (28 % of the triangles), near plane 15 %
+(16 %), guard band 5 % (6 %), depth split none; iteration 2's "other"
+rejections were an artefact (the backend's layer at decision time was the
+previous frame's last).  Splitting models at convert time would barely
+help: per model 80 % of draws are GE-or-out, with cells of 128 units 84 %,
+of 32 units 88 %; it would only move triangles from the TA path to a CPU
+clip path, so it was not built.
+
+What iteration 3 does (`hle/ninja/native_land.c`, `backend/psp/draw_gu.c`):
+
+- **View culling** (`land_cull = on`, the default, `--land-cull off`;
+  independent of the renderer, on in strict runs too): every model of the
+  current land table gets a sphere over its points when the table changes
+  (no converted data needed: it works in every level).  A model whose
+  sphere lies wholly outside one of the view's half-spaces (z >= 0, the
+  wide view's x range and 0..480 in y, with an 8-pixel margin) skips the
+  transform, the lighting and the mesh-set loop, exactly as a skipped frame
+  does; nothing it would have drawn is on screen.  Models with a
+  translucent material are never culled: their strips go to the
+  depth-sorted list, and without them five pixels of Sonic came out
+  slightly different on the console (the sort's order of the rest
+  changes).  With that rule the console pictures are the TA path's to the
+  byte (Station Square and Emerald Coast, frames 200 and 400).
+- **Persistent models** (`native`): a converted, opaque model the GE takes
+  whole is drawn once per set the iteration 2 way, which hands kamui's
+  decoded state of each set back to native_land; with every set's state
+  known, `draw_model_create` converts the vertices once (kept lighting
+  baked, the set's colour rules) into memory of their own.  From then on
+  the transform, the lighting and the strip writers are skipped and the
+  mesh-set loop puts one marker in the list; the backend sets one model
+  matrix and CALLs a display list it built at the model's first draw
+  (every set's state, texture bind and one indexed draw).  A change to any
+  texture's memory rebuilds the lists at their next draw; the model's
+  textures are touched in the pool every frame it is drawn.
+- The lighting is baked at the first draw from the game's own lighting
+  rather than in land_convert.py: the result is the same (the palette light
+  is fixed per land table), it needs no copy of the lighting code, and the
+  check mode (`SA1_NATIVE_CHECK=1`: persistent models drawn per set and
+  compared) found 0 differing states and 0 differing colours over 193k set
+  draws of sonic_to_ec1_start.
+
+One pspsdk trap: `sceGuDepthOffset` re-sends the depth range from the
+current context's stored planes, which a GU_CALL context never had; every
+list left a 0..0 range behind (4.7 % of pixels wrong) until the list starts
+with draw_init's `sceGuDepthRange`.
+
+Correctness: the four tapes pass with `force:cull` and `force:native`;
+guest RAM equals the TA path's outside draw scratch (the transformed-vertex
+buffer, the model renderer's gbr scratch, kamui's buffer descriptor and
+list pointers); console pictures: cull identical to ta, native 0.025-0.051
+% of pixels (iteration 2: 0.02-0.05 %).
+
+Console (PSP-3001, ABBA x3, frame skip off, mean of f300/f450, medians):
+
+| run | Station Square | Emerald Coast |
+|---|---|---|
+| `--land-cull off` (TA path) | 49.46 ms | 79.28 ms |
+| land_cull (default) | 42.14 ms (-7.32) | 80.19 ms (+0.91) |
+| land_cull + `renderer = native` | 40.43 ms (-9.03) | 80.41 ms (+1.13) |
+
+An earlier batch that culled translucent models too gave 39.14 / 37.56 ms
+in Station Square: the translucent rule costs about 3 ms.  Emerald Coast
+has little land out of view; what it pays is the decision per model (to be
+made cheaper).  GE busy time (no pipelining, the stall address withheld so
+the GE runs after the list is closed): 4.4 ms (TA) and 4.5 ms (native) per
+frame, far from the frame time.  Heap at exit, Station Square: 32.8 MB
+(TA), 32.6 (cull), 33.5 (native, largest free block 2.1 MB).  The game's
+own land cull and draw loop costs about 0.3 ms (profile), so hooking the
+land draw higher up buys nothing.  What is left of the land in Station
+Square (native 40.4 against 27.75 with no land): the models the GE refuses
+whole (near plane, guard band; about 12 a frame), the translucent and
+environment-mapped models (about 26 a frame, not converted), and the
+translucent ones no longer culled.

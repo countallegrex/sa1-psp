@@ -244,7 +244,7 @@ void ta_mesh_8c0376d0(sh4_ctx *c) {
         r0 = H32(lens, r9);
         HW32(G, 84, r0);
         uint32_t nta;
-        if (native && (native_land_noland || !(H32(G, 44) & 0x00500000u)) && native_land_set(c, model, (r2 - RD32(model, 12)) / 24u, r14, &nta)) {
+        if (native && (native_land_all_sets || !(H32(G, 44) & 0x00500000u)) && native_land_set(c, model, (r2 - RD32(model, 12)) / 24u, r14, &nta)) {
             r0 = nta;               /* the TA pointer a strip writer would hand back */
         } else if (r13 == 0) {
             if (r6 & 0x00200000u) {

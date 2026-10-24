@@ -124,7 +124,23 @@ void draw_line_strip(const draw_vertex *v, int n);
 typedef struct draw_mesh_vertex { float x, y, z, u, v; uint32_t color, ocolor; } draw_mesh_vertex;
 int draw_mesh_supported(void);
 int draw_mesh_accepts(const float m[16], const float bound[4]);
+/* The same test without counting: the pass (>= 0) or why not, DRAW_MESH_NO_*. */
+enum { DRAW_MESH_NO_OTHER = -1, DRAW_MESH_NO_NEAR = -2, DRAW_MESH_NO_GUARD = -3, DRAW_MESH_NO_SPLIT = -4,
+       DRAW_MESH_OUT = -5 /* wholly outside the view: nothing to draw */ };
+int draw_mesh_test(const float m[16], const float bound[4]);
 void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni);
+/* Persistent models (docs/native-renderer.md s.6): the backend takes a
+ * model's vertices once, per mesh set with that set's state (colours by the
+ * same rules as draw_mesh), and keeps them in its own memory with whatever
+ * it builds from them (on the PSP a display list called once per draw).
+ * draw_model draws one with matrix m as draw_mesh would, its sets' own
+ * states (the current state is not used and stays); 0 when it could not
+ * (the caller then draws it another way).  Handles are > 0. */
+typedef struct draw_model_set { draw_state state; uint32_t vfirst, vcount, ifirst, icount; } draw_model_set;
+uint32_t draw_model_create(const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni,
+                           const draw_model_set *sets, int nsets, const float bound[4]);
+void draw_model_destroy(uint32_t handle);
+int draw_model(uint32_t handle, const float m[16]);
 
 uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels, int clut_fmt, const void *clut);
 void draw_texture_destroy(uint32_t handle);

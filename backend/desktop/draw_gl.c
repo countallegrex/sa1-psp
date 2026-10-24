@@ -715,6 +715,7 @@ static void mesh_vec(const float *m, const draw_mesh_vertex *p, float *h) {
 
 int draw_mesh_supported(void) { return 1; }
 int draw_mesh_accepts(const float m[16], const float bound[4]) { (void)m; (void)bound; return 1; }   /* GL clips everything */
+int draw_mesh_test(const float m[16], const float bound[4]) { (void)m; (void)bound; return 0; }
 
 void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
     (void)bound;
@@ -766,6 +767,46 @@ void draw_mesh(const float m[16], const float bound[4], const draw_mesh_vertex *
 #else
     (void)m; (void)v; (void)nv; (void)idx;
 #endif
+}
+
+/* Persistent models: copies of what the caller gave, drawn set by set with
+ * draw_mesh (the desktop is the reference for pictures, not for speed). */
+typedef struct { draw_mesh_vertex *v; uint16_t *idx; draw_model_set *sets; int nv, ni, nsets; float bound[4]; } dmodel;
+#define DMODEL_MAX 4096
+static dmodel dmodels[DMODEL_MAX];
+
+uint32_t draw_model_create(const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni,
+                           const draw_model_set *sets, int nsets, const float bound[4]) {
+    for (uint32_t h = 1; h < DMODEL_MAX; h++) {
+        dmodel *d = &dmodels[h];
+        if (d->sets) continue;
+        d->v = malloc((size_t)nv * sizeof *v); d->idx = malloc((size_t)ni * 2); d->sets = malloc((size_t)nsets * sizeof *sets);
+        if (!d->v || !d->idx || !d->sets) { free(d->v); free(d->idx); free(d->sets); memset(d, 0, sizeof *d); return 0; }
+        memcpy(d->v, v, (size_t)nv * sizeof *v); memcpy(d->idx, idx, (size_t)ni * 2); memcpy(d->sets, sets, (size_t)nsets * sizeof *sets);
+        d->nv = nv; d->ni = ni; d->nsets = nsets;
+        memcpy(d->bound, bound, sizeof d->bound);
+        return h;
+    }
+    return 0;
+}
+
+void draw_model_destroy(uint32_t h) {
+    if (h == 0 || h >= DMODEL_MAX || !dmodels[h].sets) return;
+    free(dmodels[h].v); free(dmodels[h].idx); free(dmodels[h].sets);
+    memset(&dmodels[h], 0, sizeof dmodels[h]);
+}
+
+int draw_model(uint32_t h, const float m[16]) {
+    if (h == 0 || h >= DMODEL_MAX || !dmodels[h].sets) return 0;
+    const dmodel *d = &dmodels[h];
+    const draw_state keep = cur;
+    for (int s = 0; s < d->nsets; s++) {
+        const draw_model_set *ms = &d->sets[s];
+        draw_set_state(&ms->state);
+        draw_mesh(m, d->bound, d->v + ms->vfirst, (int)ms->vcount, d->idx + ms->ifirst, (int)ms->icount);
+    }
+    draw_set_state(&keep);
+    return 1;
 }
 
 void draw_line_strip(const draw_vertex *v, int n) {

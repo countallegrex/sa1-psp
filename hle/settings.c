@@ -10,6 +10,9 @@
  *                              take their length
  *   event_skip = on | off      on (default): START skips a story event
  *                              (hle/game/event_skip.c; never in strict runs)
+ *   land_cull = on | off       on (default): the land table's models wholly
+ *                              out of view are not drawn (the picture and the
+ *                              game are the same; hle/ninja/native_land.c)
  *   renderer = ta | native     native: the land table from converted meshes
  *                              with hardware transform (hle/ninja/native_land.c;
  *                              off by default, never in strict runs)
@@ -78,6 +81,9 @@ void hle_settings_load(void) {
             } else if (!strcmp(k, "renderer")) {
                 hle_renderer_native = !strcmp(v, "native") ? 1 : !strcmp(v, "noland") ? 2 : 0;
                 sa1_log("settings: renderer %s", hle_renderer_native == 1 ? "native" : hle_renderer_native == 2 ? "noland" : "ta");
+            } else if (!strcmp(k, "land_cull")) {
+                hle_land_cull = strcmp(v, "off") != 0;
+                sa1_log("settings: land_cull %s", hle_land_cull ? "on" : "off");
             } else if (!strcmp(k, "frame_skip")) {
                 int m = hle_parse_frame_skip(v, NULL);
                 if (m != -3) { hle_frame_skip = m; sa1_log("settings: frame_skip = %s", v); }

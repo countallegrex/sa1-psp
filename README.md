@@ -439,8 +439,8 @@ sa1-psp/                      this repo (public)
   files are not seen) and runs the jobs of `.github/workflows/build.yml` in
   parallel, Windows/clang jobs on the host and the ubuntu/PSP jobs in WSL,
   then writes `PASS|FAIL <commit>` to `private/ci-local/<commit>.txt`.
-  The pre-push hook (`tools/install_hooks.ps1`) runs it for every pushed
-  commit; `SA1_SKIP_CI=1` skips it, for emergencies only. The GitHub
+  The pre-push hook (`tools/install_hooks.ps1`) runs it for the tip of each
+  pushed ref; `SA1_SKIP_CI=1` skips it, for emergencies only. The GitHub
   workflow is manual-only (`workflow_dispatch`) until the repo is public.
   No CI job may ever need game data. Local Docker build:
   `docker build --output build-ci-psp .` (see `docs/m-1-toolchain.md`).
