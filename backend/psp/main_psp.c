@@ -532,6 +532,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--cull-flip")) draw_gu_set_cull_flip(1);
         else if (!strcmp(av[i], "--ta-direct")) hle_ta_direct = 1;
         else if (!strcmp(av[i], "--no-ta-direct")) hle_ta_direct = 0;
+        else if (!strcmp(av[i], "--frame-skip") && i + 1 < args_c) {   /* hle/game/frame_skip.c: auto|off|N|force:... */
+            int m = hle_parse_frame_skip(av[++i], &hle_frame_skip_force);
+            if (m == -3) sa1_log("--frame-skip %s: not auto, off, 2-60 or force:...; ignored", av[i]); else
+            hle_frame_skip_cli = m;
+        }
         else if (!strcmp(av[i], "--event-skip") && i + 1 < args_c) {   /* hle/game/event_skip.c */
             const char *v = av[++i];
             hle_event_skip_cli = !strcmp(v, "force") ? 2 : strcmp(v, "off") != 0;

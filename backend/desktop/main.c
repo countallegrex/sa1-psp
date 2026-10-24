@@ -488,6 +488,11 @@ int main(int argc, char **argv) {
             if (v < -1) { fprintf(stderr, "--voice: en, ja or game\n"); return 2; }
             snd_voice_lang_cli = v;
         }
+        else if (!strcmp(argv[i], "--frame-skip") && i + 1 < argc) {   /* hle/game/frame_skip.c: auto|off|N|force:... */
+            int m = hle_parse_frame_skip(argv[++i], &hle_frame_skip_force);
+            if (m == -3) { fprintf(stderr, "--frame-skip: auto, off, 2-60, or force:...\n"); return 2; }
+            hle_frame_skip_cli = m;
+        }
         else if (!strcmp(argv[i], "--event-skip") && i + 1 < argc) {   /* hle/game/event_skip.c */
             const char *v = argv[++i];
             hle_event_skip_cli = !strcmp(v, "force") ? 2 : strcmp(v, "off") != 0;

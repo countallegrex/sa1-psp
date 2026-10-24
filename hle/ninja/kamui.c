@@ -1028,6 +1028,7 @@ void sdk_8c642440(sh4_ctx *c) {
     HLE_ENTER(0x8c642440u, "kmRender");
     (void)c;
     if (!bufs[0].base) return;
+    if (hle_render_skip()) return;   /* frame skip: no picture this frame; kmFlip keeps the last one */
     if (ptr_trace())
         sa1_log("kamui: kmRender (frame %u) op 0x%08x tr 0x%08x pt 0x%08x", hle_frame_count(), kamui_buffer_ptr(0), kamui_buffer_ptr(1), kamui_buffer_ptr(2));
     render_lists();
@@ -1081,6 +1082,7 @@ static void mark_finish(void) {
 
 void kamui_report(void) {
     if (!sh4_fsca_authentic) sa1_log("fsca: NOT the console's table (host libm): this run is not authentic");
+    hle_frame_skip_report();
     sa1_log("render: %u frames presented; last frame %u draw calls, %u triangles, polygons op %u tr %u pt %u; "
             "per frame on average: polygons op %u tr %u pt %u, strips op %u tr %u",
             frame_rendered_count, last_calls, last_tris, last_polys[0], last_polys[1], last_polys[2],

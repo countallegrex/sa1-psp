@@ -118,5 +118,11 @@ extern int64_t hle_rtc_epoch;
 /* START skips a story event (hle/game/event_skip.c; never in strict runs). */
 extern int hle_event_skip, hle_event_skip_cli;
 void hle_event_skip_poll(sh4_ctx *c);
+/* Frame skip (hle/game/frame_skip.c): logic every frame, the picture when
+ * there is time; never in strict runs unless forced. */
+extern int hle_frame_skip, hle_frame_skip_cli, hle_frame_skip_force;
+int hle_render_skip(void);
+void hle_frame_skip_report(void);
+int hle_parse_frame_skip(const char *v, int *force);   /* settings.c: auto|off|N[, force:...]; -3 = bad */
 /* Runs a guest function from native code (callbacks): r4..r7 = a0..a3. */
 void hle_call_guest(sh4_ctx *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
