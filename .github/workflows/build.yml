@@ -1,8 +1,10 @@
 name: build
 
+# Manual only while the repo is private: the same jobs run locally with
+# tools/ci_local.py (and the pre-push hook).  Restore push/pull_request
+# when the repo goes public.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
