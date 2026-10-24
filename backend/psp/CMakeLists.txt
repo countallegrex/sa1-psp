@@ -68,7 +68,8 @@ target_compile_options(sa1_hle_psp PRIVATE -O2 -fno-strict-aliasing -ffp-contrac
 add_library(sa1_backend_psp OBJECT
   platform_psp.c coro_psp.c draw_gu.c crash_psp.c main_psp.c savestate_psp.c
   ${CMAKE_SOURCE_DIR}/backend/desktop/input_tape.c
-  ${CMAKE_SOURCE_DIR}/backend/desktop/sha256.c)
+  ${CMAKE_SOURCE_DIR}/backend/desktop/sha256.c
+  ${CMAKE_SOURCE_DIR}/backend/texpool.c)
 target_link_libraries(sa1_backend_psp PUBLIC sa1_hle_psp)
 target_compile_options(sa1_backend_psp PRIVATE -O2 -fno-strict-aliasing -Wall -g)
 

@@ -581,10 +581,14 @@ static void state_from_header(draw_state *s, uint32_t pcw, uint32_t isp, uint32_
         if (i == mark_ntex && mark_ntex < 512) mark_tex[mark_ntex++] = s->texture;
     }
     if ((pcw & 8) && !s->texture) {
-        static uint32_t logged[16], nlogged;
+        static uint32_t logged[16], nlogged, misses;
         int seen = 0;
         for (uint32_t i = 0; i < nlogged; i++) if (logged[i] == tcw) seen = 1;
         if (!seen && nlogged < 16) { logged[nlogged++] = tcw; sa1_log("kamui: textured polygon with unknown TCW 0x%08x (pcw 0x%08x list %d)", tcw, pcw, list); }
+        /* past the 16 logged TCWs (full by the first level): a count at each
+         * power of two, so a level drawing white still shows in the log */
+        if (++misses >= 64 && !(misses & (misses - 1)))
+            sa1_log("kamui: %u textured polygons without a texture so far (latest TCW 0x%08x list %d)", misses, tcw, list);
     }
     s->blend_src = (uint8_t)((tsp >> 29) & 7); s->blend_dst = (uint8_t)((tsp >> 26) & 7);
     if (list == 0) { s->blend_src = DRAW_BLEND_ONE; s->blend_dst = DRAW_BLEND_ZERO; }

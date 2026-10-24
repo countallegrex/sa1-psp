@@ -83,7 +83,8 @@ target_compile_definitions(sa1_hle PUBLIC _CRT_SECURE_NO_WARNINGS)
 target_compile_options(sa1_hle PRIVATE -fno-strict-aliasing -ffp-contract=off -Wall -g)
 
 # The desktop half of the platform interface plus the GL renderer.
-add_library(sa1_backend_desktop OBJECT platform_desktop.c coro_switch.c draw_gl.c audio_sdl.c backtrace_win.c)
+add_library(sa1_backend_desktop OBJECT platform_desktop.c coro_switch.c draw_gl.c audio_sdl.c backtrace_win.c
+  ${CMAKE_SOURCE_DIR}/backend/texpool.c)
 target_link_libraries(sa1_backend_desktop PUBLIC sa1_hle)
 target_compile_options(sa1_backend_desktop PRIVATE -Wall -g)
 if(SA1_HAVE_SDL)

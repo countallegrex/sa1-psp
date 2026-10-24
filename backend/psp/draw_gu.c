@@ -51,6 +51,7 @@
 #include <pspctrl.h>
 
 #include <malloc.h>
+#include "../texpool.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -191,6 +192,11 @@ typedef struct {
     uint32_t mirror[4];           /* variants by flip_u | flip_v << 1; 0 = not built */
     int hidden;                   /* a mirror variant (not a handle the HLE holds) */
     int dying;                    /* destroyed during a frame: freed after the GE is done */
+    int pblk;                     /* texpool block + 1; 0 = mem is from memalign */
+    uint32_t total;               /* bytes of mem */
+    uint32_t parent;              /* a mirror variant: the slot it mirrors, at mirror[pk] */
+    int pk;
+    uint32_t mfail;               /* mirror_epoch + 1 when a variant last found no room */
 } gtex;
 static gtex texs[TEX_MAX];
 static uint32_t bound_tex;        /* slot whose image is in the GE, 0 = none */
@@ -337,9 +343,101 @@ static void unswizzle(uint8_t *dst, const uint8_t *src, uint32_t rb, uint32_t ro
         }
 }
 
+/* Texture memory (backend/texpool.h): chunks of the heap only textures use,
+ * compacted and reclaimed between frames, so the heap's fragmentation can
+ * no longer leave a level's textures without room (Emerald Coast drew white
+ * after a few level changes).  --tex-pool off: memalign per texture, as
+ * before.  The pool keeps --tex-reserve KB of the heap free for the rest. */
+static int tex_pool_on = 1, tex_flush_pending;
+/* A mirror variant is built inside a frame, where the pool cannot reclaim:
+ * one that finds no room draws as a plain repeat for now, and the next
+ * frame's start makes room (texpool_make_room) and opens a new epoch in
+ * which it is tried again. */
+static uint32_t mirror_need, mirror_epoch, mirror_room_frame;
+static uint32_t tex_reserve = 2u << 20, tex_frame, tex_log_frame = 0xFFFFFFFFu;
+void draw_gu_set_tex_pool(int on, int reserve_kb) {
+    tex_pool_on = on;
+    if (reserve_kb >= 0) tex_reserve = (uint32_t)reserve_kb * 1024u;
+}
+
+/* sbrk does not refuse: a block that ends past user RAM (0x0C000000, as
+ * main_psp.c heap_largest_free) is a refusal too. */
+static void *pool_chunk_alloc(void) {
+    uint8_t *probe = malloc(TEXPOOL_CHUNK + tex_reserve);
+    int ok = probe && (uintptr_t)probe + TEXPOOL_CHUNK + tex_reserve <= 0x0C000000u;
+    free(probe);
+    if (!ok) return NULL;
+    uint8_t *c = memalign(64, TEXPOOL_CHUNK);
+    if (c && (uintptr_t)c + TEXPOOL_CHUNK > 0x0C000000u) { free(c); return NULL; }
+    return c;
+}
+static void pool_chunk_free(void *c) { free(c); }
+static void pool_moved(int owner, uint8_t *addr) {
+    ge_wait();
+    texs[owner].mem = addr;
+    sceKernelDcacheWritebackRange(addr, texs[owner].total);
+    bound_tex = 0; tex_flush_pending = 1;
+}
+static void texture_release(uint32_t h);
+static void pool_evict(int owner) {
+    ge_wait();
+    gtex *t = &texs[owner];
+    if (t->parent && texs[t->parent].mirror[t->pk] == (uint32_t)owner) texs[t->parent].mirror[t->pk] = 0;
+    texture_release((uint32_t)owner);
+    tex_flush_pending = 1;
+}
+/* The top level goes; the rest slide to the block's start (the GE samples
+ * by 0..1 coordinates, so the texture only gets blurrier). */
+static uint32_t pool_drop_top(int owner) {
+    gtex *t = &texs[owner];
+    if (t->levels < 2 || t->dying) return 0;
+    ge_wait();
+    uint32_t o1 = t->off[1];
+    memmove(t->mem, t->mem + o1, t->total - o1);
+    for (int l = 0; l + 1 < t->levels; l++) { t->off[l] = t->off[l + 1] - o1; t->tbw[l] = t->tbw[l + 1]; }
+    t->levels--; t->w >>= 1; t->h >>= 1;
+    t->total -= o1; t->bytes -= o1; stats.texture_bytes -= o1;
+    sceKernelDcacheWritebackRange(t->mem, t->total);
+    bound_tex = 0; tex_flush_pending = 1;
+    return t->total;
+}
+static const texpool_ops pool_ops = { pool_chunk_alloc, pool_chunk_free, pool_moved, pool_evict, pool_drop_top };
+
+static void pool_log(const char *why) {
+    const texpool_stats *p = texpool_get_stats();
+    struct mallinfo mi = mallinfo();
+    sa1_log("texpool (%s): %u chunks (peak %u, %u refused), %u KB used (peak %u KB); %u compactions (%u KB moved), %u evictions, %u top levels dropped, %u failures; heap free %u KB",
+            why, p->chunks, p->peak_chunks, p->refused_chunks, p->used / 1024u, p->peak_used / 1024u, p->compactions, p->moved_bytes / 1024u,
+            p->evictions, p->drops, p->failures, (unsigned)mi.fordblks / 1024u);
+}
+
+static uint8_t *tex_mem_alloc(int slot, uint32_t total, int cache) {
+    gtex *t = &texs[slot];
+    t->total = total;
+    if (tex_pool_on && total <= TEXPOOL_CHUNK) {
+        const texpool_stats *p = texpool_get_stats();
+        uint32_t ev = p->compactions + p->evictions + p->drops + p->failures;
+        uint8_t *a = NULL;
+        int b = texpool_alloc(total, slot, cache, !list_open, &a);
+        if (ev != p->compactions + p->evictions + p->drops + p->failures && tex_log_frame != tex_frame) {
+            tex_log_frame = tex_frame;
+            pool_log(b >= 0 ? "reclaimed" : "full");
+        }
+        if (b >= 0) { t->pblk = b + 1; return a; }
+        return NULL;
+    }
+    return memalign(16, total);
+}
+static void tex_mem_free(gtex *t) {
+    if (t->pblk) texpool_free(t->pblk - 1);
+    else free(t->mem);
+    t->pblk = 0; t->mem = NULL;
+}
+
 /* Builds slot `slot` from linear level-0 pixels (rows of w*bits/8 bytes).
- * The CLUT pointer is taken over when own_clut. */
-static int texture_build(int slot, int w, int h, int fmt, const uint8_t *pixels, int clut_fmt, uint16_t *clut, int own_clut) {
+ * The CLUT pointer is taken over when own_clut.  cache: a copy the pool may
+ * evict (a mirror variant). */
+static int texture_build(int slot, int w, int h, int fmt, const uint8_t *pixels, int clut_fmt, uint16_t *clut, int own_clut, int cache) {
     int bits = fmt_bits(fmt);
     gtex *t = &texs[slot];
     memset(t, 0, sizeof *t);
@@ -364,14 +462,18 @@ static int texture_build(int slot, int w, int h, int fmt, const uint8_t *pixels,
         t->tbw[l] = (int)(rb[l] * 8u / (uint32_t)bits);
         total += rb[l] * rows[l];
     }
-    t->mem = memalign(16, total);
+    t->mem = tex_mem_alloc(slot, total, cache);
     uint8_t *pad = t->mem ? malloc(rb[0] * rows[0]) : NULL;
     if (!t->mem || !pad) {
-        free(t->mem); free(pad);
+        if (t->mem) tex_mem_free(t);
+        free(pad);
         for (int l = 1; l < levels; l++) free(lin[l]);
         memset(t, 0, sizeof *t);
         if (own_clut) free(clut);
-        sa1_log("draw: no memory for a %dx%d texture (%u bytes)", w, h, total);
+        struct mallinfo mi = mallinfo();
+        sa1_log("draw: no memory for a %dx%d texture (%u bytes; %u textures, %u KB; heap free %u KB)", w, h, total,
+                stats.textures_alive, stats.texture_bytes / 1024u, (unsigned)mi.fordblks / 1024u);
+        if (tex_pool_on) pool_log("failed");
         return -1;
     }
     for (int l = 0; l < levels; l++) {
@@ -426,7 +528,7 @@ uint32_t draw_texture_create(int width, int height, int fmt, const void *pixels,
         if (height > 1) height /= 2;
         gs.downscaled++;
     }
-    int r = texture_build(slot, width, height, fmt, src, clut_fmt, cl, cl != NULL);
+    int r = texture_build(slot, width, height, fmt, src, clut_fmt, cl, cl != NULL, 0);
     free(tmp);
     if (r != 0) return 0;
     stats.textures_alive++; stats.texture_bytes += texs[slot].bytes;
@@ -439,7 +541,7 @@ static void texture_release(uint32_t h) {
     stats.texture_bytes -= t->bytes;
     for (int i = 1; i < 4; i++) if (t->mirror[i] && t->mirror[i] != h) texture_release(t->mirror[i]);
     if (t->own_clut) free(t->clut);
-    free(t->mem);
+    tex_mem_free(t);
     if (bound_tex == h) bound_tex = 0;
     memset(t, 0, sizeof *t);
 }
@@ -480,7 +582,7 @@ void draw_gu_texture_state(hle_state_io *io) {
             if (hle_state_error(io)) return;
             uint16_t *cl = NULL;
             if (cn) { cl = memalign(16, cn < 32 ? 32 : cn); if (cl) memcpy(cl, clut, cn); }
-            if (!pix || r.handle == 0 || r.handle >= TEX_MAX || texture_build((int)r.handle, r.w, r.h, r.fmt, pix, r.clut_fmt, cl, cl != NULL) != 0) {
+            if (!pix || r.handle == 0 || r.handle >= TEX_MAX || texture_build((int)r.handle, r.w, r.h, r.fmt, pix, r.clut_fmt, cl, cl != NULL, 0) != 0) {
                 sa1_log("draw: cannot rebuild texture %u (%dx%d fmt %d) from the state", r.handle, r.w, r.h, r.fmt);
                 continue;
             }
@@ -514,6 +616,7 @@ static uint32_t mirror_variant(uint32_t h, int fu, int fv) {
     gtex *t = &texs[h];
     int k = fu | fv << 1;
     if (t->mirror[k]) return t->mirror[k];
+    if (t->mfail == mirror_epoch + 1) return h;
     int nw = fu ? t->w * 2 : t->w, nh = fv ? t->h * 2 : t->h, bits = fmt_bits(t->fmt);
     if (nw > 512 || nh > 512) {
         if (!gs.mirror_fail++) sa1_log("draw: a %dx%d texture is flipped; its mirror would pass 512, drawn as a plain repeat", t->w, t->h);
@@ -531,10 +634,16 @@ static uint32_t mirror_variant(uint32_t h, int fu, int fv) {
             px_set(out, orb, bits, x, y, px_get(lin, rb, bits, sx, sy));
         }
     free(lin);
-    int ok = texture_build(slot, nw, nh, t->fmt, out, t->clut_fmt, t->clut, 0) == 0;
+    int ok = texture_build(slot, nw, nh, t->fmt, out, t->clut_fmt, t->clut, 0, 1) == 0;
     free(out);
+    if (!ok && tex_pool_on) {
+        uint32_t need = texpool_psp_bytes(nw, nh, bits, (gu_debug & 2) ? 1 : max_levels, NULL);
+        if (need > mirror_need) mirror_need = need;
+        t->mfail = mirror_epoch + 1;
+        return h;
+    }
     if (!ok) return t->mirror[k] = h;
-    texs[slot].hidden = 1;
+    texs[slot].hidden = 1; texs[slot].parent = h; texs[slot].pk = k;
     stats.texture_bytes += texs[slot].bytes;
     gs.mirrors++;
     return t->mirror[k] = (uint32_t)slot;
@@ -594,6 +703,7 @@ static void ge_pipeline_start(void) {
 
 int draw_init(int scale, int want_headless) {
     (void)scale;
+    texpool_init(&pool_ops, 0, 0);
     gs.zmin_frame = gs.zmin_win = 1e30f; gs.zmin_last = 1.0f; zmin_wmax = 0.0f;
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
@@ -674,6 +784,11 @@ void draw_begin_frame(uint32_t clear_argb) {
     ge_wait();                        /* the last frame's list, vertices and textures are free again */
     stats.draw_calls = stats.triangles = stats.strips = stats.state_changes = 0;
     cur_valid = 0; cur_proj = -1; bound_tex = 0;
+    texpool_set_frame(++tex_frame);
+    if (mirror_need && tex_frame - mirror_room_frame >= 60) {   /* a full pool retries once a second */
+        mirror_room_frame = tex_frame;
+        if (texpool_make_room(mirror_need)) { mirror_epoch++; mirror_need = 0; }
+    }
     rec_reset();
     if (headless) return;
     tex_su = tex_sv = -1.0f;        /* re-sent with the first texture */
@@ -773,6 +888,7 @@ void draw_end_frame(void) {
 
 /* Frame-time and renderer counters since the last call (main_psp.c --stats). */
 void draw_gu_report(void) {
+    if (tex_pool_on) pool_log("report");
     sa1_log("draw: %u frames, frame time avg %.2f ms max %.2f ms, list replay %.2f ms/frame, GE wait %.2f ms/frame, swap wait %.2f ms/frame; list high water %u KB, vertices %u KB (%u strips over); "
             "%u strips dropped (list full), %u clipped to the GE's guard band",
             gs.frames, gs.frames ? gs.frame_us_sum / 1000.0 / gs.frames : 0.0, gs.frame_us_max / 1000.0,
@@ -819,6 +935,8 @@ static void bind_texture(const draw_state *s) {
     float su = (fu && h != s->texture) ? 0.5f : 1.0f, sv = (fv && h != s->texture) ? 0.5f : 1.0f;
     if (h != bound_tex) {
         gtex *t = &texs[h];
+        if (t->pblk) texpool_touch(t->pblk - 1);
+        if (tex_flush_pending) { sceGuTexFlush(); tex_flush_pending = 0; }
         if (t->clut) {
             sceGuClutMode(fmt_psm(t->clut_fmt), 0, 0xFF, 0);
             sceGuClutLoad(t->fmt == DRAW_FMT_T4 ? 1 : 16, t->clut);

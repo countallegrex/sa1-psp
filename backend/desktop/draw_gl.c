@@ -14,6 +14,7 @@
  *
  * Part of sa1-psp (MIT). */
 #include "../draw.h"
+#include "../texpool.h"
 #include "hle.h"
 
 #include <stdio.h>
@@ -37,6 +38,9 @@
 #endif
 #ifndef GL_UNSIGNED_SHORT_4_4_4_4_REV
 #define GL_UNSIGNED_SHORT_4_4_4_4_REV 0x8365
+#endif
+#ifndef GL_TEXTURE_BASE_LEVEL
+#define GL_TEXTURE_BASE_LEVEL 0x813C
 #endif
 #ifndef GL_TEXTURE_LOD_BIAS
 #define GL_TEXTURE_LOD_BIAS 0x8501
@@ -110,8 +114,96 @@ const draw_stats *draw_get_stats(void) { return &stats; }
  * states carry textures from it and re-create them under the same handles
  * (draw_gl_texture_state), and a state saved headless can load into a
  * window.  About 6 MB at the route's peak. */
-typedef struct { uint32_t gl; int w, h; uint32_t bytes; int fmt, clut_fmt; uint32_t pix_n, clut_n; void *pix, *clut; } tex_slot;
+typedef struct {
+    uint32_t gl; int w, h; uint32_t bytes; int fmt, clut_fmt; uint32_t pix_n, clut_n; void *pix, *clut;
+    int pblk[4];                  /* SA1_TEX_BUDGET: texpool block + 1 of the texture [0] and its PSP mirror variants [1..3]; -1 = mirror failed */
+    int pw, ph, pbits, plevels, dropped;   /* its size on the PSP; top levels the pool dropped */
+    uint32_t mfail[4];            /* mirror_epoch + 1 when the variant found no room (draw_gu.c) */
+} tex_slot;
 static tex_slot texs[TEX_MAX];
+
+/* SA1_TEX_BUDGET=KB: texture memory as the PSP has it (backend/texpool.h),
+ * on virtual chunks: every texture and every mirror variant the PSP would
+ * build is sized as draw_gu.c sizes it, and one that does not fit in the
+ * budget is not created, so it draws white as on the PSP.  SA1_TEX_POOL=0
+ * turns off the pool's reclaiming (compaction, evictions, dropped levels):
+ * the failures of a full heap, to reproduce them.  Dropped levels show as
+ * GL_TEXTURE_BASE_LEVEL, the look the PSP gets. */
+static int pool_mode = -1;        /* -1 not read, 0 off, 1 budget, 2 budget + reclaim */
+static int in_frame;
+static uint32_t pool_frame, pool_log_frame = 0xFFFFFFFFu, pool_fail_logs, mirror_need, mirror_epoch, mirror_room_frame;
+static void *pool_chunk_alloc(void) { return (void *)(uintptr_t)0x1000; }
+static void pool_chunk_free(void *c) { (void)c; }
+static void pool_moved(int owner, uint8_t *addr) { (void)owner; (void)addr; }
+static void pool_evict(int owner) {
+    tex_slot *t = &texs[owner & 0xFFFF];
+    int k = owner >> 16;
+    if (t->pblk[k] > 0) texpool_free(t->pblk[k] - 1);
+    t->pblk[k] = 0;
+}
+static uint32_t pool_drop_top(int owner) {
+    tex_slot *t = &texs[owner & 0xFFFF];
+    if (t->plevels < 2) return 0;
+    t->pw >>= 1; t->ph >>= 1; t->plevels--; t->dropped++;
+    return texpool_psp_bytes(t->pw, t->ph, t->pbits, t->plevels, NULL);
+}
+static const texpool_ops pool_ops = { pool_chunk_alloc, pool_chunk_free, pool_moved, pool_evict, pool_drop_top };
+static void pool_log(const char *why) {
+    const texpool_stats *p = texpool_get_stats();
+    sa1_log("texpool (%s): %u chunks (peak %u, %u refused), %u KB used (peak %u KB); %u compactions (%u KB moved), %u evictions, %u top levels dropped, %u failures",
+            why, p->chunks, p->peak_chunks, p->refused_chunks, p->used / 1024u, p->peak_used / 1024u, p->compactions, p->moved_bytes / 1024u,
+            p->evictions, p->drops, p->failures);
+}
+static int pool_alloc(uint32_t size, int owner, int cache) {
+    const texpool_stats *p = texpool_get_stats();
+    uint32_t ev = p->compactions + p->evictions + p->drops + p->failures;
+    uint8_t *a;
+    int b = texpool_alloc(size, owner, cache, pool_mode == 2 && !in_frame, &a);
+    if (ev != p->compactions + p->evictions + p->drops + p->failures && pool_log_frame != pool_frame) {
+        pool_log_frame = pool_frame;
+        pool_log(b >= 0 ? "reclaimed" : "full");
+    }
+    return b;
+}
+static void pool_setup(void) {
+    if (pool_mode >= 0) return;
+    const char *b = getenv("SA1_TEX_BUDGET"), *r = getenv("SA1_TEX_POOL");
+    pool_mode = 0;
+    if (!b || atoi(b) <= 0) return;
+    pool_mode = (r && !strcmp(r, "0")) ? 1 : 2;
+    uint32_t chunks = (uint32_t)atoi(b) / (TEXPOOL_CHUNK / 1024u);
+    texpool_init(&pool_ops, 1, chunks ? chunks : 1);
+    sa1_log("draw: PSP texture budget %u chunks of %u KB, reclaiming %s", chunks, TEXPOOL_CHUNK / 1024u, pool_mode == 2 ? "on" : "off");
+}
+static int fmt_bits(int fmt) {
+    switch (fmt) {
+    case DRAW_FMT_5650: case DRAW_FMT_5551: case DRAW_FMT_4444: return 16;
+    case DRAW_FMT_8888: return 32;
+    case DRAW_FMT_T4: return 4;
+    case DRAW_FMT_T8: return 8;
+    default: return 0;
+    }
+}
+/* The texture is drawn: touch it, and account the mirror variant the PSP
+ * builds for a flipped repeat (draw_gu.c mirror_variant: inside a frame, so
+ * never reclaiming; a failure is a plain repeat there, not white). */
+static void pool_use(const draw_state *s) {
+    tex_slot *t = &texs[s->texture];
+    if (t->pblk[0] > 0) texpool_touch(t->pblk[0] - 1);
+    int fu = s->flip_u && !s->clamp_u, fv = s->flip_v && !s->clamp_v, k = fu | fv << 1;
+    if (!k) return;
+    if (!t->pblk[k] && t->mfail[k] != mirror_epoch + 1) {
+        int nw = fu ? t->pw * 2 : t->pw, nh = fv ? t->ph * 2 : t->ph;
+        if (nw > 512 || nh > 512) t->pblk[k] = -1;
+        else {
+            uint32_t need = texpool_psp_bytes(nw, nh, t->pbits, 8, NULL);
+            int b = pool_alloc(need, s->texture | k << 16, 1);
+            if (b >= 0) t->pblk[k] = b + 1;
+            else { t->mfail[k] = mirror_epoch + 1; if (need > mirror_need) mirror_need = need; }
+        }
+    }
+    if (t->pblk[k] > 0) texpool_touch(t->pblk[k] - 1);
+}
 
 #ifndef SA1_NO_SDL
 /* CLUT formats are expanded here (desktop GL has no palettes); the PSP
@@ -152,6 +244,20 @@ static uint32_t texture_create_at(int slot, int width, int height, int fmt, cons
     case DRAW_FMT_T4: bytes = (uint32_t)width * height / 2 + 16 * 2; break;
     case DRAW_FMT_T8: bytes = (uint32_t)width * height + 256 * 2; break;
     default: return 0;
+    }
+    pool_setup();
+    if (pool_mode > 0) {
+        int pw = width, ph = height, lv;
+        while (pw > 512 || ph > 512) { if (pw > 1) pw /= 2; if (ph > 1) ph /= 2; }
+        int b = pool_alloc(texpool_psp_bytes(pw, ph, fmt_bits(fmt), 8, &lv), slot, 0);
+        if (b < 0) {
+            if (pool_fail_logs++ < 64) sa1_log("draw: no memory for a %dx%d texture in the PSP budget (%u textures, %u KB)", width, height, stats.textures_alive, stats.texture_bytes / 1024u);
+            return 0;
+        }
+        memset(texs[slot].pblk, 0, sizeof texs[slot].pblk);
+        memset(texs[slot].mfail, 0, sizeof texs[slot].mfail);
+        texs[slot].pblk[0] = b + 1;
+        texs[slot].pw = pw; texs[slot].ph = ph; texs[slot].pbits = fmt_bits(fmt); texs[slot].plevels = lv; texs[slot].dropped = 0;
     }
     texs[slot].w = width; texs[slot].h = height; texs[slot].bytes = bytes; texs[slot].gl = 0;
     texs[slot].fmt = fmt; texs[slot].clut_fmt = clut_fmt;
@@ -215,6 +321,7 @@ void draw_texture_destroy(uint32_t handle) {
     if (texs[handle].gl) { GLuint id = texs[handle].gl; glDeleteTextures(1, &id); }
 #endif
     stats.textures_alive--; stats.texture_bytes -= texs[handle].bytes;
+    for (int k = 0; k < 4; k++) if (texs[handle].pblk[k] > 0) texpool_free(texs[handle].pblk[k] - 1);
     free(texs[handle].pix); free(texs[handle].clut);
     memset(&texs[handle], 0, sizeof texs[handle]);
     cur_valid = 0;
@@ -307,6 +414,7 @@ int draw_init(int scale, int want_headless) {
 }
 
 void draw_shutdown(void) {
+    if (pool_mode > 0) pool_log("exit");
 #ifndef SA1_NO_SDL
     if (headless) return;
     if (pad) SDL_GameControllerClose(pad);
@@ -319,6 +427,12 @@ void draw_shutdown(void) {
 
 void draw_begin_frame(uint32_t clear_argb) {
     stats.draw_calls = stats.triangles = stats.strips = stats.state_changes = 0;
+    in_frame = 1;
+    if (pool_mode > 0) texpool_set_frame(++pool_frame);
+    if (pool_mode == 2 && mirror_need && pool_frame - mirror_room_frame >= 60) {
+        mirror_room_frame = pool_frame;
+        if (texpool_make_room(mirror_need)) { mirror_epoch++; mirror_need = 0; }
+    }
     cur_valid = 0;
     cur_proj = -1;                /* the clear below resets the scissor; the first strip sets it again */
 #ifndef SA1_NO_SDL
@@ -343,6 +457,7 @@ void draw_begin_frame(uint32_t clear_argb) {
 }
 
 void draw_end_frame(void) {
+    in_frame = 0;
 #ifndef SA1_NO_SDL
     if (headless) return;
     if (title_frame_on) {
@@ -425,6 +540,7 @@ void draw_set_state(const draw_state *s) {
     if (cur_valid && memcmp(s, &cur, sizeof cur) == 0) return;
     cur = *s; cur_valid = 1;
     stats.state_changes++;
+    if (pool_mode > 0 && s->texture && s->texture < TEX_MAX && texs[s->texture].w) pool_use(s);
 #ifndef SA1_NO_SDL
     if (headless) return;
     if (s->blend_src == DRAW_BLEND_ONE && s->blend_dst == DRAW_BLEND_ZERO) glDisable(GL_BLEND);
@@ -448,6 +564,7 @@ void draw_set_state(const draw_state *s) {
     if (s->texture && s->texture < TEX_MAX && texs[s->texture].gl) {
         glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, texs[s->texture].gl);
+        if (pool_mode > 0) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, texs[s->texture].dropped);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, s->clamp_u ? GL_CLAMP_TO_EDGE : s->flip_u ? GL_MIRRORED_REPEAT : GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, s->clamp_v ? GL_CLAMP_TO_EDGE : s->flip_v ? GL_MIRRORED_REPEAT : GL_REPEAT);
         GLint f = s->filter == DRAW_FILTER_POINT ? GL_NEAREST : GL_LINEAR;
