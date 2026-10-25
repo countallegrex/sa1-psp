@@ -830,6 +830,8 @@ void draw_begin_frame(uint32_t clear_argb) {
 /* The first thing replay() draws.  The buffer is the one on screen until
  * the vblank after the last swap (NEXTFRAME); a frame of the game takes
  * longer than a refresh, so the wait is almost never taken. */
+static inline void sh_zoff(int o);
+static inline void sh_zmask(int m);
 static void frame_clear(void) {
     if (swap_pending && sceDisplayGetVcount() == swap_vcount) {
         uint64_t t = sa1_plat_time_us();
@@ -837,8 +839,8 @@ static void frame_clear(void) {
         gs.swap_wait_us += sa1_plat_time_us() - t;
     }
     swap_pending = 0;
-    sceGuDepthOffset(0);
-    sceGuDepthMask(GU_FALSE);
+    sh_zoff(0);
+    sh_zmask(GU_FALSE);
     if (!aspect_wide) {             /* 4:3: black pillars, the game's colour and all drawing in the middle */
         sceGuScissor(0, 0, SCR_W, SCR_H);
         sceGuClearColor(0xFF000000u); sceGuClearDepth(0);
@@ -1112,6 +1114,47 @@ void draw_gu_report(void) {
 }
 
 /* ---- state ---------------------------------------------------------------------- */
+/* The GE state shadow (f6b): the last value replay() (or a model's list)
+ * sent for each state it sets per item, -1 unknown.  The sh_* calls send a
+ * state only when it differs, so a run of items that share most of their
+ * state costs what changes, not a full re-emission through pspsdk.  A
+ * model's list is built from an unknown shadow (it sets everything it
+ * needs, whatever state it is called in) and keeps the shadow it ends with
+ * (sh_end): after its CALL, those states are known again.  Anything else
+ * that sets one of these states must go through sh_*. */
+enum { SH_BLEND, SH_BLENDF, SH_ZFUNC, SH_ZMASK, SH_ATEST, SH_TEX, SH_CULL, SH_FRONT, SH_FOG, SH_SHADE, SH_ZOFF,
+       SH_WRAP, SH_FILTER, SH_TFUNC, SH_N };
+typedef struct { int v[SH_N]; uint32_t bfix[2]; } ge_shadow;
+static ge_shadow sh;
+static void sh_reset(ge_shadow *x) { memset(x, 0xFF, sizeof *x); }
+static int sh_off;                          /* --ge-shadow off: every state sent, as before f6b (an A/B aid) */
+void draw_gu_set_ge_shadow(int on) { sh_off = !on; }
+static inline int sh_set(int k, int v) { if (sh.v[k] == v && !sh_off) return 0; sh.v[k] = v; return 1; }
+static const int sh_cap[SH_N] = { [SH_BLEND] = GU_BLEND, [SH_ATEST] = GU_ALPHA_TEST, [SH_TEX] = GU_TEXTURE_2D, [SH_CULL] = GU_CULL_FACE, [SH_FOG] = GU_FOG };
+static inline void sh_enable(int k, int on) { if (sh_set(k, on)) { if (on) sceGuEnable(sh_cap[k]); else sceGuDisable(sh_cap[k]); } }
+static inline void sh_blendfunc(int sf, int df, unsigned sfix, unsigned dfix) {
+    if (sh_set(SH_BLENDF, sf | df << 4) | (sh.bfix[0] != sfix) | (sh.bfix[1] != dfix)) {
+        sh.bfix[0] = sfix; sh.bfix[1] = dfix;
+        sceGuBlendFunc(GU_ADD, sf, df, sfix, dfix);
+    }
+}
+static inline void sh_zfunc(int f) { if (sh_set(SH_ZFUNC, f)) sceGuDepthFunc(f); }
+static inline void sh_zmask(int m) { if (sh_set(SH_ZMASK, m)) sceGuDepthMask(m); }
+static inline void sh_zoff(int o) { if (sh_set(SH_ZOFF, o)) sceGuDepthOffset((unsigned)o); }
+/* After a CALL: the states the list left set are known, the rest stay. */
+static void sh_merge(const ge_shadow *e) {
+    if (sh_off) { sh_reset(&sh); return; }
+    for (int k = 0; k < SH_N; k++) if (e->v[k] != -1) sh.v[k] = e->v[k];
+    if (e->v[SH_BLENDF] != -1) { sh.bfix[0] = e->bfix[0]; sh.bfix[1] = e->bfix[1]; }
+}
+/* The offset colour's pass: additive, untextured, at equal depth. */
+static void sh_offset_pass(void) {
+    sh_enable(SH_TEX, 0);
+    sh_enable(SH_BLEND, 1); sh_blendfunc(GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
+    sh_zfunc(GU_GEQUAL); sh_zmask(GU_TRUE);
+    sh_enable(SH_ATEST, 0);
+}
+
 static void blend_factor(int code, int is_dst, int *f, unsigned *fix) {
     *fix = 0;
     switch (code & 7) {
@@ -1152,40 +1195,43 @@ static void bind_texture(const draw_state *s) {
         bound_tex = h;
     }
     if (su != tex_su || sv != tex_sv) { sceGuTexScale(su, sv); tex_su = su; tex_sv = sv; }
-    sceGuTexWrap(s->clamp_u ? GU_CLAMP : GU_REPEAT, s->clamp_v ? GU_CLAMP : GU_REPEAT);
-    if (s->filter == DRAW_FILTER_POINT) sceGuTexFilter(GU_NEAREST_MIPMAP_NEAREST, GU_NEAREST);
-    else sceGuTexFilter(GU_LINEAR_MIPMAP_LINEAR, GU_LINEAR);
-    int tcc = s->ignore_tex_alpha ? GU_TCC_RGB : GU_TCC_RGBA;
-    switch (s->shade) {
-    case DRAW_SHADE_DECAL: sceGuTexFunc(GU_TFX_REPLACE, tcc); break;          /* rgb T, alpha A (1: the vertex alpha is forced to 1) */
-    case DRAW_SHADE_DECAL_ALPHA:                                                /* T*A + V*(1-A), alpha a */
-        if (s->ignore_tex_alpha) sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGB);
-        else sceGuTexFunc(GU_TFX_DECAL, GU_TCC_RGBA);
-        break;
-    default: sceGuTexFunc(GU_TFX_MODULATE, tcc); break;                         /* T*V, A*a */
+    const int wu = s->clamp_u ? GU_CLAMP : GU_REPEAT, wv = s->clamp_v ? GU_CLAMP : GU_REPEAT;
+    if (sh_set(SH_WRAP, wu | wv << 8)) sceGuTexWrap(wu, wv);
+    if (sh_set(SH_FILTER, s->filter == DRAW_FILTER_POINT)) {
+        if (s->filter == DRAW_FILTER_POINT) sceGuTexFilter(GU_NEAREST_MIPMAP_NEAREST, GU_NEAREST);
+        else sceGuTexFilter(GU_LINEAR_MIPMAP_LINEAR, GU_LINEAR);
     }
+    int tcc = s->ignore_tex_alpha ? GU_TCC_RGB : GU_TCC_RGBA, tfx;
+    switch (s->shade) {
+    case DRAW_SHADE_DECAL: tfx = GU_TFX_REPLACE; break;                         /* rgb T, alpha A (1: the vertex alpha is forced to 1) */
+    case DRAW_SHADE_DECAL_ALPHA:                                                /* T*A + V*(1-A), alpha a */
+        if (s->ignore_tex_alpha) { tfx = GU_TFX_REPLACE; tcc = GU_TCC_RGB; }
+        else { tfx = GU_TFX_DECAL; tcc = GU_TCC_RGBA; }
+        break;
+    default: tfx = GU_TFX_MODULATE; break;                                      /* T*V, A*a */
+    }
+    if (sh_set(SH_TFUNC, tfx | tcc << 8)) sceGuTexFunc(tfx, tcc);
 }
 
 /* Blend, depth compare and write, alpha test and the texture enable: what
  * the offset-colour pass changes and puts back. */
 static void apply_blend_depth(const draw_state *s) {
-    if (s->blend_src == DRAW_BLEND_ONE && s->blend_dst == DRAW_BLEND_ZERO) sceGuDisable(GU_BLEND);
+    if (s->blend_src == DRAW_BLEND_ONE && s->blend_dst == DRAW_BLEND_ZERO) sh_enable(SH_BLEND, 0);
     else {
         int sf, df; unsigned sfix, dfix;
         blend_factor(s->blend_src, 0, &sf, &sfix);
         blend_factor(s->blend_dst, 1, &df, &dfix);
-        sceGuEnable(GU_BLEND);
-        sceGuBlendFunc(GU_ADD, sf, df, sfix, dfix);
+        sh_enable(SH_BLEND, 1);
+        sh_blendfunc(sf, df, sfix, dfix);
     }
-    sceGuDepthFunc((gu_debug & 8) && s->layer == DRAW_LAYER_2D ? GU_ALWAYS : depth_func(s->depth_func));
+    sh_zfunc((gu_debug & 8) && s->layer == DRAW_LAYER_2D ? GU_ALWAYS : depth_func(s->depth_func));
     /* depth_write is the game's, except for translucent 3D strips (none) and
      * translucent 2D strips at either end of the buffer (rec_depth_write) */
     int write = s->depth_write && !(s->translucent && s->layer != DRAW_LAYER_2D);
-    sceGuDepthMask(write ? GU_FALSE : GU_TRUE);     /* GU_TRUE masks (disables) the write */
-    if (s->alpha_test) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GEQUAL, 0x80, 0xFF); }
-    else sceGuDisable(GU_ALPHA_TEST);
-    if (s->texture && s->texture < TEX_MAX && texs[s->texture].mem) sceGuEnable(GU_TEXTURE_2D);
-    else sceGuDisable(GU_TEXTURE_2D);
+    sh_zmask(write ? GU_FALSE : GU_TRUE);           /* GU_TRUE masks (disables) the write */
+    if (s->alpha_test && sh.v[SH_ATEST] != 1) sceGuAlphaFunc(GU_GEQUAL, 0x80, 0xFF);   /* the only alpha function */
+    sh_enable(SH_ATEST, s->alpha_test != 0);
+    sh_enable(SH_TEX, s->texture && s->texture < TEX_MAX && texs[s->texture].mem);
 }
 
 static void apply_state(const draw_state *s) {
@@ -1194,13 +1240,13 @@ static void apply_state(const draw_state *s) {
         /* draw_gl.c: POSITIVE = GL front face CW in GL's y-up window space,
          * which is counter-clockwise in the GE's y-down screen space. */
         int pos = (s->cull == DRAW_CULL_POSITIVE) ^ cull_flip;
-        sceGuEnable(GU_CULL_FACE);
-        sceGuFrontFace(pos ? GU_CCW : GU_CW);
-    } else sceGuDisable(GU_CULL_FACE);
+        sh_enable(SH_CULL, 1);
+        if (sh_set(SH_FRONT, pos)) sceGuFrontFace(pos ? GU_CCW : GU_CW);
+    } else sh_enable(SH_CULL, 0);
     if (s->texture && s->texture < TEX_MAX && texs[s->texture].mem) bind_texture(s);
-    sceGuDepthOffset(s->translucent ? 4 : 0);
-    if (s->fog == DRAW_FOG_TABLE || s->fog == DRAW_FOG_TABLE2) sceGuEnable(GU_FOG); else sceGuDisable(GU_FOG);
-    sceGuShadeModel(s->gouraud ? GU_SMOOTH : GU_FLAT);
+    sh_zoff(s->translucent ? 4 : 0);
+    sh_enable(SH_FOG, s->fog == DRAW_FOG_TABLE || s->fog == DRAW_FOG_TABLE2);
+    if (sh_set(SH_SHADE, s->gouraud ? GU_SMOOTH : GU_FLAT)) sceGuShadeModel(s->gouraud ? GU_SMOOTH : GU_FLAT);
 }
 
 static void batch_flush(void);
@@ -1379,19 +1425,40 @@ static inline void ge_draw(int prim, int vtype, int count, const void *v) {
     }
 }
 
+/* The indexed draw as pspsdk writes it (VTYPE, BASE, IADDR, BASE, VADDR,
+ * PRIM), under the same stall rule: sceGuDrawArray's stall update is a
+ * syscall per draw. */
+static inline void ge_draw_ix(int prim, int vtype, int count, const void *ix, const void *v) {
+    if (!ge_stall_every || sh_off) { sceGuDrawArray(prim, vtype, count, ix, v); return; }
+    unsigned int *c = gu_list->current;
+    uint32_t i = (uint32_t)(uintptr_t)ix, a = (uint32_t)(uintptr_t)v;
+    c[0] = (0x12u << 24) | ((uint32_t)vtype & 0xFFFFFFu);
+    c[1] = (0x10u << 24) | ((i >> 8) & 0xF0000u);
+    c[2] = (0x02u << 24) | (i & 0xFFFFFFu);
+    c[3] = (0x10u << 24) | ((a >> 8) & 0xF0000u);
+    c[4] = (0x01u << 24) | (a & 0xFFFFFFu);
+    c[5] = (0x04u << 24) | ((((uint32_t)prim << 16) | (uint32_t)count) & 0xFFFFFFu);
+    gu_list->current = c + 6;
+    if (++ge_draws_unstalled >= ge_stall_every) {
+        ge_draws_unstalled = 0;
+        sceGeListUpdateStallAddr(ge_list_executed[0], gu_list->current);
+    }
+}
+
 #define PRIM_MODEL 0xFF                 /* gu_item.prim of a draw_model item: n is the model */
 static void model_call(uint32_t h);
 /* Draws what the frame recorded: the far pass, a depth clear, the near pass. */
 static void replay(void) {
     batch_flush();
     ge_draws_unstalled = 0;
+    sh_reset(&sh);                           /* once a frame, everything is sent again */
     frame_clear();
     if (range_dirty) { sceGuDepthRange(65535, depth_floor); range_dirty = 0; }
     for (int pass = 0; pass < PASSES; pass++) {
         if (!nitems[pass]) continue;
         if (pass == PASS_NEAR && (nitems[PASS_FAR] || depth_floor)) {
             sceGuScissor(0, 0, SCR_W, SCR_H);
-            sceGuDepthMask(GU_FALSE);
+            sh_zmask(GU_FALSE);
             sceGuClearDepth(depth_floor ? depth_floor + 2u : 0u);
             sceGuClear(GU_DEPTH_BUFFER_BIT);
             if (!aspect_wide) sceGuScissor(SCR_W / 8, 0, SCR_W * 7 / 8, SCR_H);
@@ -1403,7 +1470,7 @@ static void replay(void) {
                 if (it->proj != pj) { set_proj(pass, it->proj); pj = it->proj; }
                 if (it->mat != mt) { sceGuSetMatrix(GU_MODEL, &mesh_mats[it->mat]); mt = it->mat; }
                 model_call(it->n);
-                st = -1;                      /* the list set its own states */
+                st = -1;                      /* the list set its own states (the shadow knows which) */
                 stats.draw_calls++;
                 continue;
             }
@@ -1411,15 +1478,12 @@ static void replay(void) {
             if (it->state != st) { apply_state(s); st = it->state; }
             if (it->proj != pj) { set_proj(pass, it->proj); pj = it->proj; }
             if (it->mat != mt) { sceGuSetMatrix(GU_MODEL, it->mat >= 0 ? &mesh_mats[it->mat] : &mesh_ident); mt = it->mat; }
-            if (it->ix) sceGuDrawArray(it->prim, VTX_FMT | GU_INDEX_16BIT, it->n, it->ix, it->v);
+            if (it->ix) ge_draw_ix(it->prim, VTX_FMT | GU_INDEX_16BIT, it->n, it->ix, it->v);
             else ge_draw(it->prim, VTX_FMT, it->n, it->v);
             stats.draw_calls++;
             if (it->on) {                 /* the offset colour: additive, untextured, at equal depth */
-                sceGuDisable(GU_TEXTURE_2D);
-                sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
-                sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
-                sceGuDisable(GU_ALPHA_TEST);
-                if (it->ix) sceGuDrawArray(GU_TRIANGLES, OVTX_FMT | GU_INDEX_16BIT, it->on, it->ix, it->ov);
+                sh_offset_pass();
+                if (it->ix) ge_draw_ix(GU_TRIANGLES, OVTX_FMT | GU_INDEX_16BIT, it->on, it->ix, it->ov);
                 else ge_draw(GU_TRIANGLE_STRIP, OVTX_FMT, it->on, it->ov);
                 stats.draw_calls++;
                 apply_blend_depth(s);     /* the texture stays bound; only its enable changed */
@@ -2111,6 +2175,7 @@ typedef struct {
      * keep them (zombie: released, kept for those) */
     uint32_t owner; int refs, zombie;
     uint32_t *list; uint32_t list_cap, list_epoch; int list_ok;
+    ge_shadow sh_end; uint32_t tex_end; float su_end, sv_end;   /* the state its list ends in (f6b) */
     float bound[4];
     int dying;
 } gmodel;
@@ -2434,6 +2499,12 @@ void draw_cell_stats_take(draw_cell_stats *out) {
 
 /* The model's call list: built inside the open GU_DIRECT list (replay). */
 static void model_build_list(gmodel *g) {
+    /* built from an unknown shadow (the list sets all it needs), the replay's
+     * own shadow and texture kept aside meanwhile */
+    const ge_shadow live = sh;
+    const uint32_t live_tex = bound_tex;
+    const float live_su = tex_su, live_sv = tex_sv;
+    sh_reset(&sh);
     sceGuStart(GU_CALL, g->list);
     /* pspsdk keeps the depth range per context and sceGuDepthOffset re-sends
      * it from there: the call context needs draw_init's range, or every
@@ -2445,15 +2516,14 @@ static void model_build_list(gmodel *g) {
         apply_state(&ms->st);
         sceGuDrawArray(GU_TRIANGLES, VTX_FMT | GU_INDEX_16BIT, (int)ms->icount, g->ix + ms->ifirst, g->v + ms->vfirst);
         if (ms->off && g->ov) {
-            sceGuDisable(GU_TEXTURE_2D);
-            sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFFu, 0xFFFFFFu);
-            sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
-            sceGuDisable(GU_ALPHA_TEST);
+            sh_offset_pass();
             sceGuDrawArray(GU_TRIANGLES, OVTX_FMT | GU_INDEX_16BIT, (int)ms->icount, g->ix + ms->ifirst, g->ov + ms->vfirst);
             apply_blend_depth(&ms->st);
         }
     }
     uint32_t used = (uint32_t)sceGuFinish();
+    g->sh_end = sh; g->tex_end = bound_tex; g->su_end = tex_su; g->sv_end = tex_sv;
+    sh = live; bound_tex = live_tex; tex_su = live_su; tex_sv = live_sv;
     if (used > g->list_cap) {               /* past the end already: stop before more harm */
         sa1_log("draw: a model's list took %u of %u bytes", used, g->list_cap);
         g->list_ok = -1;                    /* never called; the bound per set (GMODEL_LIST_PER_SET) is far above need */
@@ -2462,7 +2532,6 @@ static void model_build_list(gmodel *g) {
     if (used > gms.list_max) gms.list_max = used;
     g->list_epoch = tex_epoch; g->list_ok = 1;
     gms.lists++;
-    bound_tex = 0; tex_su = tex_sv = -1.0f;
 }
 
 static void model_call(uint32_t h) {
@@ -2476,7 +2545,8 @@ static void model_call(uint32_t h) {
     c[0] = (0x10u << 24) | ((a >> 8) & 0xF0000u);     /* BASE */
     c[1] = (0x0Au << 24) | (a & 0xFFFFFFu);           /* CALL */
     gu_list->current = c + 2;
-    bound_tex = 0; tex_su = tex_sv = -1.0f;            /* what the list left bound is not tracked */
+    sh_merge(&g->sh_end);                              /* what the list left set */
+    bound_tex = g->tex_end; tex_su = g->su_end; tex_sv = g->sv_end;
 }
 
 static void model_report(void) {

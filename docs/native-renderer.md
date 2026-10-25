@@ -438,3 +438,19 @@ whether the CPU path's share could be handed back to the GE.
   The replay rise is the per-item state re-emission f6b removes.  Left on
   the CPU: cells crossing z = 1 that reach past the split (ss f300: 2,712
   cells, 5.5k tris; ec 2,025, 3.1k tris).
+
+### 6.4 f6b (2026-10-25): the replay's state shadow
+
+`draw_gu.c` keeps a shadow of the GE states replay() sets per item (blend,
+depth, alpha test, texture enable, wrap, filter and function, cull, fog,
+shading, depth offset) and sends a state only when it changes; a model's
+list is built from an unknown shadow and keeps the one it ends with, merged
+after its CALL (no full re-emission after every model); indexed draws are
+written as raw words under the stall rule (no syscall per draw).
+`--ge-shadow off` restores the old emission for A/B.  Console pictures with
+the shadow on and off are byte-identical (ss, ec, ta and native, f200/f400).
+ABBA x3, one binary: ec ta 79.19 -> 77.63 (replay 6.94 -> 4.83), native
+71.31 -> 69.82 (replay 8.77 -> 6.94); ss ta 39.61 -> 39.19, native 37.53 ->
+36.64 (replay 3.55 -> 1.91).  The native replay's remaining 6.9 ms in ec is
+not state: per-item matrix and projection sets, list CALLs and the item
+loop, the next thing to split.
