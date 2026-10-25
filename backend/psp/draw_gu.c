@@ -89,6 +89,8 @@ static struct { uint32_t list_high, pool_high, pool_full, dropped, offscreen, un
  * strip whose w is no larger cannot lower it (1/w falls as w grows), so
  * strip_emit divides only for a new largest w. */
 static float zmin_wmax;
+static int replay_v2 = 26;                    /* --replay-v2 (draw_gu_set_replay_v2) */
+static struct { uint32_t strips, meshes, models, offsets, states, restores, binds, mats; } rc;   /* replay counts since the last report */
 
 typedef struct { float u, v; uint32_t color; float x, y, z; } gu_vtx;
 #define VTX_FMT (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
@@ -1108,6 +1110,12 @@ void draw_gu_report(void) {
             gs.flush_state, gs.flush_proj, gs.mirrors, gs.mirror_fail, gs.downscaled);
     sa1_log("draw: depth split z %.1f; nearest 3D z %.2f; 3D vertices nearer than z 2 / 4 / 8 / 16: %u / %u / %u / %u",
             depth_split, gs.zmin_win < 1e29f ? gs.zmin_win : 0.0f, gs.znear_verts[0], gs.znear_verts[1], gs.znear_verts[2], gs.znear_verts[3]);
+    if (gs.frames) {
+        const double f = gs.frames;
+        sa1_log("draw: replay per frame (v2 bits %d): items strip %.0f mesh %.0f model %.0f, offset passes %.0f, states %.0f, restores %.0f, full binds %.0f, model matrices %.0f",
+                replay_v2, rc.strips / f, rc.meshes / f, rc.models / f, rc.offsets / f, rc.states / f, rc.restores / f, rc.binds / f, rc.mats / f);
+    }
+    memset(&rc, 0, sizeof rc);
     gs.zmin_win = 1e30f; memset(gs.znear_verts, 0, sizeof gs.znear_verts);
     gs.flush_state = gs.flush_proj = gs.flush_offset = 0;
     gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = gs.swap_wait_us = gs.replay_us = 0; gs.dropped = gs.offscreen = gs.unseen = 0;
@@ -1129,6 +1137,13 @@ static ge_shadow sh;
 static void sh_reset(ge_shadow *x) { memset(x, 0xFF, sizeof *x); }
 static int sh_off;                          /* --ge-shadow off: every state sent, as before f6b (an A/B aid) */
 void draw_gu_set_ge_shadow(int on) { sh_off = !on; }
+/* --replay-v2 N (p2, a bitmask, default 26; 0 is the f6b replay, an A/B
+ * aid): 2 no state restore after an offset-colour pass (the next item's
+ * state sends what differs), 8 texture binds as raw words with one texture
+ * flush (inside model lists), 16 texture binds as a CALL of the texture's
+ * own prebuilt block.  The list's uncached stores were the replay's cost:
+ * a bind was ~20 of them, 680 binds a frame in Emerald Coast. */
+void draw_gu_set_replay_v2(int bits) { replay_v2 = bits; }
 static inline int sh_set(int k, int v) { if (sh.v[k] == v && !sh_off) return 0; sh.v[k] = v; return 1; }
 static const int sh_cap[SH_N] = { [SH_BLEND] = GU_BLEND, [SH_ATEST] = GU_ALPHA_TEST, [SH_TEX] = GU_TEXTURE_2D, [SH_CULL] = GU_CULL_FACE, [SH_FOG] = GU_FOG };
 static inline void sh_enable(int k, int on) { if (sh_set(k, on)) { if (on) sceGuEnable(sh_cap[k]); else sceGuDisable(sh_cap[k]); } }
@@ -1177,6 +1192,55 @@ static int depth_func(int code) {
     return map[code & 7];
 }
 
+typedef struct { unsigned int *start, *current; int parent_context; } pspsdk_gu_list;
+extern pspsdk_gu_list *gu_list;
+extern int ge_list_executed[2];
+/* --replay-v2 16: a texture's bind (CLUT mode and load, TexMode, every
+ * level's TexImage, one flush, RET) prebuilt once in a block of its own and
+ * CALLed: 2 list words per bind instead of ~20 uncached stores.  The block
+ * belongs to the slot and is rewritten when the slot's memory, levels or CLUT
+ * change; written through the uncached alias, so the GE reads it as written.
+ * Not inside a model's list (no nested CALL). */
+#define BIND_WORDS 32
+static uint32_t *bind_blk[TEX_MAX];
+static struct { const uint8_t *mem; const uint16_t *clut; int levels; } bind_key[TEX_MAX];
+static int in_model_build;
+static int ge_exp(int x);
+static uint32_t *bind_block(uint32_t h, const gtex *t) {
+    uint32_t *b = bind_blk[h];
+    if (!b) {
+        b = memalign(64, BIND_WORDS * 4);
+        if (!b) return NULL;
+        sceKernelDcacheWritebackInvalidateRange(b, BIND_WORDS * 4);   /* nothing cached may land on it later */
+        bind_blk[h] = b;
+        bind_key[h].mem = NULL;
+    }
+    if (bind_key[h].mem != t->mem || bind_key[h].clut != t->clut || bind_key[h].levels != t->levels) {
+        uint32_t *c = (uint32_t *)((uintptr_t)b | 0x40000000u);
+        if (t->clut) {              /* sceGuClutMode(psm, 0, 0xFF, 0), sceGuClutLoad(blocks, clut) */
+            const uint32_t cbp = (uint32_t)(uintptr_t)t->clut;
+            *c++ = 0xC5000000u | (((uint32_t)fmt_psm(t->clut_fmt) | 0xFFu << 8) & 0xFFFFFFu);
+            *c++ = 0xB0000000u | (cbp & 0xFFFFFFu);
+            *c++ = 0xB1000000u | ((cbp >> 8) & 0xF0000u);
+            *c++ = 0xC4000000u | (uint32_t)(t->fmt == DRAW_FMT_T4 ? 1 : 16);
+        }
+        /* sceGuTexMode(psm, levels - 1, 0, swizzle) */
+        *c++ = 0xC2000000u | ((((uint32_t)(t->levels - 1) << 16) | ((gu_debug & 4) ? 0u : 1u)) & 0xFFFFFFu);
+        *c++ = 0xC3000000u | ((uint32_t)fmt_psm(t->fmt) & 0xFFFFFFu);
+        for (int l = 0; l < t->levels; l++, c += 3) {
+            const uint32_t tbp = (uint32_t)(uintptr_t)(t->mem + t->off[l]);
+            c[0] = ((160u + (uint32_t)l) << 24) | (tbp & 0xFFFFFFu);
+            c[1] = ((168u + (uint32_t)l) << 24) | ((((tbp >> 8) & 0xF0000u) | (uint32_t)t->tbw[l]) & 0xFFFFFFu);
+            c[2] = ((184u + (uint32_t)l) << 24) | (uint32_t)((ge_exp(t->h >> l) << 8) | ge_exp(t->w >> l));
+        }
+        *c++ = 0xCB000000u;         /* TEXFLUSH */
+        *c++ = 0x0B000000u;         /* RET */
+        bind_key[h].mem = t->mem; bind_key[h].clut = t->clut; bind_key[h].levels = t->levels;
+    }
+    return b;
+}
+/* pspsdk's getExp: log2 of the size's low 10 bits (clz(0) = 32 on the Allegrex) */
+static int ge_exp(int x) { x &= 0x3FF; return x ? 31 - __builtin_clz((unsigned)x) : -1; }
 static void bind_texture(const draw_state *s) {
     uint32_t h = s->texture;
     int fu = s->flip_u && !s->clamp_u, fv = s->flip_v && !s->clamp_v;
@@ -1186,12 +1250,34 @@ static void bind_texture(const draw_state *s) {
         gtex *t = &texs[h];
         if (t->pblk) texpool_touch(t->pblk - 1);
         if (tex_flush_pending) { sceGuTexFlush(); tex_flush_pending = 0; }
-        if (t->clut) {
-            sceGuClutMode(fmt_psm(t->clut_fmt), 0, 0xFF, 0);
-            sceGuClutLoad(t->fmt == DRAW_FMT_T4 ? 1 : 16, t->clut);
+        uint32_t *blk = (replay_v2 & 16) && !in_model_build ? bind_block(h, t) : NULL;
+        if (blk) {
+            unsigned int *c = gu_list->current;
+            const uint32_t a = (uint32_t)(uintptr_t)blk;
+            c[0] = (0x10u << 24) | ((a >> 8) & 0xF0000u);     /* BASE */
+            c[1] = (0x0Au << 24) | (a & 0xFFFFFFu);           /* CALL */
+            gu_list->current = c + 2;
+            rc.binds++;
+        } else {
+            if (t->clut) {
+                sceGuClutMode(fmt_psm(t->clut_fmt), 0, 0xFF, 0);
+                sceGuClutLoad(t->fmt == DRAW_FMT_T4 ? 1 : 16, t->clut);
+            }
+            sceGuTexMode(fmt_psm(t->fmt), t->levels - 1, 0, (gu_debug & 4) ? 0 : 1);
+            rc.binds++;
+            if (replay_v2 & 8) {        /* sceGuTexImage's words, one flush after the last level instead of one per level */
+                unsigned int *c = gu_list->current;
+                for (int l = 0; l < t->levels; l++, c += 3) {
+                    const uint32_t tbp = (uint32_t)(uintptr_t)(t->mem + t->off[l]);
+                    c[0] = ((160u + (uint32_t)l) << 24) | (tbp & 0xFFFFFFu);
+                    c[1] = ((168u + (uint32_t)l) << 24) | ((((tbp >> 8) & 0xF0000u) | (uint32_t)t->tbw[l]) & 0xFFFFFFu);
+                    c[2] = ((184u + (uint32_t)l) << 24) | (uint32_t)((ge_exp(t->h >> l) << 8) | ge_exp(t->w >> l));
+                }
+                c[0] = 0xCB000000u;     /* TEXFLUSH */
+                gu_list->current = c + 1;
+            } else
+                for (int l = 0; l < t->levels; l++) sceGuTexImage(l, t->w >> l, t->h >> l, t->tbw[l], t->mem + t->off[l]);
         }
-        sceGuTexMode(fmt_psm(t->fmt), t->levels - 1, 0, (gu_debug & 4) ? 0 : 1);
-        for (int l = 0; l < t->levels; l++) sceGuTexImage(l, t->w >> l, t->h >> l, t->tbw[l], t->mem + t->off[l]);
         bound_tex = h;
     }
     if (su != tex_su || sv != tex_sv) { sceGuTexScale(su, sv); tex_su = su; tex_sv = sv; }
@@ -1235,6 +1321,7 @@ static void apply_blend_depth(const draw_state *s) {
 }
 
 static void apply_state(const draw_state *s) {
+    rc.states++;
     apply_blend_depth(s);
     if (s->cull == DRAW_CULL_NEGATIVE || s->cull == DRAW_CULL_POSITIVE) {
         /* draw_gl.c: POSITIVE = GL front face CW in GL's y-up window space,
@@ -1406,9 +1493,6 @@ static void set_proj(int pass, int p) {
  * move it to the end of what is written as before.  pspsdk's own state
  * (src/gu/guInternal.h): gu_list is the open list, ge_list_executed[0] the
  * GU_DIRECT list's queue id; replay() only runs in that context. */
-typedef struct { unsigned int *start, *current; int parent_context; } pspsdk_gu_list;
-extern pspsdk_gu_list *gu_list;
-extern int ge_list_executed[2];
 static int ge_draws_unstalled;
 static inline void ge_draw(int prim, int vtype, int count, const void *v) {
     if (!ge_stall_every) { sceGuDrawArray(prim, vtype, count, 0, v); return; }
@@ -1463,32 +1547,36 @@ static void replay(void) {
             sceGuClear(GU_DEPTH_BUFFER_BIT);
             if (!aspect_wide) sceGuScissor(SCR_W / 8, 0, SCR_W * 7 / 8, SCR_H);
         }
-        int st = -1, pj = -1, mt = -1;
+        int st = -1, pj = -1, mt = -1, restore = 0;
         for (int i = 0; i < nitems[pass]; i++) {
             gu_item *it = &items[pass][i];
             if (it->prim == PRIM_MODEL) {     /* a persistent model: its matrix, then its own list */
                 if (it->proj != pj) { set_proj(pass, it->proj); pj = it->proj; }
-                if (it->mat != mt) { sceGuSetMatrix(GU_MODEL, &mesh_mats[it->mat]); mt = it->mat; }
+                if (it->mat != mt) { sceGuSetMatrix(GU_MODEL, &mesh_mats[it->mat]); mt = it->mat; rc.mats++; }
                 model_call(it->n);
-                st = -1;                      /* the list set its own states (the shadow knows which) */
-                stats.draw_calls++;
+                st = -1; restore = 0;         /* the list set its own states (the shadow knows which) */
+                stats.draw_calls++; rc.models++;
                 continue;
             }
             const draw_state *s = &rstates[it->state];
-            if (it->state != st) { apply_state(s); st = it->state; }
+            if (it->state != st) { apply_state(s); st = it->state; restore = 0; }
+            else if (restore) { apply_blend_depth(s); restore = 0; rc.restores++; }
             if (it->proj != pj) { set_proj(pass, it->proj); pj = it->proj; }
-            if (it->mat != mt) { sceGuSetMatrix(GU_MODEL, it->mat >= 0 ? &mesh_mats[it->mat] : &mesh_ident); mt = it->mat; }
+            if (it->mat != mt) { sceGuSetMatrix(GU_MODEL, it->mat >= 0 ? &mesh_mats[it->mat] : &mesh_ident); mt = it->mat; rc.mats++; }
             if (it->ix) ge_draw_ix(it->prim, VTX_FMT | GU_INDEX_16BIT, it->n, it->ix, it->v);
             else ge_draw(it->prim, VTX_FMT, it->n, it->v);
             stats.draw_calls++;
+            if (it->mat >= 0) rc.meshes++; else rc.strips++;
             if (it->on) {                 /* the offset colour: additive, untextured, at equal depth */
                 sh_offset_pass();
                 if (it->ix) ge_draw_ix(GU_TRIANGLES, OVTX_FMT | GU_INDEX_16BIT, it->on, it->ix, it->ov);
                 else ge_draw(GU_TRIANGLE_STRIP, OVTX_FMT, it->on, it->ov);
-                stats.draw_calls++;
-                apply_blend_depth(s);     /* the texture stays bound; only its enable changed */
+                stats.draw_calls++; rc.offsets++;
+                if (replay_v2 & 2) restore = 1;   /* put back only if the next item keeps this state */
+                else { apply_blend_depth(s); rc.restores++; }   /* the texture stays bound; only its enable changed */
             }
         }
+        if (restore) { apply_blend_depth(&rstates[st]); rc.restores++; }   /* the pass ends in the item's own state */
         if (mt >= 0) sceGuSetMatrix(GU_MODEL, &mesh_ident);
     }
 }
@@ -2505,6 +2593,7 @@ static void model_build_list(gmodel *g) {
     const uint32_t live_tex = bound_tex;
     const float live_su = tex_su, live_sv = tex_sv;
     sh_reset(&sh);
+    in_model_build = 1;
     sceGuStart(GU_CALL, g->list);
     /* pspsdk keeps the depth range per context and sceGuDepthOffset re-sends
      * it from there: the call context needs draw_init's range, or every
@@ -2518,10 +2607,11 @@ static void model_build_list(gmodel *g) {
         if (ms->off && g->ov) {
             sh_offset_pass();
             sceGuDrawArray(GU_TRIANGLES, OVTX_FMT | GU_INDEX_16BIT, (int)ms->icount, g->ix + ms->ifirst, g->ov + ms->vfirst);
-            apply_blend_depth(&ms->st);
+            if (!(replay_v2 & 2)) apply_blend_depth(&ms->st);   /* else the next set's state sends what differs; sh_end keeps the rest */
         }
     }
     uint32_t used = (uint32_t)sceGuFinish();
+    in_model_build = 0;
     g->sh_end = sh; g->tex_end = bound_tex; g->su_end = tex_su; g->sv_end = tex_sv;
     sh = live; bound_tex = live_tex; tex_su = live_su; tex_sv = live_sv;
     if (used > g->list_cap) {               /* past the end already: stop before more harm */

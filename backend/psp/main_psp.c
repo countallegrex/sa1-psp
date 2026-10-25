@@ -21,6 +21,9 @@
  *   --cull-flip     the other winding convention for PowerVR culling (draw_gu.c)
  *   --no-ta-direct  the recompiled TA strip writers instead of the native ones (docs/ta-direct.md)
  *   --gu-split Z    the depth passes' split (draw_gu.c, default 16; 0: one pass)
+ *   --replay-v2 N   replay levers, a bitmask (draw_gu.c, default 26; 0 = as
+ *                   f6b): 2 no restore after offset passes, 8 bind words with
+ *                   one texflush, 16 binds as a CALL of a prebuilt block
  *   --ge-shadow on|off  replay sends only the GE states that change (draw_gu.c,
  *                   default on; off: every state per item, as before)
  *   --cell-ge on|off  renderer native: land models and cells the GE refused
@@ -103,6 +106,7 @@ int draw_gu_ge_near_test(const char *path);
 void draw_gu_set_split(float z);
 void draw_gu_set_cell_ge(int on);
 void draw_gu_set_ge_shadow(int on);
+void draw_gu_set_replay_v2(int bits);
 void draw_gu_set_lod_bias(float b);
 void draw_gu_set_max_mip(int n);
 void draw_gu_set_tex_pool(int on, int reserve_kb);
@@ -572,6 +576,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--gu-debug") && i + 1 < args_c) draw_gu_set_debug(atoi(av[++i]));
         else if (!strcmp(av[i], "--gu-split") && i + 1 < args_c) draw_gu_set_split((float)atof(av[++i]));
         else if (!strcmp(av[i], "--ge-shadow") && i + 1 < args_c) draw_gu_set_ge_shadow(strcmp(av[++i], "off") != 0);   /* draw_gu.c: state shadow in replay (f6b) */
+        else if (!strcmp(av[i], "--replay-v2") && i + 1 < args_c) draw_gu_set_replay_v2(atoi(av[++i]));   /* draw_gu.c: p2 replay levers (bitmask) */
         else if (!strcmp(av[i], "--cell-ge") && i + 1 < args_c) draw_gu_set_cell_ge(strcmp(av[++i], "off") != 0);   /* draw_gu.c: native land in the near pass on the GE */
         else if (!strcmp(av[i], "--gu-lod-bias") && i + 1 < args_c) draw_gu_set_lod_bias((float)atof(av[++i]));
         else if (!strcmp(av[i], "--gu-max-mip") && i + 1 < args_c) draw_gu_set_max_mip(atoi(av[++i]));

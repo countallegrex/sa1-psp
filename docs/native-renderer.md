@@ -467,3 +467,27 @@ f200 1.0 % px, largest region 1 and 2 px (gate PASS).  ABBA x3, frame skip
 off, f300/f450: ec ta 76.98 -> default 68.81, ss ta 38.42 -> default 35.50.
 Heap at f210: ec largest free block 2496 KB (TA 3072), heap in use +516 KB;
 ss 2304 KB (TA 2752).
+
+### 6.6 p2 (2026-10-25): texture binds as CALLs
+
+A sampled profile of the native replay (ec 7.07 ms) put its time in the item
+loop's first loads and in the last store of pspsdk's texture calls
+(sceGuTexFlush), not in the per-item state logic: the cost was the display
+list's uncached stores draining.  An item prefetch changed nothing.
+Counters (`draw: replay per frame`) showed 680 full texture binds a frame in
+ec (of ~890 items), each ~20 list words (CLUT, TexMode, per level TexImage
+and a flush).  Each texture slot now gets its bind prebuilt once in a block
+of its own (rewritten when the slot's memory, levels or CLUT change, written
+through the uncached alias) and the replay CALLs it: 2 words a bind.  Model
+lists keep inline binds (no nested CALL), with one flush per bind; the state
+put back after an offset-colour pass is now sent only when the next item
+keeps that state.  `--replay-v2 0` restores the f6b replay for A/B.
+
+Console, one binary, ABBA x3, frame skip off, f300/f450: ec 68.35 -> 66.79
+(replay 7.05 -> 4.12; list high water 86 -> 41 KB), ss 35.22 -> 34.80
+(replay 2.00 -> 1.67).  The frame gains less than the replay row (ec: rest
++1.4 ms, spread over game-thread functions; the GE now runs later into the
+next frame).  Pictures byte-identical on and off (ss, ec, f200/f201/f400/
+f401).  Heap +26 KB ec, +16 KB ss; largest free block unchanged.  The
+binds-only variant (raw words, one flush) gave ec -0.23, ss +0.09; the
+restore change alone nothing measurable.
