@@ -8,12 +8,17 @@ a synthetic run; this checks the tape header and its round trip through
 tools/tape_io.py, builds a check file with tools/tape_expect.py from the
 run's watch trace, replays the tape against it (pass), against altered
 check files (primary fails, secondary only drifts), with an unreachable
---expect-frame and with another title (refused), and runs
-tools/replay_test.py without SA1_DUMP (skips).
+--expect-frame and with another title (refused), checks tools/tape_diff.py
+(diff, and band, the tolerance comparer, on altered traces: in band passes,
+off route, an extra death, out of band and a short run fail, --exact fails
+what is not bit-identical), and runs tools/replay_test.py without SA1_DUMP
+(skips).
 
 Part of sa1-psp (MIT).
 """
+import contextlib
 import hashlib
+import io
 import os
 import subprocess
 import sys
@@ -123,6 +128,61 @@ def main():
     expect("tape_diff diff: a 1-frame slip is not a divergence, a real change is", rc == 1)
     rc = tape_diff.main(["diff", j("trace.tsv"), j("other.tsv"), "--watch", WATCH, "--slip", "0", "--context", "0"])
     expect("tape_diff diff --slip 0: the slip diverges", rc == 1)
+
+    # tape_diff band, the tolerance comparer: variants of the synthetic trace
+    def variant(name, fn, upto=None):
+        out = [lines[0]]
+        for line in lines[1:]:
+            if not line:
+                continue
+            c = line.split("\t")
+            fr = int(c[0])
+            if upto is not None and fr > upto:
+                break
+            fn(fr, c, lambda n: hdr.index(n))
+            out.append("\t".join(c))
+        with open(j(name), "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+        return j(name)
+
+    def band(*args):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = tape_diff.main(["band", *args, "--watch", WATCH])
+        return rc, buf.getvalue()
+
+    def noise(fr, c, ix):                   # positions 1.5 off, rand() elsewhere, rings a frame late
+        c[ix("player_x")] = str(float(c[ix("player_x")]) + 1.5)
+        c[ix("rng_seed")] = str(int(float(c[ix("rng_seed")])) + 1)
+        if fr >= 300:
+            c[ix("rings")] = str(((fr - 2) // 50) % 7)
+
+    def route(fr, c, ix):
+        if fr >= 400:
+            c[ix("level")] = "27"
+
+    def death(fr, c, ix):
+        if fr >= 600:
+            c[ix("lives")] = str(int(float(c[ix("lives")])) - 1)
+
+    rc, out = band(j("trace.tsv"), j("trace.tsv"), "--exact")
+    expect("tape_diff band --exact: a trace against itself passes", rc == 0 and "band: PASS exact" in out, out)
+    nz = variant("noise.tsv", noise)
+    rc, out = band(j("trace.tsv"), nz)
+    expect("tape_diff band: in-band positions, other rand(), late rings pass", rc == 0 and "band: PASS" in out, out)
+    expect("tape_diff band: reports the largest deviation", "max 1.5 at game frame" in out, out)
+    rc, out = band(j("trace.tsv"), nz, "--exact")
+    expect("tape_diff band --exact: the same run fails bit-exact", rc == 1 and "band: FAIL exact" in out, out)
+    rc, out = band(j("trace.tsv"), nz, "--band", "1")
+    expect("tape_diff band --band 1: 1.5 off fails positions", rc == 1 and "band: FAIL positions" in out, out)
+    rc, out = band(j("trace.tsv"), j("other.tsv"))
+    expect("tape_diff band: 100 off fails positions", rc == 1 and "band: FAIL positions" in out, out)
+    rc, out = band(j("trace.tsv"), variant("route.tsv", route))
+    expect("tape_diff band: another level fails the route", rc == 1 and "band: FAIL route: level" in out, out)
+    rc, out = band(j("trace.tsv"), variant("death.tsv", death))
+    expect("tape_diff band: an extra lives change fails events", rc == 1 and "band: FAIL events: lives" in out, out)
+    rc, out = band(j("trace.tsv"), variant("short.tsv", lambda fr, c, ix: None, upto=800))
+    expect("tape_diff band: a run that stops early fails the end", rc == 1 and "band: FAIL end" in out, out)
 
     env = dict(os.environ)
     env.pop("SA1_DUMP", None)

@@ -282,6 +282,55 @@ faster load). Secondary rows sample the `exact` watches every 600 frames
 and at the last frame. It reads a `--watch-trace` file (exact to the
 frame) or a set of `--dump` files.
 
+## Tolerance compare (`tape_diff.py band`)
+
+Since 2026-10-25 a run need not be bit-identical to count as the same
+game: RNG and float exactness are no longer required (native and VFPU
+math, native rewrites of hot routines). What must hold is what a player
+sees. `tools/tape_diff.py band` judges that from two watch traces of the
+same tape, a reference and the run under test (desktop before and after
+a change, desktop and PSP):
+
+```
+sa1psp ... --replay T.tape --watch-list tests/replay/watch.txt --watch-trace ref.tsv
+sa1psp ... --replay T.tape --watch-list tests/replay/watch.txt --watch-trace run.tsv   # the change
+python tools/tape_diff.py band ref.tsv run.tsv
+```
+
+Both traces are aligned by game frame (`game_frame`; a Flycast trace by
+its `oracle_g` column). The run passes when:
+
+* **route**: the changes of the `milestone` watches (game mode, level,
+  act) come in the same order, each within the check files' slack
+  (300 + 2 % of the frame, here in game frames);
+* **events**: every integer `exact` watch (rings, lives; a lives change
+  is a death or a 1-up) runs through the same values in the same order,
+  each change within `--event-slip` game frames (default 30);
+* **positions**: the float `exact` watches, taken as one vector (the
+  player's X, Y, Z), stay within `--band` (default: the watch list's
+  largest tolerance, 4.0) of the reference, or of the reference up to
+  `--slip` game frames earlier or later (default 2); game frames within
+  `--settle` (30) of a milestone change, where the game teleports the
+  player, and frames where the runs are in different scenes are left out;
+* **end**: the run reaches the reference's last game frame, within
+  `--event-slip` (no trap, no soft-lock); `--until G` compares up to game
+  frame G only. Unmatched route changes and events near the end of the
+  shorter run are not counted against it.
+
+It prints the largest position deviation and its game frame whether it
+passes or not: that is the band a native routine holds, the number its
+landing reports. The verdict is one line, `band: PASS ...` or
+`band: FAIL route|events|positions|end ...`; exit 0, 1, or 2 when there
+is nothing to compare. `--exact` is the bit-exact compare, kept for
+debugging: every column but the vblank (rng_seed included) equal on every
+frame, aligned by vblank (by game frame for an oracle trace).
+`tape_diff.py diff` is unchanged.
+
+Reference traces hold guest RAM values, so they stay outside the
+repository: `../private/p3/` (name them `TAPE_desk_COMMIT.tsv`). Record a
+fresh one from the build before a change; a trace from an older build is
+only a reference while the route still matches it.
+
 ## Flycast differential (the oracle)
 
 ```
