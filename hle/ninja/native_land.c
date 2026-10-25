@@ -848,7 +848,81 @@ void native_land_captured(uint32_t tag, const draw_state *s) {
     if (++v->nst == md->ngroup) build(md, v);
 }
 
+/* --strip-census: which 0x8C037990 corners f7 slice 1 could take (textured,
+ * opaque list, not environment-mapped, a dynamic node whose own sphere
+ * passes draw_mesh_test), and the points of nodes made only of such sets
+ * (the transform slice 1 skips).  A measurement aid: the marker's fourth
+ * word carries the tag (draw scratch only). */
+int hle_strip_census;
+#define CN_MAX 1024u
+#define CN_MAGIC 0x5C000000u
+enum { CN_SEEN = 1, CN_BAD = 2, CN_LAND = 4, CN_PASS = 8 };
+static uint32_t cn_seq, cn_cur = CN_MAX, cn_pts[CN_MAX];
+static uint8_t cn_st[CN_MAX];
+static uint64_t cn_nodes, cn_nodes_land, cn_nodes_lnat, cn_res[5], cn_over, cn_frames;
+static uint64_t cn_wr_all, cn_wr_env, cn_wr_land, cn_wr_lnat, cn_op, cn_op_tex, cn_elig, cn_untagged, cn_pts_dyn, cn_pts_whole, cn_pts_pass;
+void census_node(sh4_ctx *c, uint32_t model, int land_native) {
+    if (land_native) { cn_cur = CN_MAX; cn_nodes_lnat++; return; }     /* land on the native path: its TA-way sets */
+    if (cn_seq >= CN_MAX) { cn_over++; cn_cur = CN_MAX - 1u; return; }
+    const uint32_t s = cn_seq++;
+    cn_cur = s;
+    cn_nodes++;
+    const int land = find_model(model) != NULL;
+    float m[16], b[4] = { hle_rdf(model + 24), hle_rdf(model + 28), hle_rdf(model + 32), hle_rdf(model + 36) };
+    game_matrix(c, m);
+    const int p = draw_mesh_test(m, b);
+    cn_res[p >= 0 ? 0 : -p <= 4 ? -p : 1]++;
+    cn_pts[s] = hle_rd32(model + 8);
+    cn_st[s] = (uint8_t)((land ? CN_LAND : 0) | (p >= 0 ? CN_PASS : 0));
+    if (land) cn_nodes_land++;
+}
+uint32_t census_writer(uint32_t corners, int env) {
+    cn_wr_all += corners;
+    if (env) cn_wr_env += corners;
+    if (cn_cur == CN_MAX) { cn_wr_lnat += corners; return CN_MAGIC | (env ? 0x1000u : 0) | 0x3FFu; }
+    if (cn_st[cn_cur] & CN_LAND) cn_wr_land += corners;
+    return CN_MAGIC | (env ? 0x1000u : 0) | cn_cur;
+}
+void census_marker(uint32_t tag, uint32_t n, int list, int textured, int sorted) {
+    if ((tag & 0xFF000000u) != CN_MAGIC) { cn_untagged += n; return; }
+    const uint32_t s = tag & 0x3FFu;
+    const int env = (tag & 0x1000u) != 0, node = s < cn_seq && s < CN_MAX;
+    if (node) cn_st[s] |= CN_SEEN;
+    if (list == 0 && !sorted) {
+        cn_op += n;
+        if (textured) cn_op_tex += n;
+        if (textured && !env && node && (cn_st[s] & (CN_LAND | CN_PASS)) == CN_PASS) { cn_elig += n; return; }
+    }
+    if (node) cn_st[s] |= CN_BAD;
+}
+void census_frame(void) {
+    if (!hle_strip_census) return;
+    for (uint32_t s = 0; s < cn_seq; s++) {
+        if (cn_st[s] & CN_LAND) continue;
+        cn_pts_dyn += cn_pts[s];
+        if (cn_st[s] & CN_PASS) cn_pts_pass += cn_pts[s];
+        if ((cn_st[s] & (CN_SEEN | CN_BAD | CN_PASS)) == (CN_SEEN | CN_PASS)) cn_pts_whole += cn_pts[s];
+    }
+    cn_seq = 0; cn_cur = CN_MAX;
+    cn_frames++;
+}
+static void census_report(void) {
+    if (!hle_strip_census || !cn_frames) return;
+    const double f = (double)cn_frames;
+    sa1_log("strip census: %llu frames; per frame: nodes %.1f (TA-way land %.1f, native land %.1f), sphere pass %.1f / near %.1f / guard %.1f / split %.1f / other %.1f; %llu over the node cap",
+            (unsigned long long)cn_frames, cn_nodes / f, cn_nodes_land / f, cn_nodes_lnat / f,
+            cn_res[0] / f, cn_res[2] / f, cn_res[3] / f, cn_res[4] / f, cn_res[1] / f, (unsigned long long)cn_over);
+    const double dyn = (double)(cn_wr_all - cn_wr_land - cn_wr_lnat);
+    sa1_log("strip census: writer corners/frame %.0f (env %.0f, TA-way land %.0f, native-land leftovers %.0f, dynamic %.0f); opaque-list corners %.0f (textured %.0f); ELIGIBLE %.0f = %.1f %% of dynamic, %.1f %% of all; untagged %.0f",
+            cn_wr_all / f, cn_wr_env / f, cn_wr_land / f, cn_wr_lnat / f, dyn / f, cn_op / f, cn_op_tex / f, cn_elig / f,
+            dyn > 0 ? 100.0 * cn_elig / dyn : 0.0, cn_wr_all ? 100.0 * cn_elig / cn_wr_all : 0.0, cn_untagged / f);
+    sa1_log("strip census: dynamic points/frame %.0f, in sphere-passing nodes %.0f, in whole-eligible nodes %.0f = %.1f %%",
+            cn_pts_dyn / f, cn_pts_pass / f, cn_pts_whole / f, cn_pts_dyn ? 100.0 * cn_pts_whole / cn_pts_dyn : 0.0);
+}
+
 void native_land_init(void) {
+    if (hle_strip_census && hle_strict) { sa1_log("strip census: off (strict run)"); hle_strip_census = 0; }
+    if (hle_strip_census) sa1_log("strip census: on (a measurement aid)");
     int on = hle_renderer_cli >= 0 ? hle_renderer_cli : hle_renderer_native;
     const int lc = hle_land_cull_cli >= 0 ? hle_land_cull_cli : hle_land_cull;
     cull = lc != 0;
@@ -876,6 +950,7 @@ void native_land_init(void) {
 }
 
 void native_land_report(void) {
+    census_report();
     report_ta();
     if (cull_check) sa1_log("land check: %u of %u cull decisions differ from view_out's", chk_mis, chk_dec);
     if (n_decide) sa1_log("native land: %u transforms asked, %u in the land range, %u land models (%u by the hint); plane normals made %u times", n_decide, n_inr, n_range, n_hint, pc_miss);

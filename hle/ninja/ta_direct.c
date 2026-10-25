@@ -186,8 +186,10 @@ static inline __attribute__((always_inline)) void tad_run(sh4_ctx *c, const int 
                 *(sa1_u32a *)(void *)(mk + 0) = TA_MARKER;
                 *(sa1_u32a *)(void *)(mk + 4) = first;
                 *(sa1_u32a *)(void *)(mk + 8) = n;
+                if (hle_strip_census) *(sa1_u32a *)(void *)(mk + 12) = census_writer(n, env);
             } else {
                 WR32(r14, 0, TA_MARKER); WR32(r14, 4, first); WR32(r14, 8, n);
+                if (hle_strip_census) WR32(r14, 12, census_writer(n, env));
             }
             mk += 32; r14 += 32;
         }

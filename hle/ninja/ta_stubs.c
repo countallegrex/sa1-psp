@@ -106,8 +106,10 @@ void fn_8c037294(sh4_ctx *c) {
     if (hle_draw_skip) return;   /* frame skip: no picture this frame (hle/game/frame_skip.c) */
     if (native_land_window && native_land_decide(c, c->r[4])) {  /* native_land.c: the backend transforms */
         WR32(c->gbr, 60, RD32(0x8c88f64cu, 0));                  /* the vertex buffer, for the lighting */
+        if (hle_strip_census) census_node(c, c->r[4], 1);
         return;
     }
+    if (hle_strip_census) census_node(c, c->r[4], 0);
     if (hle_ta_direct && !kamui_ptr_trace()) {
         HLE_ENTER(0x8c037294u, "TA writer fn_8c037294");
         ta_xform_8c037294(c);

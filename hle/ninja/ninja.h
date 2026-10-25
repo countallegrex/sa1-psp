@@ -60,6 +60,14 @@ void native_land_lit(sh4_ctx *c, uint32_t model);
 int native_land_set(sh4_ctx *c, uint32_t model, uint32_t set, uint32_t ta, uint32_t *ta_out);
 void native_land_init(void);
 void native_land_report(void);
+/* --strip-census (native_land.c; f7 slice 1's measurement, off in strict runs):
+ * a sphere test per dynamic node, a tag on each 0x8C037990 marker, counts at
+ * kamui's parse, the totals at exit. */
+extern int hle_strip_census;
+void census_node(sh4_ctx *c, uint32_t model, int land_native);
+uint32_t census_writer(uint32_t corners, int env);
+void census_marker(uint32_t tag, uint32_t n, int list, int textured, int sorted);
+void census_frame(void);
 struct draw_state;
 void native_land_captured(uint32_t tag, const struct draw_state *s);   /* kamui: the state a kind-1 set drew with */
 void ta_direct_8c037990(sh4_ctx *c);

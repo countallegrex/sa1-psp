@@ -946,8 +946,10 @@ static void parse_region(uint32_t start, uint32_t end, int want_list, int sorted
         }
         if (type == 6) {                                   /* a TA-bypass strip (ta_direct.c): host vertices */
             uint32_t first = TRD32(p + 4), n = TRD32(p + 8);
-            if (pc.list == want_list && !pc.modvol && !pc.sprite && first <= ndverts && n <= ndverts - first)
+            if (pc.list == want_list && !pc.modvol && !pc.sprite && first <= ndverts && n <= ndverts - first) {
                 direct_strip(&pc, dverts + first, n, sorted);
+                if (hle_strip_census) census_marker(TRD32(p + 12), n, (int)pc.list, pc.textured, sorted);
+            }
             p += 32;
             continue;
         }
@@ -1069,6 +1071,7 @@ static void render_lists(void) {
     last_tris = ds->triangles; last_calls = ds->draw_calls;
     for (int i = 0; i < 3; i++) last_polys[i] = frame_polys[i];
     stat_frames++;
+    census_frame();
     frame_rendered = 1;
     parse_us += sa1_plat_time_us() - t_start; parse_frames++;
 }
