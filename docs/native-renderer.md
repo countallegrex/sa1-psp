@@ -454,3 +454,16 @@ ABBA x3, one binary: ec ta 79.19 -> 77.63 (replay 6.94 -> 4.83), native
 36.64 (replay 3.55 -> 1.91).  The native replay's remaining 6.9 ms in ec is
 not state: per-item matrix and projection sets, list CALLs and the item
 loop, the next thing to split.
+
+### 6.5 n1 (2026-10-25): native is the default
+
+The maintainer compared TA and native console shots (ss and ec, f200/f400) and saw
+no difference, so `renderer = native` is now the default on both backends;
+`renderer = ta` (sa1psp.ini) or `--renderer ta` selects the TA path, and
+strict runs (tapes, oracle and picture/RAM comparisons) keep TA unless
+forced, as before.  Console, one binary (bfcddb0): default shots
+byte-identical to `--renderer native`; against TA, ss f200 13.3 % px and ec
+f200 1.0 % px, largest region 1 and 2 px (gate PASS).  ABBA x3, frame skip
+off, f300/f450: ec ta 76.98 -> default 68.81, ss ta 38.42 -> default 35.50.
+Heap at f210: ec largest free block 2496 KB (TA 3072), heap in use +516 KB;
+ss 2304 KB (TA 2752).
