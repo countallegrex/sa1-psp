@@ -331,6 +331,44 @@ repository: `../private/p3/` (name them `TAPE_desk_COMMIT.tsv`). Record a
 fresh one from the build before a change; a trace from an older build is
 only a reference while the route still matches it.
 
+### Save-state segments (`tools/segment_test.py`)
+
+A whole-tape compare stops meaning anything once the run under test
+moves the rand() sequence: the tape's inputs are indexed by vblank, so
+after an RNG-driven fight (Chaos 0) they reach other moments of play.
+For game-code changes (plan-30fps.md section 8) the tape is judged scene
+by scene instead:
+
+```
+SA1_DUMP=..\private\dump\sa1_us_1005 python tools/segment_test.py sonic_to_ec1_start --b=--fmac --b=fused
+```
+
+replays the tape once for a reference trace, cuts it at each milestone
+change (segments of at least `--min-len` 300 frames, the first from
+boot), replays it again with a save state at each cut, then replays every
+segment from its state twice in the same build: with the A options and
+with A + B, B being the change under test as a runtime switch. The A run
+must equal the reference bit for bit (the state restores the game), and
+the B run must pass `tape_diff.py band` (4.0 units, +-2 slip, events 30)
+up to the game frame before rand() first splits, or to the segment's end.
+A band exit before that fails the segment. With no `--b` the driver checks
+itself: every segment identical. One line per segment; exit 0 when all
+pass. `--starts F,F,...` sets the cuts by hand.
+
+On `sonic_to_ec1_start` (5 segments, about 2 minutes): no B, all
+identical; `--fmac fused` all pass, with rand() splitting in the Chaos 0
+fight (game frame 4246) and in Emerald Coast (8227), largest deviation
+1.51 units before a split; a `--poke` of the player's X in Station
+Square fails exactly that segment.
+
+`--psp` runs the same on the console (`tools/psp_run.py`, the build in
+`build-psp/sa1psp`; states of ~25 MB stay in its `psplink-run/`). The
+self-check there passes on `sonic_to_ec1_start` (5 segments, each loaded
+run identical to the straight one, rng_seed included; about 31 minutes):
+the PSP's save states restore the game exactly. The PSP's cuts fall where
+its own run has its milestones (it leaves the Chaos 0 fight later than
+the desktop), so desktop and PSP are each judged against themselves.
+
 ## Flycast differential (the oracle)
 
 ```

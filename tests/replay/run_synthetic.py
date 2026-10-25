@@ -184,8 +184,21 @@ def main():
     rc, out = band(j("trace.tsv"), variant("short.tsv", lambda fr, c, ix: None, upto=800))
     expect("tape_diff band: a run that stops early fails the end", rc == 1 and "band: FAIL end" in out, out)
 
+    import segment_test
+    w = tape_expect.read_watch(WATCH)
+    starts = segment_test.segment_starts(j("trace.tsv"), w, 30, 100, 1000)
+    expect("segment_test: segment starts at the milestones, short ones merged",
+           starts and all(b - a >= 100 for a, b in zip([1] + starts, starts)) and 400 in starts, str(starts))
+    expect("segment_test: no rand() split between a trace and itself",
+           segment_test.rng_split(j("trace.tsv"), j("trace.tsv")) is None)
+    sp = segment_test.rng_split(j("trace.tsv"), nz)
+    expect("segment_test: the first rand() split is found", sp is not None and sp[0] == 1, str(sp))
+
     env = dict(os.environ)
     env.pop("SA1_DUMP", None)
+    p = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "segment_test.py"), "title_menu"], env=env,
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    expect("segment_test.py skips without SA1_DUMP", p.returncode == 0 and p.stdout.startswith("skip"), p.stdout)
     p = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "replay_test.py")], env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     expect("replay_test.py skips without SA1_DUMP", p.returncode == 0 and p.stdout.startswith("skip"), p.stdout)
