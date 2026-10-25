@@ -166,8 +166,14 @@ int draw_model(uint32_t handle, const float m[16]);
 /* Per-cell counters since the last call (cells and triangles: out of view,
  * on the GE, through the CPU path; models drawn by cells; triangles drawn
  * the CPU way by draw_mesh), then reset. */
-typedef struct draw_cell_stats { uint32_t models, cells[3], tris[3], mesh_cpu_tris; } draw_cell_stats;
+typedef struct draw_cell_stats { uint32_t models, cells[5], tris[5], mesh_cpu_tris, whole[2]; } draw_cell_stats;   /* by DRAW_CELL_*; whole: models on the GE whole in the near pass, in both */
 void draw_cell_stats_take(draw_cell_stats *out);
+/* The native land renderer is on (native_land.c, at its start): a backend
+ * may then draw refused models on the GE in more cases (draw_gu.c's near
+ * pass depth floor).  draw_mesh_ge_whole: such a model, refused by
+ * draw_mesh_test, still goes to the GE whole (draw_model takes it). */
+void draw_set_native(int on);
+int draw_mesh_ge_whole(const float m[16], const float bound[4]);
 
 /* The GE's limits as the PSP backend has them (draw_gu.c), shared so the
  * desktop can apply the same rules for its counts and pictures.  The guard
@@ -205,11 +211,11 @@ static inline int draw_ge_geo(const float *m, const float *bound, float zn, floa
 /* The per-cell test for one matrix: rows 0, 1, 3 of m (x z, y z, z), their
  * lengths and those of the five view planes (native_land.c view_out's: z >=
  * 0, the wide view's x range and y 0..480, an 8-pixel margin). */
-typedef struct draw_cell_view { const float *m; float n0, n1, n3, pn[5]; float zfloor; } draw_cell_view;
+typedef struct draw_cell_view { const float *m; float n0, n1, n3, pn[5]; float zfloor, split; int ge_near; } draw_cell_view;
 static const float draw_cell_planes[5][3] = {   /* coefficients of x z, y z, z */
     { 0, 0, 1 }, { 1, 0, -(DRAW_WIDE_LEFT - 8.0f) }, { -1, 0, DRAW_WIDE_RIGHT + 8.0f }, { 0, 1, 8.0f }, { 0, -1, 488.0f } };
 static inline void draw_cell_prep(draw_cell_view *cv, const float *m, float zfloor) {
-    cv->m = m; cv->zfloor = zfloor;
+    cv->m = m; cv->zfloor = zfloor; cv->split = 0.0f; cv->ge_near = 0;
     cv->n0 = __builtin_sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]);
     cv->n1 = __builtin_sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
     cv->n3 = __builtin_sqrtf(m[3] * m[3] + m[7] * m[7] + m[11] * m[11]);
@@ -219,7 +225,18 @@ static inline void draw_cell_prep(draw_cell_view *cv, const float *m, float zflo
         cv->pn[k] = __builtin_sqrtf(a0 * a0 + a1 * a1 + a2 * a2);
     }
 }
-enum { DRAW_CELL_OUT = 0, DRAW_CELL_GE = 1, DRAW_CELL_CPU = 2 };
+/* The classes: out of view; on the GE in the far pass; the CPU path; and,
+ * with ge_near (the near pass's depth floor, draw_gu.c): on the GE in the
+ * near pass (wholly nearer than the split; the GE clips it at z = 1 if it
+ * crosses there, as the console test showed), or in both passes (every
+ * vertex at z >= 1, spanning the split: the far pass's projection clips at
+ * the split, the near pass's depth floor drops what lies past its far end).
+ * The guard band holds for the part at z >= 1 (behind it the GE clips). */
+enum { DRAW_CELL_OUT = 0, DRAW_CELL_GE = 1, DRAW_CELL_CPU = 2, DRAW_CELL_NEAR = 3, DRAW_CELL_BOTH = 4 };
+static inline int draw_cell_guard(float x0, float x1, float y0, float y1, float zlo, float zhi) {
+    return x0 > DRAW_GE_GUARD_X0 * zlo && x0 > DRAW_GE_GUARD_X0 * zhi && x1 < DRAW_GE_GUARD_X1 * zlo && x1 < DRAW_GE_GUARD_X1 * zhi &&
+           y0 > DRAW_GE_GUARD_Y0 * zlo && y0 > DRAW_GE_GUARD_Y0 * zhi && y1 < DRAW_GE_GUARD_Y1 * zlo && y1 < DRAW_GE_GUARD_Y1 * zhi;
+}
 static inline int draw_cell_class(const draw_cell_view *cv, const draw_model_cell *c) {
     const float *m = cv->m, *b = c->bound, r = b[3];
     const float h0 = m[0] * b[0] + m[4] * b[1] + m[8] * b[2] + m[12];
@@ -230,11 +247,11 @@ static inline int draw_cell_class(const draw_cell_view *cv, const draw_model_cel
         if (p[0] * h0 + p[1] * h1 + p[2] * h3 < -r * cv->pn[k]) return DRAW_CELL_OUT;
     }
     const float zmin = h3 - r * cv->n3, zmax = h3 + r * cv->n3, zs = 1.0f + 2.0f * c->edge * cv->n3;   /* the edge in view units */
-    if (zmin < cv->zfloor || zmin < zs) return DRAW_CELL_CPU;
     const float x0 = h0 - r * cv->n0, x1 = h0 + r * cv->n0, y0 = h1 - r * cv->n1, y1 = h1 + r * cv->n1;
-    if (!(x0 > DRAW_GE_GUARD_X0 * zmin && x0 > DRAW_GE_GUARD_X0 * zmax && x1 < DRAW_GE_GUARD_X1 * zmin && x1 < DRAW_GE_GUARD_X1 * zmax &&
-          y0 > DRAW_GE_GUARD_Y0 * zmin && y0 > DRAW_GE_GUARD_Y0 * zmax && y1 < DRAW_GE_GUARD_Y1 * zmin && y1 < DRAW_GE_GUARD_Y1 * zmax)) return DRAW_CELL_CPU;
-    return DRAW_CELL_GE;
+    if (zmin >= cv->zfloor && zmin >= zs) return draw_cell_guard(x0, x1, y0, y1, zmin, zmax) ? DRAW_CELL_GE : DRAW_CELL_CPU;
+    if (!cv->ge_near || !draw_cell_guard(x0, x1, y0, y1, zmin > 1.0f ? zmin : 1.0f, zmax)) return DRAW_CELL_CPU;
+    if (zmax <= cv->split) return DRAW_CELL_NEAR;
+    return zmin >= 1.0f ? DRAW_CELL_BOTH : DRAW_CELL_CPU;
 }
 
 /* The CPU path's triangle: a, b, c through m to the strip path's vertices

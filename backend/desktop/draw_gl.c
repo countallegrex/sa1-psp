@@ -721,6 +721,22 @@ int draw_mesh_accepts(const float m[16], const float bound[4]) { (void)m; (void)
 int draw_mesh_test(const float m[16], const float bound[4]) { return draw_ge_geo(m, bound, 1.0f, DRAW_GE_SPLIT); }
 
 static draw_cell_stats cst;
+/* The PSP's near pass GE draws (draw_gu.c draw_set_native: on with the
+ * native renderer), mirrored so the paths and counts are the console's. */
+static int native_on;
+void draw_set_native(int on) { native_on = on; }
+static int model_whole(const float *m, const float *bound) {
+    if (!native_on) return DRAW_CELL_CPU;
+    draw_cell_view cv;
+    draw_cell_prep(&cv, m, DRAW_GE_SPLIT);
+    cv.split = DRAW_GE_SPLIT; cv.ge_near = 1;
+    const draw_model_cell c = { { bound[0], bound[1], bound[2], bound[3] }, 0.0f };
+    return draw_cell_class(&cv, &c);
+}
+int draw_mesh_ge_whole(const float m[16], const float bound[4]) {
+    const int w = model_whole(m, bound);
+    return w == DRAW_CELL_NEAR || w == DRAW_CELL_BOTH;
+}
 /* The CPU path (draw.h draw_cpu_tri), as draw_gu.c's cpu_tris. */
 static void cpu_tris(const float *m, const draw_mesh_vertex *v, int nv, const uint16_t *idx, int ni) {
     draw_vertex t[4];
@@ -869,6 +885,7 @@ static int model_cells(const dmodel *d, const float *m) {
     }
     draw_cell_view cv;
     draw_cell_prep(&cv, m, DRAW_GE_SPLIT);
+    if (native_on) { cv.split = DRAW_GE_SPLIT; cv.ge_near = 1; }
     for (int c = 0; c < d->ncells; c++) { int k = draw_cell_class(&cv, &d->cells[c]); cell_cls[c] = (uint8_t)k; cst.cells[k]++; }
     cst.models++;
     const draw_state keep = cur;
@@ -883,7 +900,7 @@ static int model_cells(const dmodel *d, const float *m) {
             cst.tris[cls] += q->icount / 3u;
             if (cls == DRAW_CELL_OUT) continue;
             if (!set_on) { draw_set_state(&ms->state); set_on = 1; }
-            if (cls == DRAW_CELL_GE) mesh_emit(m, v, (int)ms->vcount, d->idx + q->ifirst, (int)q->icount);
+            if (cls != DRAW_CELL_CPU) mesh_emit(m, v, (int)ms->vcount, d->idx + q->ifirst, (int)q->icount);
             else cpu_tris(m, v, (int)ms->vcount, d->idx + q->ifirst, (int)q->icount);
         }
     }
@@ -894,7 +911,12 @@ static int model_cells(const dmodel *d, const float *m) {
 int draw_model(uint32_t h, const float m[16]) {
     if (h == 0 || h >= DMODEL_MAX || !dmodels[h].sets) return 0;
     const dmodel *d = &dmodels[h];
-    if (d->ncells && draw_ge_geo(m, d->bound, 1.0f, DRAW_GE_SPLIT) < 0) return model_cells(d, m);
+    if (d->ncells && draw_ge_geo(m, d->bound, 1.0f, DRAW_GE_SPLIT) < 0) {
+        const int w = model_whole(m, d->bound);
+        if (w == DRAW_CELL_NEAR) cst.whole[0]++;
+        else if (w == DRAW_CELL_BOTH) cst.whole[1]++;
+        else return model_cells(d, m);
+    }
     const draw_state keep = cur;
     for (int s = 0; s < d->nsets; s++) {
         const draw_model_set *ms = &d->sets[s];

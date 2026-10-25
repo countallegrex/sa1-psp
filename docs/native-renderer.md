@@ -394,3 +394,47 @@ the eye plane, crossing the far pass's near plane in front of the eye,
 wholly behind the eye, past the 4096-pixel window, both, and a control),
 writes the frame and exits: what the console's GE does with them decides
 whether the CPU path's share could be handed back to the GE.
+
+### 6.3 f6c (2026-10-25): the near pass on the GE, the picture gate
+
+- **Console test, part 2 and 3** (`--ge-near-test`, now five frames:
+  `FILE`, `FILE-n0..n2`, `FILE-c3`, `FILE-c4`).  With the near pass's
+  projection (z 1 to 1.001 split) the GE does not clip at the far end: a
+  triangle reaching past it draws there, with the depth cleared to 0 or 1
+  alike (no clamp to 0, no cull).  With a **depth floor** (depth range
+  65535..4400, the near pass's depth cleared to 4402) the part past the far
+  end gets a depth under the floor and fails the test, since z at infinity
+  lands at 328 (no wrap) and z = split at 4404.  A triangle the GE clips at
+  the near plane is not cut so (its part past the far end draws), so only
+  triangles wholly nearer than the split may be GE-clipped in the near pass.
+  Clipped triangles keep correct depth in both passes (`-c3`, `-c4`: drawn
+  over and hidden by a band as their depth says).
+- **Routing** (`--cell-ge on`, default; only with the native renderer, so
+  the default renderer's depth is unchanged): `draw.h draw_cell_class` adds
+  DRAW_CELL_NEAR (wholly nearer than the split, inside the guard band for
+  the part at z >= 1: the GE, near pass, clipping at z = 1 itself) and
+  DRAW_CELL_BOTH (every vertex at z >= 1, spanning the split: the far pass
+  clips at the split, the near pass's floor drops the rest).  The same rule
+  on a model's whole sphere (`draw_mesh_ge_whole`) sends a refused model to
+  the GE whole, one list call per pass, before any per-cell work.  Cells
+  that cross z = 1 and reach past the split, or leave the guard band, stay
+  on the CPU path.  The desktop mirrors the rule (counts, pictures).
+- **The ss picture difference** of 7c7fb64 (5.7 % / 3.6 % by the old count;
+  9.8 % / 6.3 % of pixels with any channel differing): 98.6 % of the
+  differing pixels are 4, 8 or 9 levels off, one step of the 5650 frame
+  buffer through the dither, on smooth surfaces (fewer on texture edges than
+  their share), with whole surfaces (a wall) one step off: sub-step colour
+  differences between the GE's and the CPU path's vertices and the TA
+  writer's.  No pixel run of more than 32 levels: under the v32 gate
+  (`tools/shot_compare.py`: no 8-connected region of 64+ pixels more than
+  32 levels apart, no flicker between consecutive frames) it passes, and so
+  does every f6c shot (largest region 8 px).
+- **Console, ABBA x3** (one binary, frame skip off, f300/f450): ec ta 79.41,
+  native as 7c7fb64 (`--cell-ge off`) 72.41, `--cell-ge on` 71.40 (TA 17.31
+  -> 16.01, replay 9.21 -> 9.70); ss ta 39.31, 37.34, 36.98 (TA 6.43 -> 5.49,
+  replay 2.33 -> 3.25).  This session ran ~1.3 ms slower than 7c7fb64's
+  batch on every path (ta 78.14 -> 79.41).  Heap unchanged (ec largest free
+  2560 KB, ss 2432 KB); default-path pictures byte-identical to 7c7fb64's.
+  The replay rise is the per-item state re-emission f6b removes.  Left on
+  the CPU: cells crossing z = 1 that reach past the split (ss f300: 2,712
+  cells, 5.5k tris; ec 2,025, 3.1k tris).

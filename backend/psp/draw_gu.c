@@ -138,11 +138,32 @@ static ScePspFMatrix4 proj[PASSES][PROJ_N];
 static float depth_split = 16.0f;
 static float depth_ws = 0.0625f;             /* 1 / depth_split (0 without a split), divided once here, not per run */
 static const float depth_zn = 1.0f;          /* nearer vertices (the 2D layer's) draw at z = 1, the front */
+/* The near pass's depth floor (f6c, --cell-ge, renderer native only): the
+ * depth range is 65535..DEPTH_FLOOR instead of 65535..0 and the near pass's
+ * depth is cleared to DEPTH_FLOOR + 2, so a triangle the GE draws in the
+ * near pass that reaches past its far end (z > 1.001 split, where the GE
+ * clips nothing) gets a depth under the floor there and fails the test (z
+ * at infinity: depth 328, no wrap), while z = split itself lands at 4404.
+ * The console test (--ge-near-test, -n2/-c3): unclipped triangles are cut
+ * so; a triangle the GE clips at the near plane is not (its part past the
+ * far end draws), so those only go to the GE wholly nearer than the split.
+ * Off (0) the default renderer's depth is unchanged. */
+#define DEPTH_FLOOR 4400u
+static unsigned depth_floor;
+static int ge_cells = 1;                     /* --cell-ge: cells (and whole models) on the GE in the near pass too */
 static void build_projs(void);
 void draw_gu_set_split(float z) {
     depth_split = z > 1.0f ? z : 0.0f;
     depth_ws = depth_split ? 1.0f / depth_split : 0.0f;
     build_projs();
+}
+/* --cell-ge on|off (main_psp.c, before the game starts) */
+void draw_gu_set_cell_ge(int on) { ge_cells = on; }
+static int range_dirty;                      /* depth_floor changed: replay sends the depth range */
+void draw_set_native(int on) {
+    unsigned f = on && ge_cells && depth_split ? DEPTH_FLOOR : 0u;
+    if (f != depth_floor) { depth_floor = f; range_dirty = 1; }
+    sa1_log("draw: native land: near pass GE draws %s (depth floor %u)", f ? "on" : "off", f);
 }
 static int cur_proj = -1;
 /* x in 640-space from left to right -> NDC [lo, hi]; y 0..480 -> 1..-1; the
@@ -736,7 +757,7 @@ int draw_init(int scale, int want_headless) {
     draw_fb = 0;
     sceGuOffset(2048 - SCR_W / 2, 2048 - SCR_H / 2);
     sceGuViewport(2048, 2048, SCR_W, SCR_H);
-    sceGuDepthRange(65535, 0);
+    sceGuDepthRange(65535, depth_floor);
     sceGuScissor(0, 0, SCR_W, SCR_H);
     sceGuEnable(GU_SCISSOR_TEST);
     sceGuEnable(GU_CLIP_PLANES);
@@ -950,6 +971,120 @@ int draw_gu_ge_near_test(const char *path) {
     sceGuSwapBuffers();
     draw_fb ^= FB_BYTES;
     sa1_log("ge near test: done (depth split z %.1f, far pass projection)", depth_split);
+    /* Part 2 (f6c): the near pass's far end.  The near pass's projection (z 1
+     * to just past the split), depth test GEQUAL and writes on, the replay's
+     * depth range; the depth buffer cleared to 0 (PATH with "-n0") and to 1
+     * ("-n1").  Each triangle crosses the far end; what the GE does with the
+     * part past it (z > split: depth past 0) decides whether a model that
+     * spans the split can be drawn whole in both passes:
+     *   white   (7) top vertex at z 40, bottom two at z 8: the part above
+     *           DC y ~190 lies past the far end
+     *   orange  (8) top vertices at z 40, bottom one at z 0.5 (nearer than
+     *           the near plane): both ends
+     *   grey    (9) control, wholly inside (z 4..12), bottom left
+     * Drawn past the far end in -n0 and gone in -n1: clamped to depth 0;
+     * gone in both: culled; drawn in both: neither (wraps).  "-n2": the
+     * depth floor (--ge-zfloor): the near pass ending at 1.01 split, depth
+     * range 65535..4400 and the depth cleared to 4410, so whatever lies past
+     * the far end has a depth under 4400 (none wraps: z at infinity is
+     * 368) and fails the test; the part before it draws. */
+    static const struct { float x, y, z; uint32_t abgr; } t2[] = {
+        { 160, 40, 40, 0xFFFFFFFFu }, { 60, 440, 8, 0xFFFFFFFFu }, { 260, 440, 8, 0xFFFFFFFFu },
+        { 340, 40, 40, 0xFF0080FFu }, { 600, 40, 40, 0xFF0080FFu }, { 470, 440, 0.5f, 0xFF0080FFu },
+        { 300, 300, 4, 0xFF808080u }, { 380, 300, 4, 0xFF808080u }, { 340, 460, 12, 0xFF808080u },
+    };
+    const int n2 = (int)(sizeof t2 / sizeof t2[0]);
+    for (int clr = 0; clr < 3; clr++) {
+        char p2[96];
+        snprintf(p2, sizeof p2, "%.*s-n%d.ppm", (int)(strlen(path) > 4 ? strlen(path) - 4 : strlen(path)), path, clr);
+        ge_wait();
+        sceGuStart(GU_DIRECT, list);
+        sceGuScissor(0, 0, SCR_W, SCR_H);
+        sceGuDepthRange(65535, clr == 2 ? 4400 : 0);
+        sceGuDepthMask(GU_FALSE);
+        sceGuClearColor(0xFF404040u); sceGuClearDepth(clr == 2 ? 4410u : (unsigned)clr);
+        sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+        sceGuDisable(GU_TEXTURE_2D); sceGuDisable(GU_BLEND); sceGuDisable(GU_CULL_FACE); sceGuDisable(GU_FOG);
+        sceGuDisable(GU_ALPHA_TEST);
+        sceGuEnable(GU_DEPTH_TEST); sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
+        sceGuEnable(GU_CLIP_PLANES);
+        sceGuShadeModel(GU_FLAT);
+        ScePspFMatrix4 pz;
+        build_proj(&pz, 0.0f, DC_W, -0.75f, 0.75f, depth_zn, depth_split * 1.01f);
+        sceGuSetMatrix(GU_PROJECTION, clr == 2 ? &pz : &proj[PASS_NEAR][PROJ_3D]);
+        sceGuSetMatrix(GU_MODEL, &id);
+        sceGuSetMatrix(GU_VIEW, &id);
+        gu_vtx *w = sceGuGetMemory((int)(n2 * sizeof *w));
+        for (int i = 0; i < n2; i++) {
+            w[i].u = w[i].v = 0.0f; w[i].color = t2[i].abgr;
+            w[i].x = t2[i].x * t2[i].z; w[i].y = t2[i].y * t2[i].z; w[i].z = -t2[i].z;
+        }
+        for (int i = 0; i < n2; i += 3) sceGuDrawArray(GU_TRIANGLES, VTX_FMT, 3, NULL, w + i);
+        sceGuFinish();
+        sceGuSync(0, 0);
+        shot_path = p2;
+        write_shot();
+        shot_path = NULL;
+        sceGuSwapBuffers();
+        draw_fb ^= FB_BYTES;
+        if (clr == 2) { ge_wait(); sceGuStart(GU_DIRECT, list); sceGuDepthRange(65535, 0); sceGuFinish(); sceGuSync(0, 0); }
+        sa1_log("ge near test: part 2 (near pass projection, depth cleared to %d) -> %s", clr, p2);
+    }
+    /* Part 3: depth of clipped triangles.  A blue band (DC y 200..280) is
+     * drawn first, then triangles behind and in front of it, depth test on:
+     * "-c3" the near pass with the depth floor, band at z 6: green crosses
+     * the near plane (z 12 at the top, 0.5 at the bottom), orange crosses it
+     * and the far end (z 40 .. 0.5), white is a control (z 12 .. 3); "-c4"
+     * the far pass, band at z 30: green crosses its near plane (z 60 .. 8).
+     * Correct depth: each triangle hidden in the band where it is behind
+     * it, drawn over it where in front. */
+    static const struct { float x, y, z; uint32_t abgr; } t3[2][15] = {
+        { { 0, 200, 6, 0xFFFF0000u }, { 640, 200, 6, 0xFFFF0000u }, { 0, 280, 6, 0xFFFF0000u },
+          { 640, 200, 6, 0xFFFF0000u }, { 640, 280, 6, 0xFFFF0000u }, { 0, 280, 6, 0xFFFF0000u },
+          { 100, 40, 12, 0xFF00FF00u }, { 250, 40, 12, 0xFF00FF00u }, { 175, 460, 0.5f, 0xFF00FF00u },
+          { 340, 40, 40, 0xFF0080FFu }, { 600, 40, 40, 0xFF0080FFu }, { 470, 460, 0.5f, 0xFF0080FFu },
+          { 10, 40, 12, 0xFFFFFFFFu }, { 80, 40, 12, 0xFFFFFFFFu }, { 45, 460, 3, 0xFFFFFFFFu } },
+        { { 0, 200, 30, 0xFFFF0000u }, { 640, 200, 30, 0xFFFF0000u }, { 0, 280, 30, 0xFFFF0000u },
+          { 640, 200, 30, 0xFFFF0000u }, { 640, 280, 30, 0xFFFF0000u }, { 0, 280, 30, 0xFFFF0000u },
+          { 100, 40, 60, 0xFF00FF00u }, { 250, 40, 60, 0xFF00FF00u }, { 175, 460, 8, 0xFF00FF00u },
+          { 340, 40, 60, 0xFF0080FFu }, { 600, 40, 60, 0xFF0080FFu }, { 470, 460, 20, 0xFF0080FFu },
+          { 10, 40, 60, 0xFFFFFFFFu }, { 80, 40, 60, 0xFFFFFFFFu }, { 45, 460, 20, 0xFFFFFFFFu } } };
+    for (int k = 0; k < 2; k++) {
+        char p3[96];
+        snprintf(p3, sizeof p3, "%.*s-c%d.ppm", (int)(strlen(path) > 4 ? strlen(path) - 4 : strlen(path)), path, k + 3);
+        ge_wait();
+        sceGuStart(GU_DIRECT, list);
+        sceGuScissor(0, 0, SCR_W, SCR_H);
+        sceGuDepthRange(65535, k == 0 ? 4400 : 0);
+        sceGuDepthMask(GU_FALSE);
+        sceGuClearColor(0xFF404040u); sceGuClearDepth(k == 0 ? 4410u : 0u);
+        sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+        sceGuDisable(GU_TEXTURE_2D); sceGuDisable(GU_BLEND); sceGuDisable(GU_CULL_FACE); sceGuDisable(GU_FOG);
+        sceGuDisable(GU_ALPHA_TEST);
+        sceGuEnable(GU_DEPTH_TEST); sceGuDepthFunc(GU_GEQUAL); sceGuDepthMask(GU_TRUE);
+        sceGuEnable(GU_CLIP_PLANES);
+        sceGuShadeModel(GU_FLAT);
+        ScePspFMatrix4 pz;
+        build_proj(&pz, 0.0f, DC_W, -0.75f, 0.75f, depth_zn, depth_split * 1.01f);
+        sceGuSetMatrix(GU_PROJECTION, k == 0 ? &pz : &proj[PASS_FAR][PROJ_3D]);
+        sceGuSetMatrix(GU_MODEL, &id);
+        sceGuSetMatrix(GU_VIEW, &id);
+        gu_vtx *w = sceGuGetMemory((int)(15 * sizeof *w));
+        for (int i = 0; i < 15; i++) {
+            w[i].u = w[i].v = 0.0f; w[i].color = t3[k][i].abgr;
+            w[i].x = t3[k][i].x * t3[k][i].z; w[i].y = t3[k][i].y * t3[k][i].z; w[i].z = -t3[k][i].z;
+        }
+        for (int i = 0; i < 15; i += 3) sceGuDrawArray(GU_TRIANGLES, VTX_FMT, 3, NULL, w + i);
+        sceGuDepthRange(65535, 0);
+        sceGuFinish();
+        sceGuSync(0, 0);
+        shot_path = p3;
+        write_shot();
+        shot_path = NULL;
+        sceGuSwapBuffers();
+        draw_fb ^= FB_BYTES;
+        sa1_log("ge near test: part 3 -> %s", p3);
+    }
     return 0;
 }
 
@@ -1251,12 +1386,13 @@ static void replay(void) {
     batch_flush();
     ge_draws_unstalled = 0;
     frame_clear();
+    if (range_dirty) { sceGuDepthRange(65535, depth_floor); range_dirty = 0; }
     for (int pass = 0; pass < PASSES; pass++) {
         if (!nitems[pass]) continue;
-        if (pass == PASS_NEAR && nitems[PASS_FAR]) {
+        if (pass == PASS_NEAR && (nitems[PASS_FAR] || depth_floor)) {
             sceGuScissor(0, 0, SCR_W, SCR_H);
             sceGuDepthMask(GU_FALSE);
-            sceGuClearDepth(0);
+            sceGuClearDepth(depth_floor ? depth_floor + 2u : 0u);
             sceGuClear(GU_DEPTH_BUFFER_BIT);
             if (!aspect_wide) sceGuScissor(SCR_W / 8, 0, SCR_W * 7 / 8, SCR_H);
         }
@@ -2132,13 +2268,33 @@ static void model_retire(void) {
 }
 
 static int model_cells(gmodel *g, const float *m);
+/* A model's sphere as one cell (draw.h draw_cell_class, no edge rule): where
+ * the GE takes it whole once the near pass may hold GE draws. */
+static int model_whole(const float *m, const float *bound) {
+    if (!ge_cells || !depth_floor) return DRAW_CELL_CPU;
+    draw_cell_view cv;
+    draw_cell_prep(&cv, m, depth_split);
+    cv.split = depth_split; cv.ge_near = 1;
+    const draw_model_cell c = { { bound[0], bound[1], bound[2], bound[3] }, 0.0f };
+    return draw_cell_class(&cv, &c);
+}
+int draw_mesh_ge_whole(const float m[16], const float bound[4]) {
+    if (headless) return 0;
+    const int w = model_whole(m, bound);
+    return w == DRAW_CELL_NEAR || w == DRAW_CELL_BOTH;
+}
 int draw_model(uint32_t h, const float m[16]) {
     if (headless || !list_open || h == 0 || h >= GMODEL_MAX || !gmodels[h].sets || gmodels[h].dying || list_full()) return 0;
     gmodel *g = &gmodels[h];
-    int pass = mesh_geo(m, g->bound);
-    if (pass < 0 && g->ncells && pass != DRAW_MESH_NO_OTHER) return model_cells(g, m);
+    int pass = mesh_geo(m, g->bound), both = 0;
+    if (pass < 0 && pass != DRAW_MESH_NO_OTHER) {   /* refused whole: on the GE whole in the near pass or both, or by cells */
+        const int w = model_whole(m, g->bound);
+        if (w == DRAW_CELL_NEAR) { pass = PASS_NEAR; cst.whole[0]++; }
+        else if (w == DRAW_CELL_BOTH) { pass = PASS_FAR; both = 1; cst.whole[1]++; }
+        else if (g->ncells) return model_cells(g, m);
+    }
     if (pass < 0 || nmesh_mats >= MESH_MAT_MAX) return 0;
-    if (nitems[pass] == ITEM_MAX) { gs.dropped++; return 0; }
+    if (nitems[pass] == ITEM_MAX || (both && nitems[PASS_NEAR] == ITEM_MAX)) { gs.dropped++; return 0; }
     batch_flush();
     ScePspFMatrix4 *mm = &mesh_mats[nmesh_mats];
     mm->x.x = m[0];  mm->x.y = m[1];  mm->x.z = -m[3];  mm->x.w = 0.0f;
@@ -2149,6 +2305,7 @@ int draw_model(uint32_t h, const float m[16]) {
     it->state = 0; it->proj = PROJ_3D; it->prim = PRIM_MODEL;
     it->n = (uint16_t)h; it->on = 0;
     it->v = it->ov = NULL; it->ix = NULL; it->mat = (int16_t)nmesh_mats++;
+    if (both) items[PASS_NEAR][nitems[PASS_NEAR]++] = *it;
     for (int s = 0; s < g->nsets; s++) {      /* the pool's LRU: these textures are in use */
         uint32_t t = g->sets[s].st.texture;
         if (t && t < TEX_MAX && texs[t].pblk) texpool_touch(texs[t].pblk - 1);
@@ -2187,8 +2344,8 @@ static void model_cpu_tris(const gmodel *g, const gmset *ms, const float *m, uin
 static int model_cells(gmodel *g, const float *m) {
     draw_cell_view cv;
     const float zf = depth_split > depth_zn ? depth_split : depth_zn;
-    const int gpass = depth_split ? PASS_FAR : PASS_NEAR;
     draw_cell_prep(&cv, m, zf);
+    if (ge_cells && depth_floor) { cv.split = depth_split; cv.ge_near = 1; }
     int any = 0;
     for (int c = 0; c < g->ncells; c++) {
         int k = draw_cell_class(&cv, &g->cells[c]);
@@ -2221,37 +2378,47 @@ static int model_cells(gmodel *g, const float *m) {
         if (!cur_valid) break;
         uint32_t t = ms->st.texture;
         if (t && t < TEX_MAX && texs[t].pblk) texpool_touch(texs[t].pblk - 1);
-        uint32_t run0 = 0, runn = 0;
-        for (uint32_t k = ms->sp0; k <= ms->sp1; k++) {
-            const draw_model_span *q = k < ms->sp1 ? &g->spans[k] : NULL;
-            const int cls = q ? cell_cls[q->cell] : -1;
-            if (cls == DRAW_CELL_GE && runn && run0 + runn == q->ifirst && runn + q->icount <= 65532u) { runn += q->icount; cst.tris[1] += q->icount / 3u; continue; }
-            if (runn) {                 /* the run so far: one indexed draw of the persistent copy */
-                batch_flush();
-                cur_proj = PROJ_3D;
-                if (mat < 0 && nmesh_mats < MESH_MAT_MAX) {
-                    ScePspFMatrix4 *mm = &mesh_mats[nmesh_mats];
-                    mm->x.x = m[0];  mm->x.y = m[1];  mm->x.z = -m[3];  mm->x.w = 0.0f;
-                    mm->y.x = m[4];  mm->y.y = m[5];  mm->y.z = -m[7];  mm->y.w = 0.0f;
-                    mm->z.x = m[8];  mm->z.y = m[9];  mm->z.z = -m[11]; mm->z.w = 0.0f;
-                    mm->w.x = m[12]; mm->w.y = m[13]; mm->w.z = -m[15]; mm->w.w = 1.0f;
-                    mat = nmesh_mats++;
+        /* the GE's spans, pass by pass (runs of neighbouring ones merged into
+         * one indexed draw of the persistent copy), then the CPU's and the
+         * counts */
+        for (int p = 0; p < PASSES; p++) {
+            const int far = p == PASS_FAR;
+            if (far ? !depth_split : 0) continue;
+            uint32_t run0 = 0, runn = 0;
+            for (uint32_t k = ms->sp0; k <= ms->sp1; k++) {
+                const draw_model_span *q = k < ms->sp1 ? &g->spans[k] : NULL;
+                const int cls = q ? cell_cls[q->cell] : -1;
+                const int in = cls == DRAW_CELL_BOTH || (cls == DRAW_CELL_GE && (far || !depth_split)) || (cls == DRAW_CELL_NEAR && !far);
+                if (in && runn && run0 + runn == q->ifirst && runn + q->icount <= 65532u) { runn += q->icount; continue; }
+                if (runn) {
+                    batch_flush();
+                    cur_proj = PROJ_3D;
+                    if (mat < 0 && nmesh_mats < MESH_MAT_MAX) {
+                        ScePspFMatrix4 *mm = &mesh_mats[nmesh_mats];
+                        mm->x.x = m[0];  mm->x.y = m[1];  mm->x.z = -m[3];  mm->x.w = 0.0f;
+                        mm->y.x = m[4];  mm->y.y = m[5];  mm->y.z = -m[7];  mm->y.w = 0.0f;
+                        mm->z.x = m[8];  mm->z.y = m[9];  mm->z.z = -m[11]; mm->z.w = 0.0f;
+                        mm->w.x = m[12]; mm->w.y = m[13]; mm->w.z = -m[15]; mm->w.w = 1.0f;
+                        mat = nmesh_mats++;
+                    }
+                    if (mat >= 0 && nitems[p] < ITEM_MAX && nrstates) {
+                        gu_item *it = &items[p][nitems[p]++];
+                        it->state = (uint16_t)(nrstates - 1); it->proj = PROJ_3D; it->prim = GU_TRIANGLES;
+                        it->n = (uint16_t)runn; it->on = ms->off && g->ov ? (uint16_t)runn : 0;
+                        it->v = g->v + ms->vfirst; it->ov = g->ov ? g->ov + ms->vfirst : NULL; it->ix = g->ix + run0; it->mat = (int16_t)mat;
+                        stats.draw_calls++; stats.triangles += runn / 3u;
+                    } else gs.dropped++;
+                    runn = 0;
                 }
-                if (mat >= 0 && nitems[gpass] < ITEM_MAX && nrstates) {
-                    gu_item *it = &items[gpass][nitems[gpass]++];
-                    it->state = (uint16_t)(nrstates - 1); it->proj = PROJ_3D; it->prim = GU_TRIANGLES;
-                    it->n = (uint16_t)runn; it->on = ms->off && g->ov ? (uint16_t)runn : 0;
-                    it->v = g->v + ms->vfirst; it->ov = g->ov ? g->ov + ms->vfirst : NULL; it->ix = g->ix + run0; it->mat = (int16_t)mat;
-                    stats.draw_calls++; stats.triangles += runn / 3u;
-                } else gs.dropped++;
-                runn = 0;
+                if (!q) break;
+                if (in) { run0 = q->ifirst; runn = q->icount; }
             }
-            if (!q) break;
-            if (cls == DRAW_CELL_GE) { run0 = q->ifirst; runn = q->icount; cst.tris[1] += q->icount / 3u; }
-            else if (cls == DRAW_CELL_CPU) {
-                cst.tris[2] += q->icount / 3u;
-                model_cpu_tris(g, ms, m, q->ifirst, q->icount);
-            } else cst.tris[0] += q->icount / 3u;
+        }
+        for (uint32_t k = ms->sp0; k < ms->sp1; k++) {
+            const draw_model_span *q = &g->spans[k];
+            const int cls = cell_cls[q->cell];
+            cst.tris[cls] += q->icount / 3u;
+            if (cls == DRAW_CELL_CPU) model_cpu_tris(g, ms, m, q->ifirst, q->icount);
         }
     }
     if (keep_valid) draw_set_state(&keep);
@@ -2271,7 +2438,7 @@ static void model_build_list(gmodel *g) {
     /* pspsdk keeps the depth range per context and sceGuDepthOffset re-sends
      * it from there: the call context needs draw_init's range, or every
      * set's depth offset would send a range of 0..0 */
-    sceGuDepthRange(65535, 0);
+    sceGuDepthRange(65535, depth_floor);
     for (int s = 0; s < g->nsets; s++) {
         const gmset *ms = &g->sets[s];
         bound_tex = 0; tex_su = tex_sv = -1.0f;   /* every set binds in full: the list runs after any state */

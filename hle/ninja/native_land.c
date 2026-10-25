@@ -614,7 +614,8 @@ int native_land_decide(sh4_ctx *c, uint32_t model) {
         return 0;
     }
     if (!decide_old) game_matrix(c, dec_m);   /* only the native renderer reads it */
-    const int p = draw_mesh_test(dec_m, md->bound);
+    int p = draw_mesh_test(dec_m, md->bound);
+    if (p < 0 && p != DRAW_MESH_NO_OTHER && draw_mesh_ge_whole(dec_m, md->bound)) p = 0;   /* on the GE whole in the near pass or both (draw.h) */
     const int by_cells = p < 0 && p != DRAW_MESH_NO_OTHER && md->ncell;   /* refused whole: cell by cell (CELLS) */
     if (p < 0 && !by_cells) { st.ta_test[-p]++; st.ta_tris += md->gtri_all; md->ta_draws++; return 0; }
     /* the lighting: the light in model space, as the lighting will take it */
@@ -866,6 +867,7 @@ void native_land_init(void) {
     if (on == 4) { on = 1; nopersist = 1; }
     if (on == 1 && !draw_mesh_supported()) { sa1_log("native land: this backend has no draw_mesh yet; the TA way"); on = 0; native_land_window = cull; return; }
     mode = on;
+    if (on == 1) draw_set_native(1);   /* the backend may put land on the GE in its near pass too (draw.h) */
     { const char *e = getenv("SA1_NATIVE_CHECK"); check = e && *e == '1'; }
     native_land_window = 1;
     native_land_noland = on == 2;
@@ -891,9 +893,11 @@ void native_land_report(void) {
                 st.nc[NC_OVERRIDE], st.nc_tris[NC_OVERRIDE]);
         draw_cell_stats cs;
         draw_cell_stats_take(&cs);
-        sa1_log("native land: refused whole, drawn by cells %u (near plane %u, guard band %u, depth split %u; %u opaque tris): cells out %u / GE %u / CPU %u, tris out %u / GE %u / CPU %u; per-set draws the CPU way %u tris",
+        sa1_log("native land: refused whole, drawn by cells %u (near plane %u, guard band %u, depth split %u; %u opaque tris): cells out %u / GE far %u / GE near %u / GE both %u / CPU %u, "
+                "tris out %u / GE far %u / GE near %u / GE both %u / CPU %u; per-set draws the CPU way %u tris; refused but on the GE whole: near pass %u, both passes %u",
                 st.cell_test[2] + st.cell_test[3] + st.cell_test[4], st.cell_test[2], st.cell_test[3], st.cell_test[4], st.cell_tris,
-                cs.cells[0], cs.cells[1], cs.cells[2], cs.tris[0], cs.tris[1], cs.tris[2], cs.mesh_cpu_tris);
+                cs.cells[0], cs.cells[1], cs.cells[3], cs.cells[4], cs.cells[2], cs.tris[0], cs.tris[1], cs.tris[3], cs.tris[4], cs.tris[2], cs.mesh_cpu_tris,
+                cs.whole[0], cs.whole[1]);
     }
     if (mode == 1)
         sa1_log("native land: memory: file tables %u KB, staging %u KB now (%u KB at most; %u models read, %u freed), kept colours and states %u KB; "
