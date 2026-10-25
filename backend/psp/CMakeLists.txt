@@ -260,6 +260,9 @@ if(SA1_GAME_SRCS)
   # must see every strong HLE body at link time (as on the desktop).
   set(SA1_PSP_OBJS $<TARGET_OBJECTS:sa1_hle_psp> $<TARGET_OBJECTS:sa1_backend_psp> $<TARGET_OBJECTS:sa1_game_psp>)
   set(SA1_PSP_LIBS pspgu pspge pspdisplay pspctrl psppower psprtc pspdebug pspkubridge)
+  # draw_gu.c --list-cache (p6): every stall move of the frame's display list,
+  # libpspgu's included, writes the cached list back first.
+  set(SA1_PSP_WRAP "-Wl,--wrap=sceGeListUpdateStallAddr,--wrap=sceGuGetMemory")
   if(SA1_PSP_HOT_LD)
     set(SA1_PSP_LINK_ORDER "-Wl,--section-ordering-file=${SA1_PSP_HOT_LD}")
   else()
@@ -269,7 +272,7 @@ if(SA1_GAME_SRCS)
   # 1. The EBOOT the XMB runs: a static ELF at 0x08804000.
   add_executable(sa1psp ${SA1_PSP_OBJS})
   target_link_libraries(sa1psp PRIVATE ${SA1_PSP_LIBS})
-  target_link_options(sa1psp PRIVATE ${SA1_PSP_LINK_ORDER})
+  target_link_options(sa1psp PRIVATE ${SA1_PSP_WRAP} ${SA1_PSP_LINK_ORDER})
   add_dependencies(sa1psp sa1exc)
   # Keep the linked ELF with its symbols for tools/psp_addr2line.sh, and put
   # a stripped copy in the EBOOT (these run before create_pbp_file's own
@@ -297,7 +300,7 @@ if(SA1_GAME_SRCS)
   target_link_libraries(sa1psp_prx PRIVATE ${SA1_PSP_LIBS})
   target_link_options(sa1psp_prx PRIVATE
     -specs=$ENV{PSPDEV}/psp/sdk/lib/prxspecs -Wl,-q,-T$ENV{PSPDEV}/psp/sdk/lib/linkfile.prx
-    $ENV{PSPDEV}/psp/sdk/lib/prxexports.o ${SA1_PSP_LINK_ORDER})
+    $ENV{PSPDEV}/psp/sdk/lib/prxexports.o ${SA1_PSP_WRAP} ${SA1_PSP_LINK_ORDER})
   if(SA1_PSP_HOT_LD)
     set_target_properties(sa1psp sa1psp_prx PROPERTIES LINK_DEPENDS "${SA1_PSP_HOT_LD}")
   endif()

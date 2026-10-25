@@ -491,3 +491,14 @@ next frame).  Pictures byte-identical on and off (ss, ec, f200/f201/f400/
 f401).  Heap +26 KB ec, +16 KB ss; largest free block unchanged.  The
 binds-only variant (raw words, one flush) gave ec -0.23, ss +0.09; the
 restore change alone nothing measurable.
+
+### 6.7 p6 (2026-10-25): the display list through the cached alias
+
+The per-frame GU_DIRECT list is written through the cached alias; every stall
+move (the link wraps sceGeListUpdateStallAddr and sceGuGetMemory) first writes
+the dcache back from the last stall. Same-binary ABBA x3: ec 65.95 -> 65.27,
+ss 33.42 -> 33.21, pictures byte-identical; on by default, `--list-cache off`
+for A/B. It depends on pspsdk internals (the gu_list layout; only
+sceGuDrawArray, sceGuGetMemory/sceGuClear and sceGuFinish moving the stall in
+direct mode): re-check after any pspsdk upgrade. The rest of the replay
+(~3.3 ms in ec) is CPU work, not uncached stores.

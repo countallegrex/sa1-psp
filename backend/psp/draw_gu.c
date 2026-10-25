@@ -6,7 +6,9 @@
  *  - Frame: one display list per frame (GU_DIRECT, so the GE starts on it
  *    while the CPU is still parsing the TA lists), two 480x272 RGB565 frame
  *    buffers and a 16-bit Z buffer in EDRAM (0.80 MB of the 2 MB), the list
- *    in main RAM through its uncached alias.  draw_end_frame hands the list
+ *    in main RAM, written through the data cache and written back before
+ *    each stall move (--list-cache off: its uncached alias, list_start).
+ *    draw_end_frame hands the list
  *    to the GE and returns: the GE draws frame N while the game runs frame
  *    N+1, as the PowerVR does (a helper thread swaps when the GE is done,
  *    at the next vblank; the next draw_begin_frame waits for it before the
@@ -732,6 +734,65 @@ static void ge_pipeline_start(void) {
     }
 }
 
+/* pspsdk's own state (src/gu/guInternal.h): gu_list is the open list,
+ * ge_list_executed[0] the GU_DIRECT list's queue id. */
+typedef struct { unsigned int *start, *current; int parent_context; } pspsdk_gu_list;
+extern pspsdk_gu_list *gu_list;
+extern int ge_list_executed[2];
+
+/* --list-cache on|off (p6): the frame's list written through list_mem's
+ * cached alias, not the uncached one (~10K uncached stores a frame, each a
+ * stall of the write buffer).  The GE reads RAM, so whatever lies below a
+ * stall address must be written back before the GE may see that address.
+ * Every stall move goes through sceGeListUpdateStallAddr, pspsdk's
+ * (sceGuDrawArray, sceGuGetMemory, so sceGuClear, sceGuFinish) as well as
+ * ge_draw's, and the link wraps it (CMakeLists.txt, --wrap): the wrapper
+ * writes back the lines from the last stall to the new one, then passes the
+ * uncached alias as before.  sceGuGetMemory moves the stall past its block
+ * before the caller fills it (sceGuClear's rectangles, draw_line_strip's
+ * vertices), so its wrapper keeps the block's start and the next stall
+ * writes back from there.  sceGuStart ORs the uncached alias into whatever
+ * it is given and writes the draw buffer's two words through it: line 0 is
+ * written back and dropped from the cache first (last frame left it clean
+ * with other words), and the pointers are moved to the cached alias after.
+ * Only the per-frame list (draw_begin_frame .. draw_end_frame): draw_init's
+ * and the near test's lists stay uncached, and a model's CALL list
+ * (model_build_list, a context of its own whose stall pspsdk never moves)
+ * keeps its uncached buffer.  off: the old uncached path. */
+static int list_cache = 1;                   /* default on (p6: ec -0.68, ss -0.21, pictures identical); off for A/B */
+void draw_gu_set_list_cache(int on) { list_cache = on; }
+static int list_cached;                       /* the open per-frame list is cached */
+static uintptr_t list_wb;                     /* the list below it is in RAM */
+static uintptr_t list_pend;                   /* a sceGuGetMemory block filled after its stall moved (0: none) */
+static inline int in_list_mem(uintptr_t a) { return a >= (uintptr_t)list_mem && a <= (uintptr_t)list_mem + LIST_BYTES; }
+int __real_sceGeListUpdateStallAddr(int qid, void *stall);
+int __wrap_sceGeListUpdateStallAddr(int qid, void *stall) {
+    uintptr_t s = (uintptr_t)stall;
+    if (list_cached && in_list_mem(s)) {
+        uintptr_t lo = (list_pend && list_pend < list_wb ? list_pend : list_wb) & ~(uintptr_t)63;
+        uintptr_t hi = (s + 63u) & ~(uintptr_t)63;
+        if (hi > lo) sceKernelDcacheWritebackRange((void *)lo, (unsigned int)(hi - lo));
+        list_wb = s; list_pend = 0;
+        s |= 0x40000000u;
+    }
+    return __real_sceGeListUpdateStallAddr(qid, (void *)s);
+}
+void *__real_sceGuGetMemory(int size);
+void *__wrap_sceGuGetMemory(int size) {
+    void *p = __real_sceGuGetMemory(size);
+    if (list_cached && in_list_mem((uintptr_t)p)) list_pend = (uintptr_t)p;
+    return p;
+}
+static void list_start(void) {
+    if (list_cache) sceKernelDcacheWritebackInvalidateRange(list_mem, 64);
+    sceGuStart(GU_DIRECT, list);
+    if (!list_cache) return;
+    gu_list->start = (unsigned int *)list_mem;
+    gu_list->current = (unsigned int *)((uintptr_t)gu_list->current & ~0x40000000u);
+    list_wb = (uintptr_t)gu_list->current; list_pend = 0;
+    list_cached = 1;
+}
+
 int draw_init(int scale, int want_headless) {
     (void)scale;
     texpool_init(&pool_ops, 0, 0);
@@ -824,7 +885,7 @@ void draw_begin_frame(uint32_t clear_argb) {
     if (headless) return;
     tex_su = tex_sv = -1.0f;        /* re-sent with the first texture */
     frame_clear_argb = clear_argb;
-    sceGuStart(GU_DIRECT, list);   /* the GE runs the list as it grows: nothing touches the buffer before frame_clear */
+    list_start();                  /* the GE runs the list as it grows: nothing touches the buffer before frame_clear */
     list_open = 1;
     apply_fog();
 }
@@ -882,7 +943,8 @@ void draw_end_frame(void) {
     gs.replay_us += sa1_plat_time_us() - t_replay;
     uint32_t used = (uint32_t)sceGuCheckList();
     if (used > gs.list_high) gs.list_high = used;
-    sceGuFinish();
+    sceGuFinish();                    /* its stall move writes the rest of the list back */
+    list_cached = 0;
     uint64_t now;
     /* Pipelined: the GE finishes and ge_swap_thread swaps while the game
      * runs the next frame.  A screenshot frame waits here as before, so
@@ -1192,9 +1254,6 @@ static int depth_func(int code) {
     return map[code & 7];
 }
 
-typedef struct { unsigned int *start, *current; int parent_context; } pspsdk_gu_list;
-extern pspsdk_gu_list *gu_list;
-extern int ge_list_executed[2];
 /* --replay-v2 16: a texture's bind (CLUT mode and load, TexMode, every
  * level's TexImage, one flush, RET) prebuilt once in a block of its own and
  * CALLed: 2 list words per bind instead of ~20 uncached stores.  The block
