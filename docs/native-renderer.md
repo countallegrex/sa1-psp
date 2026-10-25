@@ -6,7 +6,7 @@ vertical slice, Station Square's static scenery (the land table), its
 desktop check, and the go/no-go measured on the console.  Status: NO-GO
 (2026-10-24, section 5): the GE path drew correctly but was not cheaper
 than the TA path; the code stays behind `renderer = native` (off by
-default) and the big lever moves to the Media Engine.  Iteration 3
+default at the time; the default since n1, 2026-10-25) and the big lever moves to the Media Engine.  Iteration 3
 (section 6) found that half of the land the game draws is out of view: the
 view cull (`land_cull`, on by default) and persistent GE models
 (`renderer = native`) take Station Square from 50.2 to 37.6 ms.
@@ -129,8 +129,8 @@ how many there are in Station Square; if none, nothing to do).
 
 ### 3.4 Toggle and checks
 
-- `renderer = native | ta` (sa1psp.ini) and `--renderer`: native off by
-  default until the console go/no-go; `ta` always in strict, oracle and test
+- `renderer = native | ta` (sa1psp.ini) and `--renderer`: native is the
+  default since n1 (2026-10-25, s.6.5); `ta` always in strict, oracle and test
   runs unless forced, like the frame skip.
 - Equality of game state: the replay tapes with the native renderer forced
   (watch traces identical, guest RAM identical outside the draw scratch).

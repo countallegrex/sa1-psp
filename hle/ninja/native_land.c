@@ -5,8 +5,8 @@
  * land_cull = on (default) | opaque | off (sa1psp.ini, or --land-cull; also
  * in strict runs: it changes only draw scratch, as frame skip's skipped
  * frames do; opaque never culls a translucent model, a console A/B aid) and
- * renderer = native | ta | noland (sa1psp.ini, or --renderer, with force:
- * also in strict runs).  The game's own land draw runs unchanged (its
+ * renderer = native (default) | ta | noland (sa1psp.ini, or --renderer, with
+ * force: also in strict runs; strict runs otherwise take ta).  The game's own land draw runs unchanged (its
  * cull, visible list, matrices, njSetTexture; the land task's MainSub
  * 0x8C0519C0 calls the cull and the draw directly).  It has no view culling
  * of its own: about half of the land models it draws in Station Square lie
@@ -67,7 +67,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-int hle_renderer_native;            /* sa1psp.ini renderer: 0 ta, 1 native, 2 noland */
+int hle_renderer_native = 1;        /* sa1psp.ini renderer: 0 ta, 1 native (default), 2 noland */
 int hle_land_cull = 1;              /* sa1psp.ini land_cull: 0 off, 1 on (default), 2 opaque */
 int hle_land_cull_cli = -1;         /* --land-cull on|opaque|off, wins */
 int hle_land_decide_cli;            /* --land-decide new (0, default) | old (1) | check (2) */
