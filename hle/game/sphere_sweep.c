@@ -44,8 +44,11 @@
  * the sweep stores only into +0x94..+0x9C and +44 of the frame.  The debug
  * drawing path keeps the emitted accesses.
  *
- * SA1_29B00_REC=1 runs the recompiled body instead (native vs recompiled
- * comparisons).  The wrapper is compiled only when the emitted game.h has
+ * That body is math = exact (sa1psp.ini / --math; strict runs).  The default,
+ * math = native, is sph_native below: the same sweep with host math, the
+ * game the same within a stated bound; math = check runs both and logs
+ * the differences.  SA1_29B00_REC=1 runs the recompiled body instead
+ * (native vs recompiled comparisons).  The wrapper is compiled only when the emitted game.h has
  * the renamed body (recomp/sa1_us_1005/hle_wraps.tsv).
  *
  * Part of sa1-psp (MIT). */
@@ -109,6 +112,10 @@ static inline int sph_use_rec(void) {
         c->r[4] = r4; c->r[5] = r5; c->r[6] = r6; sdk_8c638ecc(c); \
         r7 = c->r[7]; LD_FR4_11(); } while (0)
 
+/* check mode: the exact body's per-polygon angles and normal (taps) */
+static int sph_tap;
+static uint32_t tap_k, tap_ax[256], tap_ay[256];
+static float tap_ny[256], tap_acos[256], tap_nx[256], tap_nz[256];
 static inline __attribute__((always_inline)) void sph_8c029b00(sh4_ctx *c) {
     uint32_t r0, r1 = 0, r2 = c->r[2], r3 = c->r[3], r4 = c->r[4], r5 = c->r[5], r6 = c->r[6], r7 = c->r[7];
     uint32_t r8 = c->r[8], r9 = c->r[9], r10 = c->r[10], r11 = c->r[11], r12 = c->r[12];
@@ -278,10 +285,12 @@ poly:                                      /* 0x8C029BF6: polygon @r12 */
     fr0 = c->fr[0]; fr1 = c->fr[1]; fr2 = c->fr[2]; fr6 = c->fr[6];
     fr12 = c->fr[12]; fr13 = c->fr[13]; fr14 = c->fr[14]; fr15 = c->fr[15];
     S = SP(r15);
+    if (sph_tap && tap_k < 256) { tap_acos[tap_k] = fr0; tap_ny[tap_k] = SF(0xb0); tap_nx[tap_k] = SF(0xac); tap_nz[tap_k] = SF(0xb4); }
     fr0 = fr0 * fr14;
     fpul = FTRC(fr0);
     r2 = fpul;
     r2 = 0u - r2;
+    if (sph_tap && tap_k < 256) tap_ax[tap_k] = r2;
     t = r2 == 0;
     if (!t) {                               /* 0x8C029D1C: njRotateX */
         fr4 = SF(0xb0);
@@ -313,6 +322,7 @@ poly:                                      /* 0x8C029BF6: polygon @r12 */
     fpul = FTRC(fr0);
     r2 = fpul;
     r2 = 0u - r2;
+    if (sph_tap && tap_k < 256) tap_ay[tap_k++] = r2;
     t = r2 == 0;
     if (!t) {                               /* 0x8C029D4A: njRotateY */
         fr5 = SF(0xb4); fr4 = SF(0xac);
@@ -885,9 +895,375 @@ out:                                       /* 0x8C02A632 */
     c->t = t; c->macl = macl; c->fpul = fpul;
 }
 
+/* ---- math = native: the same sweep with host math ----------------------
+ * The algorithm is the console's: the same polygons in the same order, the
+ * same march (steps of radius * 0.5 along the motion, the end point last,
+ * the first point within the radius of the plane and inside the triangle
+ * is the contact), the same 16-contact cap, the same choice and average.
+ * Only the arithmetic changes: host acosf/atan2f/asinf instead of the
+ * game's SHC libm (one acosf where the game calls it twice), the rotation
+ * into the polygon's plane built from the same 16-bit angles and the same
+ * sin/cos table on three host vectors instead of the matrix stack, the
+ * game's inverse on a host copy, no guest stack frame and no callee trampolines.  With the
+ * same host libm the angles almost always quantize to the same 16-bit
+ * value, so the results are the console's within rounding; the stated
+ * bound (check mode) is one angle unit (1/65536 turn), normals 1e-5 and
+ * positions 2e-4 * (1 + |centre - v0| + |motion| + radius) + 1e-4.
+ *
+ * sph_native computes into a host record (no guest write) and
+ * sph_commit writes what the game would: the contact count, the contact
+ * array (polygon + 88-byte record), the copies at 0x8C6BACF0 and the
+ * sphere record.  A full array (16 contacts) leaves the game's matrix
+ * stack one deeper with the inverted rotation on top: the commit does
+ * the same through the SDK calls.  With the debug byte set the exact
+ * body runs (it draws).
+ *
+ * math = check: the exact body drives the game; sph_native runs first on
+ * the same inputs and its record is compared with what the exact body
+ * wrote.  Logged per call: values outside the bound, and contact flips
+ * (a polygon hit by one side only) with the polygon's margin (the
+ * smallest distance of a tested point to the radius slab or a triangle
+ * edge); a flip with a margin above the bound is a failure. */
+#include <math.h>
+#include <string.h>
+
+#define SPH_MAXC 16
+
+typedef struct {
+    uint32_t r0;
+    int early;                      /* radius <= 0: nothing written */
+    uint32_t n, chosen;
+    int full;
+    uint32_t full_ax, full_ay;      /* the last polygon's angles (full array) */
+    uint32_t poly[SPH_MAXC];
+    uint32_t rec[SPH_MAXC][22];     /* the 88-byte records, as words */
+    float bound[SPH_MAXC];
+    uint32_t avg[6];                /* sphere record +84..+104 */
+    /* check mode: per polygon of the call, hit and margin */
+    uint32_t np;
+    uint32_t pp[256];
+    float margin[256], pbound[256];
+    uint32_t nax[256], nay[256];
+    float nny[256], nacos[256];
+    uint8_t hit[256];
+} sph_res;
+
+static inline uint32_t sph_f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+static inline float sph_u2f(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
+
+/* m = I * RotX(ax) * RotY(ay), all 16 words as math.c's m_rot_x / m_rot_y
+ * leave them on the unit matrix (column-major, m[4j+i]). */
+static inline void sph_rot(uint32_t ax, uint32_t ay, float m[16]) {
+    float s, co;
+    for (int i = 0; i < 16; i++) m[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+    if (ax) {
+        s = sh4_sin16(ax); co = sh4_cos16(ax);
+        for (int i = 0; i < 4; i++) {
+            float c1 = m[4 + i], c2 = m[8 + i];
+            m[4 + i] = co * c1 + s * c2;
+            m[8 + i] = co * c2 - s * c1;
+        }
+    }
+    if (ay) {
+        s = sh4_sin16(ay); co = sh4_cos16(ay);
+        for (int i = 0; i < 4; i++) {
+            float c0 = m[i], c2 = m[8 + i];
+            m[i] = co * c0 - s * c2;
+            m[8 + i] = s * c0 + co * c2;
+        }
+    }
+}
+/* njCalcPoint (math.c m_xform with w = 1). */
+static inline void sph_xf(const float m[16], const float v[3], float o[3]) {
+    for (int i = 0; i < 3; i++) o[i] = m[i] * v[0] + m[4 + i] * v[1] + m[8 + i] * v[2] + m[12 + i] * 1.0f;
+}
+void hle_m_invert(float *m);            /* math.c: njInvertMatrix's arithmetic */
+
+static inline uint32_t sph_atan_ang(float x, float y, float K) {
+    if (x == 0.0f && y == 0.0f) return 0x80000000u;
+    return 0u - FTRC(atan2f(x, y) * K);
+}
+
+static void sph_native(sh4_ctx *c, sph_res *res, int check) {
+    const uint8_t *O = HP(c->r[4]);
+    const float R = HF(O, 0);
+    const float K = RDF(0x0c029cdcu, 0);
+    res->n = 0; res->chosen = 0; res->full = 0; res->np = 0; res->r0 = 0;
+    res->early = !(R > 0.0f);
+    if (res->early) return;
+
+    const float mv[3] = {HF(O, 16), HF(O, 20), HF(O, 24)};
+    const float len = sqrtf(mv[0] * mv[0] + mv[1] * mv[1] + mv[2] * mv[2]);
+    const float step = R * RDF(0x0c029b8cu, 0);
+    const float kneg = RDF(0x0c029e28u, 0);
+    const float mlen = len;
+
+    uint32_t node = H32(HP(COLL_LIST), 0);
+    while (node && H32(HP(node), 8) != c->r[5]) node = H32(HP(node), 0);
+    if (!node) return;
+    const uint8_t *N = HP(node);
+    int32_t count = (int32_t)H32(N, 36);
+    uint32_t list = H32(N, 28);
+
+    for (; count > 0; count--, list += 4u) {
+        const uint32_t pa = H32(HP(list), 0);
+        const uint8_t *P = HP(pa);
+        const float v0[3] = {HF(P, 24), HF(P, 28), HF(P, 32)};
+        const float e1[3] = {HF(P, 36) - v0[0], HF(P, 40) - v0[1], HF(P, 44) - v0[2]};
+        const float e2[3] = {HF(P, 48) - v0[0], HF(P, 52) - v0[1], HF(P, 56) - v0[2]};
+        const float cw[3] = {HF(O, 4) - v0[0], HF(O, 8) - v0[1], HF(O, 12) - v0[2]};
+        /* 0x8C027360 with p0 = 0: a = e1, b = 0 - e2 */
+        const float bx = 0.0f - e2[0], by = 0.0f - e2[1], bz = 0.0f - e2[2];
+        float n[3] = {e1[2] * by - e1[1] * bz, e1[0] * bz - e1[2] * bx, e1[1] * bx - e1[0] * by};
+        const float nl = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        if (nl == 0.0f) { n[0] = 0.0f; n[1] = 1.0f; n[2] = 0.0f; }
+        else { const float r = 1.0f / nl; n[0] *= r; n[1] *= r; n[2] *= r; }
+        const uint32_t ax = 0u - FTRC(acosf(n[1]) * K);
+        const uint32_t ay = sph_atan_ang(n[0], n[2], K);
+        float m[16];
+        sph_rot(ax, ay, m);
+        float p1[3], p2[3], cc[3], mm[3];
+        sph_xf(m, e1, p1); sph_xf(m, e2, p2); sph_xf(m, cw, cc); sph_xf(m, mv, mm);
+
+        const int two = (H32(P, 60) & 0x00800000u) != 0;
+        float Reff = R;
+        if (two && 0.0f > cc[1]) Reff = R * kneg;
+
+        float sv[3] = {mm[0], mm[1], mm[2]};
+        const float sl = sqrtf(sv[0] * sv[0] + sv[1] * sv[1] + sv[2] * sv[2]);
+        if (sl == 0.0f) { sv[0] = sv[1] = sv[2] = 0.0f; }
+        else { const float r = 1.0f / sl; sv[0] *= r; sv[1] *= r; sv[2] *= r; }
+        sv[0] *= step; sv[1] *= step; sv[2] *= step;
+
+        /* the march (0x8C029E7C), v0 at the origin */
+        float px = cc[0], py = cc[1], pz = cc[2], walked = 0.0f, marg = 3.4e38f;
+        int hit = 0;
+        const float l1 = check ? sqrtf(p1[0] * p1[0] + p1[2] * p1[2]) : 0.0f;
+        const float l2 = check ? sqrtf((p2[0] - p1[0]) * (p2[0] - p1[0]) + (p2[2] - p1[2]) * (p2[2] - p1[2])) : 0.0f;
+        const float l3 = check ? sqrtf(p2[0] * p2[0] + p2[2] * p2[2]) : 0.0f;
+        for (;;) {
+            const int last = !(mlen > walked);
+            if (last) { px = cc[0] + mm[0]; py = cc[1] + mm[1]; pz = cc[2] + mm[2]; }
+            const float ay_ = fabsf(py);
+            int inside = 0;
+            float f8 = 0, f5 = 0, f4 = 0;
+            if (!(ay_ > R)) {
+                f8 = p1[2] * px - p1[0] * pz;
+                f5 = (p2[2] - p1[2]) * (px - p1[0]) - (p2[0] - p1[0]) * (pz - p1[2]);
+                f4 = (0.0f - p2[2]) * (px - p2[0]) - (0.0f - p2[0]) * (pz - p2[2]);
+                inside = !(0.0f > f8 * f5) && !(0.0f > f5 * f4) && !(0.0f > f8 * f4);
+            }
+            if (check) {
+                float d = fabsf(R - ay_);
+                if (!(ay_ > R) || d < marg) {
+                    if (ay_ > R) { f8 = p1[2] * px - p1[0] * pz;
+                        f5 = (p2[2] - p1[2]) * (px - p1[0]) - (p2[0] - p1[0]) * (pz - p1[2]);
+                        f4 = (0.0f - p2[2]) * (px - p2[0]) - (0.0f - p2[0]) * (pz - p2[2]); }
+                    /* the point's distance to the slab or an edge it is near */
+                    float e = d;
+                    if (l1 > 0.0f && fabsf(f8) / l1 < e) e = fabsf(f8) / l1;
+                    if (l2 > 0.0f && fabsf(f5) / l2 < e) e = fabsf(f5) / l2;
+                    if (l3 > 0.0f && fabsf(f4) / l3 < e) e = fabsf(f4) / l3;
+                    if (e < marg) marg = e;
+                }
+            }
+            if (inside) { hit = 1; break; }
+            if (last) break;
+            px += sv[0]; py += sv[1]; pz += sv[2];
+            walked += step;
+        }
+        const float bnd = 2e-4f * (1.0f + sqrtf(cw[0] * cw[0] + cw[1] * cw[1] + cw[2] * cw[2]) + mlen + R) + 1e-4f;
+        if (check && res->np < 256) {
+            res->pp[res->np] = pa; res->margin[res->np] = marg; res->pbound[res->np] = bnd; res->hit[res->np] = (uint8_t)hit;
+            res->nax[res->np] = ax; res->nay[res->np] = ay; res->nny[res->np] = n[1]; res->nacos[res->np] = acosf(n[1]);
+            res->np++;
+        }
+        if (!hit) continue;
+
+        /* the contact record (0x8C02A0E2) */
+        uint32_t *q = res->rec[res->n];
+        float nf[3] = {n[0], n[1], n[2]};
+        if (two && 0.0f > cc[1]) { nf[0] = -n[0]; nf[1] = -n[1]; nf[2] = -n[2]; }
+        q[20] = sph_f2u(cc[1]);
+        q[21] = sph_f2u(cc[1] + mm[1]);
+        q[2] = sph_f2u(n[0]); q[3] = sph_f2u(n[1]); q[4] = sph_f2u(n[2]);
+        q[5] = sph_f2u(nf[0]); q[6] = sph_f2u(nf[1]); q[7] = sph_f2u(nf[2]);
+        q[1] = sph_atan_ang(nf[0], nf[1], K);
+        q[0] = FTRC(asinf(nf[2]) * K);
+        float t[3], o[3], mi[16];
+        for (int k = 0; k < 16; k++) mi[k] = m[k];
+        hle_m_invert(mi);
+        t[0] = cc[0]; t[1] = 0.0f; t[2] = cc[2];
+        sph_xf(mi, t, o);
+        q[8] = sph_f2u(o[0] + v0[0]); q[9] = sph_f2u(o[1] + v0[1]); q[10] = sph_f2u(o[2] + v0[2]);
+        t[1] = Reff;
+        sph_xf(mi, t, o);
+        q[11] = sph_f2u(o[0] + v0[0]); q[12] = sph_f2u(o[1] + v0[1]); q[13] = sph_f2u(o[2] + v0[2]);
+        t[0] = mm[0]; t[1] = 0.0f; t[2] = mm[2];
+        sph_xf(mi, t, o);
+        q[14] = sph_f2u(o[0]); q[15] = sph_f2u(o[1]); q[16] = sph_f2u(o[2]);
+        t[0] = 0.0f; t[1] = mm[1]; t[2] = 0.0f;
+        sph_xf(mi, t, o);
+        q[17] = sph_f2u(o[0]); q[18] = sph_f2u(o[1]); q[19] = sph_f2u(o[2]);
+        res->poly[res->n] = pa;
+        res->bound[res->n] = bnd;
+        res->n++;
+        if (res->n == SPH_MAXC) { res->full = 1; res->full_ax = ax; res->full_ay = ay; break; }
+    }
+    if (res->n < 1) return;
+    /* the lowest +84 (entry +0x98) */
+    float lo = sph_u2f(res->rec[0][21]);
+    for (uint32_t i = 1; i < res->n; i++) {
+        const float h = sph_u2f(res->rec[i][21]);
+        if (lo > h) { lo = h; res->chosen = i; }
+    }
+    if (res->n == 1) {
+        for (int k = 0; k < 6; k++) res->avg[k] = res->rec[0][8 + k];
+    } else {                                /* the average (0x8C02A560) */
+        float a[6];
+        for (int k = 0; k < 6; k++) a[k] = sph_u2f(res->rec[0][8 + k]);
+        for (uint32_t i = 1; i < res->n; i++)
+            for (int k = 0; k < 6; k++) a[k] = a[k] + sph_u2f(res->rec[i][8 + k]);
+        const float inv = 1.0f / (float)(int32_t)res->n;
+        for (int k = 0; k < 6; k++) res->avg[k] = sph_f2u(a[k] * inv);
+    }
+    res->r0 = 1;
+}
+
+static void sph_commit(sh4_ctx *c, uint32_t oa, const sph_res *res) {
+    if (res->early) { c->r[0] = 0; return; }
+    uint8_t *cnt = HPW(HITS_N);
+    HW32(cnt, 0, res->n);
+    for (uint32_t i = 0; i < res->n; i++) {
+        uint8_t *e = HPW(HITS + i * HIT_SIZE);
+        const uint8_t *src = HP(res->poly[i]);
+        for (int k = 0; k < 64; k += 4) HW32(e, 4 + k, H32(src, k));
+        for (int k = 0; k < 22; k++) HW32(e, 68 + 4 * k, res->rec[i][k]);
+    }
+    if (res->full) {                        /* the game leaves the rotation pushed, inverted */
+        c->r[4] = 0x8c67c640u; sdk_8c639c70(c);
+        if (res->full_ax) { c->r[4] = 0; c->r[5] = res->full_ax; sdk_8c639ec8(c); }
+        if (res->full_ay) { c->r[4] = 0; c->r[5] = res->full_ay; sdk_8c639f5c(c); }
+        c->r[4] = 0; sdk_8c6390b0(c);
+    }
+    if (res->n < 1) { c->r[0] = 0; return; }
+    for (uint32_t i = 0; i < res->n; i++) {
+        uint8_t *d = HPW(0x8c6bacf0u + 88u * i);
+        for (int k = 0; k < 22; k++) HW32(d, 4 * k, res->rec[i][k]);
+    }
+    uint8_t *O = HPW(oa);
+    const uint32_t *e = res->rec[res->chosen];
+    HW16(O, 40, res->n);
+    HW16(O, 42, res->chosen);
+    for (int k = 0; k < 8; k++) HW32(O, 52 + 4 * k, e[k]);
+    for (int k = 0; k < 6; k++) HW32(O, 84 + 4 * k, res->avg[k]);
+    for (int k = 0; k < 6; k++) HW32(O, 108 + 4 * k, e[14 + k]);
+    c->r[0] = 1;
+}
+
+/* check mode: what the exact body wrote against the native record */
+static uint32_t ck_pang, ck_plog;
+static uint32_t ck_calls, ck_polys, ck_contacts, ck_flips, ck_bad, ck_ang, ck_logged, ck_last;
+static float ck_ratio;
+static void ck_line(const char *what, uint32_t poly, float d, float b) {
+    if (ck_logged < 2000) {
+        ck_logged++;
+        sa1_log("check: f%u sweep %s poly %08x diff %.6g bound %.6g%s", hle_frame_count(), what, poly, d, b, d > b ? " OUTSIDE" : "");
+    }
+}
+static void sph_summary(int force) {
+    const uint32_t f = hle_frame_count();
+    if (!force && f / 600 == ck_last / 600) return;
+    ck_last = f;
+    sa1_log("check: sweep summary f%u calls %u polys %u contacts %u flips %u angle-steps %u poly-angle-diffs %u outside %u max %.3g of the bound",
+            f, ck_calls, ck_polys, ck_contacts, ck_flips, ck_ang, ck_pang, ck_bad, ck_ratio);
+}
+static void sph_compare(uint32_t oa, const sph_res *res, uint32_t r0) {
+    ck_calls++;
+    ck_polys += res->np;
+    if (res->early) { if (r0 != 0) { ck_bad++; ck_line("early r0", 0, 1, 0); } sph_summary(0); return; }
+    const uint32_t nref = H32(HP(HITS_N), 0);
+    ck_contacts += nref;
+    uint32_t j = 0, i = 0, flips = 0;
+    for (uint32_t k = 0; k < res->np; k++) {
+        const uint8_t *pk = HP(res->pp[k]);
+        const int rh = j < nref && !memcmp(pk, HP(HITS + j * HIT_SIZE + 4u), 64);
+        if (k < tap_k && (tap_ax[k] != res->nax[k] || tap_ay[k] != res->nay[k])) {
+            ck_pang++;
+            if (getenv("SA1_SPH_DETAIL") && ck_plog++ < 200)
+                sa1_log("check:   poly %08x ax ref %d native %d ay ref %d native %d ny ref %.9g native %.9g acos ref %.9g native %.9g n ref %.9g %.9g",
+                        res->pp[k], (int)tap_ax[k], (int)res->nax[k], (int)tap_ay[k], (int)res->nay[k], tap_ny[k], res->nny[k], tap_acos[k], res->nacos[k], tap_nx[k], tap_nz[k]);
+        }
+        if (rh != res->hit[k]) {
+            flips++; ck_flips++;
+            if (res->margin[k] > res->pbound[k]) ck_bad++;
+            ck_line(rh ? "flip ref-hit native-miss margin" : "flip ref-miss native-hit margin", res->pp[k], res->margin[k], res->pbound[k]);
+        } else if (rh) {
+            const uint8_t *q = HP(HITS + j * HIT_SIZE + 68u);
+            const uint32_t *w = res->rec[i];
+            const float b = res->bound[i];
+            for (int a = 0; a < 2; a++) {
+                const int16_t d = (int16_t)(H32(q, 4 * a) - w[a]);
+                if (d) { ck_ang++; if (d > 1 || d < -1) { ck_bad++; ck_line("angle", res->pp[k], (float)d, 1); } }
+            }
+            for (int a = 2; a < 22; a++) {
+                const float bb = a < 8 ? 1e-5f : b;
+                const float d = fabsf(HF(q, 4 * a) - sph_u2f(w[a]));
+                if (!(d <= bb)) {
+                    ck_bad++; ck_line(a < 8 ? "normal" : "position", res->pp[k], d, bb);
+                    if (getenv("SA1_SPH_DETAIL") && ck_logged < 2000)
+                        sa1_log("check:   word %d ref %.9g native %.9g angles ref %08x %08x native %08x %08x", a, HF(q, 4 * a), sph_u2f(w[a]), H32(q, 0), H32(q, 4), w[0], w[1]);
+                }
+                if (d / bb > ck_ratio) ck_ratio = d / bb;
+            }
+        }
+        if (rh) j++;
+        if (res->hit[k]) i++;
+    }
+    if (j != nref) { ck_bad++; ck_line("unmatched contacts", 0, (float)(nref - j), 0); }
+    if (!flips && nref) {
+        const uint8_t *O = HP(oa);
+        const uint32_t ch = HS16(O, 42) & 0xffffu;
+        if (ch != res->chosen) {
+            const float d = fabsf(sph_u2f(res->rec[ch < res->n ? ch : 0][21]) - sph_u2f(res->rec[res->chosen][21]));
+            ck_line("chosen tie", res->poly[res->chosen], d, res->bound[res->chosen]);
+            if (!(d <= res->bound[res->chosen])) ck_bad++;
+        } else {
+            for (int k = 0; k < 6; k++) {
+                const float d = fabsf(HF(O, 84 + 4 * k) - sph_u2f(res->avg[k]));
+                const float b = res->bound[res->chosen];
+                if (!(d <= b)) { ck_bad++; ck_line("average", 0, d, b); }
+            }
+        }
+    }
+    if (r0 != res->r0 && !flips) { ck_bad++; ck_line("r0", 0, 1, 0); }
+    sph_summary(0);
+}
+static void sph_atexit(void) { sph_summary(1); }
+
+static int sph_mode = -1;
 void fn_8c029b00(sh4_ctx *c) {
     HLE_ENTER(0x8c029b00u, "sphere sweep fn_8c029b00");
-    if (sph_use_rec()) fn_8c029b00_orig(c);
-    else sph_8c029b00(c);
+    if (sph_use_rec()) { fn_8c029b00_orig(c); return; }
+    if (sph_mode < 0) {
+        sph_mode = hle_math_mode();
+        sa1_log("sphere sweep: math %s", sph_mode == 1 ? "native" : sph_mode == 2 ? "check" : "exact");
+        if (sph_mode == 2) atexit(sph_atexit);
+    }
+    if (sph_mode == 0 || (int32_t)RD8S(DEBUG_BYTE, 0) >= 0) { sph_8c029b00(c); return; }
+    static sph_res res;
+    const uint32_t oa = c->r[4];
+    if (sph_mode == 1) { sph_native(c, &res, 0); sph_commit(c, oa, &res); return; }
+    sph_native(c, &res, 1);
+    sph_tap = 1; tap_k = 0;
+    sph_8c029b00(c);
+    sph_tap = 0;
+    sph_compare(oa, &res, c->r[0]);
+    /* SA1_SPH_DRIVE=native (diagnosis): the native record replaces what the
+     * exact body wrote, so native drives and exact is the shadow (a full
+     * array keeps the exact body's: its matrix stack is already pushed). */
+    static int drive = -1;
+    if (drive < 0) drive = getenv("SA1_SPH_DRIVE") != NULL;
+    if (drive && !res.full) sph_commit(c, oa, &res);
 }
 #endif

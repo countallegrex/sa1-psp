@@ -161,6 +161,9 @@ static void m_invert(sa1_f32a *m) {
     det = 1.0f / det;
     for (int i = 0; i < 16; i++) m[i] = inv[i] * det;
 }
+/* For native routines that redo the game's matrix steps on a host copy
+ * (hle/game/sphere_sweep.c): njInvertMatrix's arithmetic. */
+void hle_m_invert(float *m) { m_invert((sa1_f32a *)m); }
 
 /* ---- matrix stack ---------------------------------------------------------- */
 static const float DIAG_MM11[16] = {-1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};

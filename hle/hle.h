@@ -125,5 +125,13 @@ extern int hle_draw_skip;          /* the current frame draws nothing */
 void hle_frame_skip_decide(void);   /* at a frame's end: whether the next one draws */
 void hle_frame_skip_report(void);
 int hle_parse_frame_skip(const char *v, int *force);   /* settings.c: auto|off|N[, force:...]; -3 = bad */
+/* Game math (settings.c; hle/game/sphere_sweep.c): exact = the console's
+ * float operations in its order (bit-exact); native = host/VFPU math, the
+ * game the same within a band; check = exact drives the game and native
+ * runs alongside, logging every difference.  sa1psp.ini math, --math wins;
+ * a strict run (tapes, the oracle) is exact unless --math is given. */
+extern int hle_math, hle_math_cli;
+int hle_parse_math(const char *v);  /* exact 0, native 1, check 2, else -1 */
+int hle_math_mode(void);
 /* Runs a guest function from native code (callbacks): r4..r7 = a0..a3. */
 void hle_call_guest(sh4_ctx *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);

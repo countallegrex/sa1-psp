@@ -37,6 +37,9 @@
  * --trace-funcs writes, at exit, every host function that ran with the frame
  * it first ran in (needs a build with -DSA1_TRACE_FUNCS=ON).
  *
+ * --math exact|native|check: game math (hle/settings.c, sa1psp.ini math;
+ * native by default, exact in strict runs unless given).
+ *
  * --no-vmu: no VMU in port A1 (strict runs never have one); --vmu-dir DIR:
  * keep the VMU's files in DIR (default "vmu" beside the executable).
  * --strict, --record FILE, --replay FILE, --check FILE, --expect-frame N
@@ -491,6 +494,11 @@ int main(int argc, char **argv) {
             snd_voice_lang_cli = v;
         }
         else if (!strcmp(argv[i], "--land-cull") && i + 1 < argc) hle_land_cull_cli = hle_parse_land_cull(argv[++i]);   /* on|opaque|off; hle/ninja/native_land.c */
+        else if (!strcmp(argv[i], "--math") && i + 1 < argc) {   /* exact|native|check; hle/settings.c */
+            int m = hle_parse_math(argv[++i]);
+            if (m < 0) { fprintf(stderr, "--math: exact, native or check\n"); return 2; }
+            hle_math_cli = m;
+        }
         else if (!strcmp(argv[i], "--land-decide") && i + 1 < argc) {   /* new|old|check; hle/ninja/native_land.c */
             int d = hle_parse_land_decide(argv[++i]);
             if (d < 0) { fprintf(stderr, "--land-decide: new, old or check\n"); return 2; }
