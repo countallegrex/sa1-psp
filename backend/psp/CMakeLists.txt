@@ -107,9 +107,12 @@ target_compile_options(sa1_backend_psp PRIVATE -O2 -fno-strict-aliasing -Wall -g
 # entry and the code after it (tools/psp_hot_order.py --pin), and lists the
 # warm HLE and backend functions too, so a lever moves only its own code and
 # the cold code (1 KB of cold code moved Station Square by 0.06 ms, where
-# the unlisted warm code moved it by up to 1.5 ms).  A regenerated list is a
-# new layout (the 97 % cover list of 10-22 was 3.1 ms slower): keep this one
-# and add a lever's new functions by hand, unpinned.
+# the unlisted warm code moved it by up to 1.5 ms).  Between regenerations
+# add a lever's new functions by hand, unpinned.  After every few levers,
+# tools/psp_hot_regen.sh regenerates the list from fresh ss + ec profiles
+# (90 % hot, 99 % warm, objects), builds and pins it: a new layout, so it
+# lands only on a measured gain (the 97 % cover list of 10-22 was 3.1 ms
+# slower; the 10-26 one gained 0.3-0.45 ms).
 # The D-cache is 16 KB, 2-way, 64-byte lines too, and .rodata, .data,
 # .sdata, .sbss and .bss follow .text: 380 bytes of cold code moved every
 # hot table and pool by 380 bytes and Station Square by 2.8 ms (cea4798).

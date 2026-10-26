@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Write tools/psp_hot_order.txt, the PSP build's hot-code placement, from a console profile.
 
-    psp_hot_order.py --pcs FILE --log FILE --elf FILE [--cover 0.9] [--min-samples 3] [--out FILE]
+    psp_hot_order.py --pcs FILE --log FILE [--pcs FILE --log FILE ...] --elf FILE
+                     [--cover 0.9] [--warm-cover 0.99] [--min-samples 3] [--out FILE]
 
 --pcs/--log/--elf are those of tools/psp_prof.py: the samples of a
-main_psp.c --prof run, its game log, and the sa1psp_prx.elf that ran.
+main_psp.c --prof run, its game log, and the sa1psp_prx.elf that ran;
+several profiles of the same ELF (one per stage) are summed.
 The functions that hold the first --cover share of the samples inside
 the PRX (at least --min-samples each) are listed, callers next to the
 functions they call: each function starts as its own chain, the call
 edges (jal/j found in the code, weighted by the smaller of the two
 sample counts) are taken heaviest first, and each joins two chains in
 the orientation that puts the pair closest; the chains are then written
-hottest first.
+hottest first.  The functions after those, up to --warm-cover, follow
+hottest first ("warm"), then a "=CHUNK.c" line per game and overlay
+object in link order; the list comes out unpinned: build it, then --pin
+it to that build (tools/psp_hot_regen.sh does both).
 
 The list is what backend/psp/CMakeLists.txt (SA1_PSP_HOT_ORDER) turns
 into the linker's --section-ordering-file: those functions go first in
@@ -133,31 +138,27 @@ def lib_members(distro: str) -> dict[str, str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--pcs")
-    ap.add_argument("--log")
+    ap.add_argument("--pcs", action="append", help="repeatable, one per profile (with its --log)")
+    ap.add_argument("--log", action="append")
     ap.add_argument("--elf")
     ap.add_argument("--pin", metavar="ELF", help="pin every entry of --list to its address in ELF instead")
     ap.add_argument("--list", default=os.path.join(REPO, "tools", "psp_hot_order.txt"))
     ap.add_argument("--cover", type=float, default=0.90)
+    ap.add_argument("--warm-cover", type=float, default=0.99,
+                    help="the functions up to this share go after the hot list, hottest first, unchained")
     ap.add_argument("--min-samples", type=int, default=3)
     ap.add_argument("--out", default=os.path.join(REPO, "tools", "psp_hot_order.txt"))
     ap.add_argument("--wsl-distro", default="Ubuntu")
     a = ap.parse_args()
     if a.pin:
         return pin(a)
-    if not (a.pcs and a.log and a.elf):
-        ap.error("--pcs, --log and --elf are required")
+    if not (a.pcs and a.log and a.elf) or len(a.pcs) != len(a.log):
+        ap.error("--pcs, --log (one per --pcs) and --elf are required")
 
-    main_at = None
-    for line in open(a.log, encoding="utf-8", errors="replace"):
-        m = re.search(r"image: main at (0x[0-9a-fA-F]+)", line)
-        if m:
-            main_at = int(m.group(1), 16)
     fns = functions(a.elf, a.wsl_distro)
     link_main = next((f[0] for f in fns if f[2] == "main"), None)
-    if main_at is None or link_main is None:
-        raise SystemExit("psp_hot_order: no 'image: main at' in the log or no main in the ELF")
-    delta = main_at - link_main
+    if link_main is None:
+        raise SystemExit("psp_hot_order: no main in the ELF")
     starts = [f[0] for f in fns]
     import bisect
 
@@ -167,24 +168,50 @@ def main() -> int:
             return i
         return None
 
-    data = open(a.pcs, "rb").read()
-    magic, count, _period, _missed = struct.unpack_from("<4I", data, 0)
-    if magic != 0x464F5250:
-        raise SystemExit(f"psp_hot_order: {a.pcs} is not a --prof file")
+    # The profiles' samples are summed as they are: a stage with longer
+    # frames weighs more (the same frame range gives it more samples).
     hits = collections.Counter()
     inside = 0
-    for pc in struct.unpack_from(f"<{count}I", data, 16):
-        i = find(pc - delta)
-        if i is not None:
-            hits[i] += 1
-            inside += 1
+    for pcs, log in zip(a.pcs, a.log):
+        main_at = None
+        for line in open(log, encoding="utf-8", errors="replace"):
+            m = re.search(r"image: main at (0x[0-9a-fA-F]+)", line)
+            if m:
+                main_at = int(m.group(1), 16)
+        if main_at is None:
+            raise SystemExit(f"psp_hot_order: no 'image: main at' in {log}")
+        delta = main_at - link_main
+        data = open(pcs, "rb").read()
+        magic, count, _period, _missed = struct.unpack_from("<4I", data, 0)
+        if magic != 0x464F5250:
+            raise SystemExit(f"psp_hot_order: {pcs} is not a --prof file")
+        for pc in struct.unpack_from(f"<{count}I", data, 16):
+            i = find(pc - delta)
+            if i is not None:
+                hits[i] += 1
+                inside += 1
 
-    hot, acc = [], 0
+    # The game and overlay objects in link order (their sa1_obj_* markers):
+    # the warm list leaves their code in them, whole.
+    mk = markers(a.elf, a.wsl_distro)
+    objs = sorted((ad, n) for n, ad in mk.items() if n != "sa1_obj_end")
+    chunks = ["=" + n[len("sa1_obj_"):-2] + ".c" for _ad, n in objs if n.endswith("_c")]
+    game_lo = objs[0][0] if objs else 0
+    game_hi = mk.get("sa1_obj_end", game_lo)
+
+    hot, warm, acc, wacc = [], [], 0, 0
     for i, k in sorted(hits.items(), key=lambda x: (-x[1], fns[x[0]][2], x[0])):
-        if acc >= a.cover * inside or k < a.min_samples:
+        if k < a.min_samples:
             break
-        hot.append(i)
-        acc += k
+        if acc < a.cover * inside:
+            hot.append(i)
+            acc += k
+        elif acc + wacc < a.warm_cover * inside:
+            if not game_lo <= fns[i][0] < game_hi:
+                warm.append(i)
+            wacc += k
+        else:
+            break
     hotset = set(hot)
 
     # Call edges between hot functions (jal/j to a hot function's start).
@@ -222,9 +249,11 @@ def main() -> int:
 
     libs = lib_members(a.wsl_distro)
     names = collections.Counter(f[2] for f in fns)
-    lines, size, done = [], 0, set()
-    for c in chains:
-        for i in c:
+    done = set()
+
+    def emit(order, tag=""):
+        lines, size = [], 0
+        for i in order:
             ad, sz, name, bind, src = fns[i]
             mem = libs.get(name)
             stem = os.path.splitext(src)[0]
@@ -238,15 +267,30 @@ def main() -> int:
                 continue
             done.add(entry)
             size += sz
-            lines.append("%-40s # %5.2f %%  %6d B" % (entry, 100.0 * hits[i] / inside, sz))
+            lines.append(("%-40s # %5.2f %%  %6d B" + tag) % (entry, 100.0 * hits[i] / inside, sz))
+        return lines, size
+
+    lines, size = emit([i for c in chains for i in c])
+    wlines, wsize = emit(warm, "  warm")
+    profs = " + ".join(os.path.basename(p) for p in a.pcs)
     with open(a.out, "w", encoding="utf-8", newline="\n") as f:
         f.write("# The PSP build's hot code, placed first in .text in this order (SA1_PSP_HOT_ORDER,\n"
-                "# backend/psp/CMakeLists.txt).  Written by tools/psp_hot_order.py from a console\n"
-                "# profile: %s, %d functions, %.1f %% of the samples inside the PRX, %d bytes.\n"
+                "# backend/psp/CMakeLists.txt).  Written by tools/psp_hot_order.py from console\n"
+                "# profiles: %s, %d functions, %.1f %% of the samples inside the PRX, %d bytes.\n"
                 "# Share of samples and size are of the profiled build.\n"
-                % (os.path.basename(a.pcs), len(lines), 100.0 * acc / inside, size))
+                % (profs, len(lines), 100.0 * acc / inside, size))
         f.write("\n".join(lines) + "\n")
-    print(f"psp_hot_order: {len(lines)} functions, {100.0 * acc / inside:.1f} % of {inside} samples, {size} bytes -> {a.out}")
+        if wlines:
+            f.write("# Warm HLE, backend and library code (up to %.0f %% of the samples, %d bytes) after\n"
+                    "# the hot list: outside it, any edit to the code before it would move it.\n"
+                    % (100.0 * a.warm_cover, wsize))
+            f.write("\n".join(wlines) + "\n")
+        if chunks:
+            f.write("\n# The game and overlay objects, whole, after the libraries, in link order: each pinned\n"
+                    "# at its start, so a lever that changes one chunk moves none after it (--pin).\n")
+            f.write("\n".join(chunks) + "\n")
+    print(f"psp_hot_order: {len(lines)} hot + {len(wlines)} warm functions, {100.0 * acc / inside:.1f} + "
+          f"{100.0 * wacc / inside:.1f} % of {inside} samples, {size} + {wsize} bytes, {len(chunks)} objects -> {a.out}")
     return 0
 
 
