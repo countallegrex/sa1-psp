@@ -572,7 +572,7 @@ void sdk_8c63fe48(sh4_ctx *c) {         /* njSetFogTable(table) -> kmSetFogTable
 /* Game mode 11 (the ADVERTISE overlay: title, main menu, character select)
  * frames its 3D for a 4:3 screen: drawn in the 4:3 area (draw.h). */
 static int menu_mode;
-typedef struct strip_rec { uint32_t off, count; float depth; } strip_rec;   /* translucent sort */
+typedef struct strip_rec { uint32_t off, count; float depth; uint32_t ref; } strip_rec;   /* translucent sort; ref: off is into dverts (p12) */
 static draw_vertex *verts; static uint32_t nverts, verts_cap;
 static strip_rec *strips; static uint32_t nstrips, strips_cap;
 static draw_state *strip_states; static uint32_t states_cap;
@@ -692,7 +692,7 @@ static void flush_strip(parse_ctx *pc, int sorted) {
      * vertices out to 1/w 1.0) sort in front of the coast water it lies under. */
     float far = verts[pc->strip_start].w;
     for (uint32_t i = 1; i < n; i++) if (verts[pc->strip_start + i].w < far) far = verts[pc->strip_start + i].w;
-    strips[nstrips].off = pc->strip_start; strips[nstrips].count = n; strips[nstrips].depth = far;
+    strips[nstrips].off = pc->strip_start; strips[nstrips].count = n; strips[nstrips].depth = far; strips[nstrips].ref = 0;
     strip_states[nstrips] = pc->state;
     nstrips++;
     stat_strips[1]++;
@@ -703,7 +703,25 @@ static void flush_strip(parse_ctx *pc, int sorted) {
  * writer's vertex records hold them.  Under the header the writer is made
  * for (packed colour, float UV, offset) the host array is the strip; any
  * other header decodes the same words as parse_region decodes a record. */
+/* p12: a sorted strip in the writer's own format is recorded by reference
+ * into the store (dverts does not change until the frame is drawn) instead
+ * of being copied into verts: the copy of that format is the identity, so
+ * draw_strip reads the same vertices.  --strip-ref off: copied, as before. */
+int hle_strip_ref = 1;
 static __attribute__((noinline)) void direct_strip(parse_ctx *pc, const draw_vertex *sv, uint32_t n, int sorted) {
+    if (sorted && hle_strip_ref && pc->coltype == 0 && pc->textured && !pc->uv16 && pc->offset) {
+        pc->strip_start = nverts;
+        if (n < 3) return;
+        if (!grow((void **)&strips, &strips_cap, nstrips + 1, sizeof *strips) ||
+            !grow((void **)&strip_states, &states_cap, nstrips + 1, sizeof *strip_states)) return;
+        float far = sv[0].w;              /* flush_strip's sort key */
+        for (uint32_t i = 1; i < n; i++) if (sv[i].w < far) far = sv[i].w;
+        strips[nstrips].off = (uint32_t)(sv - dverts); strips[nstrips].count = n; strips[nstrips].depth = far; strips[nstrips].ref = 1;
+        strip_states[nstrips] = pc->state;
+        nstrips++;
+        stat_strips[1]++;
+        return;
+    }
     if (!sorted && pc->coltype == 0 && pc->textured && !pc->uv16 && pc->offset) {
         if (n < 3) return;
         draw_set_state(&pc->state);
@@ -1068,7 +1086,7 @@ static void render_lists(void) {
             for (uint32_t k = 0; k < nstrips; k++) {
                 uint32_t i = arr[k].i;
                 draw_set_state(&strip_states[i]);
-                draw_strip(verts + strips[i].off, (int)strips[i].count);
+                draw_strip((strips[i].ref ? dverts : verts) + strips[i].off, (int)strips[i].count);
             }
             free(arr);
         }

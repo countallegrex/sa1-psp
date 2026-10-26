@@ -598,6 +598,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--ge-shadow") && i + 1 < args_c) draw_gu_set_ge_shadow(strcmp(av[++i], "off") != 0);   /* draw_gu.c: state shadow in replay (f6b) */
         else if (!strcmp(av[i], "--list-cache") && i + 1 < args_c) draw_gu_set_list_cache(strcmp(av[++i], "off") != 0);   /* draw_gu.c: the frame's list through the cache (p6) */
         else if (!strcmp(av[i], "--probe-slow")) sa1_probe_slow = 1;   /* sh4_rt.h: the debug hooks' old full paths (p9) */
+        else if (!strcmp(av[i], "--strip-ref") && i + 1 < args_c) { extern int hle_strip_ref; hle_strip_ref = strcmp(av[++i], "off") != 0; }   /* hle/ninja/kamui.c: sorted bypass strips by reference (p12) */
         else if (!strcmp(av[i], "--strip-fast") && i + 1 < args_c) draw_gu_set_strip_fast(strcmp(av[++i], "off") != 0);   /* draw_gu.c: strip_class feeds strip_emit (p8) */
         else if (!strcmp(av[i], "--replay-v2") && i + 1 < args_c) draw_gu_set_replay_v2(atoi(av[++i]));   /* draw_gu.c: p2 replay levers (bitmask) */
         else if (!strcmp(av[i], "--cell-ge") && i + 1 < args_c) draw_gu_set_cell_ge(strcmp(av[++i], "off") != 0);   /* draw_gu.c: native land in the near pass on the GE */
