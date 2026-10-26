@@ -129,8 +129,8 @@ static inline __attribute__((always_inline)) void tad_run(sh4_ctx *c, const int 
     const uint8_t *s8 = HP(r8), *s8_0 = s8;      /* strip list */
     const uint8_t *s1 = HP(r1), *s1_0 = s1;      /* UV list, or the normals */
     const uint8_t *vbuf = HP(r9), *ocol = HP(r3a);
-    uint8_t *mk = (uint8_t *)RAMPW(r14, 0);      /* the markers, when they all lie in one run */
-    const int mk_run = strips - 1u < 0x7FFFu && sa1_off(r14 + 32u * strips - 4u) == sa1_off(r14) + 32u * strips - 4u;
+    uint8_t *mk = (uint8_t *)RAMPB(r14, 0);      /* the markers, when they all lie in one run (bounded: sh4_rt.h sa1_off) */
+    const int mk_run = strips - 1u < 0x7FFFu && sa1_off_full(r14 + 32u * strips - 4u) == sa1_off_full(r14) + 32u * strips - 4u;
 
     /* One block for all the strips (one call instead of one per strip, and
      * the block's whole lines can be claimed) when that gives the strips
@@ -188,8 +188,8 @@ static inline __attribute__((always_inline)) void tad_run(sh4_ctx *c, const int 
                 *(sa1_u32a *)(void *)(mk + 8) = n;
                 if (hle_strip_census) *(sa1_u32a *)(void *)(mk + 12) = census_writer(n, env);
             } else {
-                WR32(r14, 0, TA_MARKER); WR32(r14, 4, first); WR32(r14, 8, n);
-                if (hle_strip_census) WR32(r14, 12, census_writer(n, env));
+                WB32(r14, 0, TA_MARKER); WB32(r14, 4, first); WB32(r14, 8, n);
+                if (hle_strip_census) WB32(r14, 12, census_writer(n, env));
             }
             mk += 32; r14 += 32;
         }

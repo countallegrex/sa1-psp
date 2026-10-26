@@ -98,7 +98,7 @@ static inline __attribute__((always_inline)) void mesh_hdr(sh4_ctx *c, uint8_t *
     sa1_mmio_wr(0xff000038u, 4, q);
     sa1_mmio_wr(0xff00003cu, 4, q);
     r8 = (r8 & 0x03ffffffu) | 0xe0000000u;
-    uint8_t *o = HPW(r8);
+    uint8_t *o = RAMPB(r8, 0);         /* the TA write pointer: bounded (sh4_rt.h sa1_off) */
     if (four) HW32(o, 12, KR(0x8c890110u));
     uint32_t w = KR(0x8c89010cu);
     if (op) w = (w & 0x03efffffu) | 0x20080000u;

@@ -175,7 +175,7 @@ int kamui_append(int list, const uint32_t w[8]) {
     uint32_t p = kamui_buffer_ptr(list) & 0x1FFFFFFFu;
     uint32_t end = bufs[list].base + bufs[list].size;
     if (!bufs[list].base || p + 32 > end) { stat_overflow++; return 0; }
-    for (int i = 0; i < 8; i++) hle_wr32(p + 4u * (uint32_t)i, w[i]);
+    for (int i = 0; i < 8; i++) WB32(p, 4u * (uint32_t)i, w[i]);   /* bounded: the end test above never fires (p is 0x0D.., end 0x8D..) */
     kamui_buffer_set(list, p + 32);
     return 1;
 }

@@ -390,8 +390,8 @@ static void load_file(uint32_t lt) {
         uint32_t j = i;
         while (j < nb && b[j].model == m) j++;
         nl_model *md = model_of(m);
-        const uint32_t nset = hle_rd16((m | 0x80000000u) + 20u);
         if (!md) { i = j; continue; }
+        const uint32_t nset = hle_rd16((m | 0x80000000u) + 20u);
         nl_set *sets = nset && nset <= MAX_SETS ? calloc(nset, sizeof *sets) : NULL;
         uint32_t k = 0, ntri = 0, gtri = 0, ng = 0, snv = 0, sni = 0;
         int ok = sets != NULL, dup = 0;
@@ -719,9 +719,9 @@ int native_land_set(sh4_ctx *c, uint32_t model, uint32_t set, uint32_t ta, uint3
     if (dec_kind == DEC_MODEL) {    /* one marker for the model's opaque sets, at the first */
         uint32_t rec;
         if (!dec_marked && kamui_native_model(dvar->handle, dec_m, &rec)) {
-            hle_wr32(ta, 0xC0000002u);   /* kamui: a persistent model record (type 6, kind 2) */
-            hle_wr32(ta + 4, rec);
-            hle_wr32(ta + 8, 0);
+            WB32(ta, 0, 0xC0000002u);    /* kamui: a persistent model record (type 6, kind 2); TA pointer, bounded */
+            WB32(ta, 4, rec);
+            WB32(ta, 8, 0);
             ta += 32;
         }
         dec_marked = 1;
@@ -741,9 +741,9 @@ int native_land_set(sh4_ctx *c, uint32_t model, uint32_t set, uint32_t ta, uint3
     draw_mesh_vertex *out = kamui_native_mesh(b->vcount, dec_m, md->bound, md->six + b->si, b->icount, tag, &rec);
     if (!out) return 0;
     for (uint32_t i = 0; i < b->vcount; i++) vertex(md, dvar, &md->sv[b->sv + i], zero_off, &out[i]);
-    hle_wr32(ta, 0xC0000001u);       /* kamui: a native mesh record (type 6, kind 1) */
-    hle_wr32(ta + 4, rec);
-    hle_wr32(ta + 8, 0);
+    WB32(ta, 0, 0xC0000001u);        /* kamui: a native mesh record (type 6, kind 1); TA pointer, bounded */
+    WB32(ta, 4, rec);
+    WB32(ta, 8, 0);
     *ta_out = ta + 32;
     return 1;
 }

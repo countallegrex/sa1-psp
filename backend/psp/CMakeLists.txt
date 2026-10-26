@@ -64,6 +64,17 @@ target_include_directories(sa1_hle_psp PUBLIC
   ${CMAKE_SOURCE_DIR}/recomp/emitter/runtime
   ${CMAKE_SOURCE_DIR}/backend)
 target_compile_options(sa1_hle_psp PRIVATE -O2 -fno-strict-aliasing -ffp-contract=off -Wall -g)
+# sh4_rt.h sa1_off: the HLE tests the area only, as the game code does (p7).
+# The files whose guest-sized copies can reach past RAM + EXTRA (the SDK
+# memcpy and the VMU images, the flash read, the S-MLT upload) keep the
+# bound; the TA list writers keep it per site (RAMPB).  The backend keeps it
+# everywhere (--poke).  ON restores the bound in the whole HLE.
+option(SA1_PSP_HLE_FULL_OFF "HLE checks every guest offset against RAM + EXTRA (sh4_rt.h sa1_off)" OFF)
+if(NOT SA1_PSP_HLE_FULL_OFF)
+  target_compile_definitions(sa1_hle_psp PRIVATE SA1_OFF_AREA_TEST_ONLY)
+  set_source_files_properties(${CMAKE_SOURCE_DIR}/hle/shinobi/cfg.c ${CMAKE_SOURCE_DIR}/hle/bios/syscalls.c
+    ${CMAKE_SOURCE_DIR}/hle/sound/sd.c PROPERTIES COMPILE_DEFINITIONS SA1_OFF_FULL)
+endif()
 
 # The PSP half of the platform interface, the sceGu renderer, and the tape
 # code shared with the desktop (plain stdio).

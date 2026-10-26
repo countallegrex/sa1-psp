@@ -40,9 +40,9 @@ void fn_8c038516(sh4_ctx *c);      /* the environment-map clipper (ta_stubs.c, r
 #define TA_MARKER 0xC0000000u          /* parameter type 6: reserved on the TA, never written by the game */
 
 static void put_marker(uint32_t *r14, uint32_t first, uint32_t n) {
-    WR32(*r14, 0, TA_MARKER);
-    WR32(*r14, 4, first);
-    WR32(*r14, 8, n);
+    WB32(*r14, 0, TA_MARKER);          /* the TA write pointer: bounded (sh4_rt.h sa1_off) */
+    WB32(*r14, 4, first);
+    WB32(*r14, 8, n);
     *r14 += 32;
 }
 

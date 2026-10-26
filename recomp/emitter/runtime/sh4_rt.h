@@ -99,13 +99,22 @@ void sa1_ram_set(uint8_t *ram);
  * Station Square frame on the PSP-3001 (2026-10-21), and the game code
  * never had it before then (it built against a stale copy of this header):
  * a masked offset past RAM + EXTRA, which no run has shown, would land past
- * the allocation, as it always did there. */
-static inline uint32_t sa1_off(uint32_t a) {
+ * the allocation, as it always did there.  The HLE library (sa1_hle_psp)
+ * has it too since p7 (2026-10-26): the HLE sites that can be handed an
+ * address past RAM + EXTRA (guest-sized copies, the TA list writes, which
+ * can run off the end of punch-through at 0x8D200000) keep the bound,
+ * through sa1_off_full and RAMPB, or SA1_OFF_FULL for a whole file
+ * (backend/psp/CMakeLists.txt). */
+static inline uint32_t sa1_off_full(uint32_t a) {
     uint32_t off = a & SA1_RAM_MASK;
-#ifdef SA1_OFF_AREA_TEST_ONLY
+    return ((a & 0x3E000000u) && off < SA1_RAM_SIZE + SA1_RAM_EXTRA) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;
+}
+static inline uint32_t sa1_off(uint32_t a) {
+#if defined(SA1_OFF_AREA_TEST_ONLY) && !defined(SA1_OFF_FULL)
+    uint32_t off = a & SA1_RAM_MASK;
     return (a & 0x3E000000u) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;
 #else
-    return ((a & 0x3E000000u) && off < SA1_RAM_SIZE + SA1_RAM_EXTRA) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;
+    return sa1_off_full(a);
 #endif
 }
 #else
@@ -115,6 +124,7 @@ static inline uint32_t sa1_off(uint32_t a) {
     uint32_t off = a & SA1_RAM_MASK;
     return (a & 0x3E000000u) ? off : (a & (SA1_NULL_SIZE - 1u)) + SA1_NULL_OFF;
 }
+#define sa1_off_full sa1_off
 #endif
 
 typedef uint8_t  __attribute__((may_alias)) sa1_u8a;
@@ -153,6 +163,14 @@ static inline uint8_t *sa1_ramp_checked(uint32_t a, int32_t d, int write) {
 #define RAMP(a, d)   (sa1_ram + (sa1_off((uint32_t)(a)) + (d)))
 #define RAMPW(a, d)  RAMP(a, d)
 #endif
+/* The bounded host address (sa1_off_full) for a write that may run past
+ * RAM + EXTRA; the same as RAMPW where sa1_off has the bound. */
+#if defined(SA1_RAM_CHECK) || !defined(SA1_COMPACT_RAM)
+#define RAMPB(a, d)  RAMPW(a, d)
+#else
+#define RAMPB(a, d)  (sa1_ram + (sa1_off_full((uint32_t)(a)) + (d)))
+#endif
+#define WB32(a, d, v) (*(sa1_u32a *)RAMPB(a, d) = (uint32_t)(v))
 #define RD8(a, d)    ((uint32_t)*(const sa1_u8a *)RAMP(a, d))
 #define RD8S(a, d)   ((uint32_t)(int32_t)(int8_t)*(const sa1_u8a *)RAMP(a, d))
 #define RD16(a, d)   ((uint32_t)*(const sa1_u16a *)RAMP(a, d))
