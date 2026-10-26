@@ -365,7 +365,7 @@ out:
  * means the task create returned 0 (counted, not a failure). */
 #define SS_MAX 4096
 static int ss_mode = -1;                /* 0 exact, 1 native, 2 check */
-static uint8_t ss_snap[SS_MAX * 16];
+static uint8_t *ss_snap;                /* check mode only: allocated on first use */
 static uint32_t ck_calls, ck_entries, ck_tested, ck_in, ck_spawned, ck_flip, ck_fdiff, ck_nospawn, ck_logged, ck_last;
 
 static void ss_summary(int force) {
@@ -386,6 +386,7 @@ static void ss_check(sh4_ctx *c) {
     const int32_t n = (int32_t)RD16S(SET_COUNT, 0);
     const uint32_t nn = n > 0 ? (uint32_t)(n < SS_MAX ? n : SS_MAX) : 0u;
     if (n > SS_MAX && ck_logged < 200) { ck_logged++; sa1_log("check: set-scan %d entries, checking %d", n, SS_MAX); }
+    if (!ss_snap && !(ss_snap = malloc(SS_MAX * 16))) { fn_8c091380_orig(c); return; }
     memcpy(ss_snap, HP(SET_TABLE), nn * 16u);
     fn_8c091380_orig(c);
     ck_calls++;
