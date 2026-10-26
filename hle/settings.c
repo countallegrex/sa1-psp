@@ -74,7 +74,8 @@ int hle_math_mode_for(uint32_t addr) {
     return hle_math_mode();
 }
 void sph_check_report(void);
-void hle_math_report(void) { sph_check_report(); }
+void pr_check_report(void);
+void hle_math_report(void) { sph_check_report(); pr_check_report(); }
 
 int hle_parse_voice(const char *v) {
     if (!strcmp(v, "en") || !strcmp(v, "english") || !strcmp(v, "us")) return 1;

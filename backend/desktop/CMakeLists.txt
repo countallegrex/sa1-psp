@@ -64,8 +64,9 @@ if(EXISTS "${SA1_RECOMP_OUT}/emitter/game.h")
   endif()
   # 0x8C028D0A, 0x8C028EC2 and 0x8C02D2E0 (the collision list,
   # hle/game/collision.c) and 0x8C029B00 (the sphere sweep,
-  # hle/game/sphere_sweep.c) the same way, each on its own.
-  foreach(_sa1_a 8c028d0a 8c028ec2 8c02d2e0 8c029b00)
+  # hle/game/sphere_sweep.c) and 0x8C029400 (the poly ray test,
+  # hle/game/poly_ray.c) the same way, each on its own.
+  foreach(_sa1_a 8c028d0a 8c028ec2 8c02d2e0 8c029b00 8c029400)
     file(STRINGS "${SA1_RECOMP_OUT}/emitter/game.h" _sa1_wrapc REGEX "fn_${_sa1_a}_orig" LIMIT_COUNT 1)
     if(_sa1_wrapc)
       string(TOUPPER ${_sa1_a} _sa1_A)

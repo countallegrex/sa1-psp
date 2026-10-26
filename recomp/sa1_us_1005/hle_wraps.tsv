@@ -55,3 +55,4 @@ address	hle	what
 8c09e880	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
 8c09eb08	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
 8c09ee44	hle/ninja/ta_stubs.c	game-side TA/store-queue writer (docs/seam.md section 5); no graphics in M1, native no-op
+8c029400	hle/game/poly_ray.c	nearest polygon along each axis from a point, over the collision hits of one object (native)
