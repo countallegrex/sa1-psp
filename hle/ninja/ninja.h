@@ -36,7 +36,10 @@ int kamui_put_vertex(int list, uint32_t pcw, float x, float y, float z, float u,
 void kamui_draw_end(sh4_ctx *c);
 /* Bracket writes of 2D elements (HUD, menus, 2D sprites): the parameters
  * written in between are drawn in the 4:3 area (draw.h, DRAW_LAYER_2D). */
-int kamui_ptr_trace(void);            /* SA1_KAMUI_DUMP: this frame is being traced */
+/* SA1_KAMUI_DUMP: this frame is being traced (kamui.c kamui_dump_state) */
+extern int kamui_dump_state;
+int kamui_ptr_trace_slow(void);
+static inline int kamui_ptr_trace(void) { return kamui_dump_state != 1 && kamui_ptr_trace_slow(); }
 /* The TA bypass (docs/ta-direct.md): n vertices in the host strip store for
  * a native writer, *first their index for the marker; NULL when full.  The
  * pointer is good until the next call. */

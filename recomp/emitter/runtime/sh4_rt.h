@@ -286,6 +286,30 @@ extern void (*sa1_trap_hook)(sh4_ctx *c, uint32_t pc, const char *what);
  * stack probe (depth high-water mark; traps before an unbounded guest
  * recursion overflows the host stack). */
 extern void (*sa1_depth_hook)(void);
+/* The hook runs only while the host sp is below sa1_stack_floor.  The
+ * default (all ones) calls it every time, as the desktop's high-water
+ * probe needs; the PSP's coroutine switch sets the running stack's trap
+ * line (platform_psp.h SA1_CORO_PROBE_MARGIN), so its probe costs a compare
+ * per call (p9).  --probe-slow keeps the default. */
+extern uintptr_t sa1_stack_floor;
+/* --probe-slow (main_psp.c): the debug hooks' old full paths in this run
+ * (stack probe, ptr_trace), for a same-binary A/B (p9). */
+extern int sa1_probe_slow;
+/* The sp straight from the register: __builtin_frame_address(0) makes
+ * every function that inlines this keep a frame pointer (about 3 ms a frame
+ * in Emerald Coast on the PSP-3001 in a p9 trial that inlined it widely). */
+static inline uintptr_t sa1_host_sp(void) {
+#if defined(__mips__)
+    uintptr_t sp;
+    __asm__("move %0, $sp" : "=r"(sp));
+    return sp;
+#else
+    return (uintptr_t)__builtin_frame_address(0);
+#endif
+}
+static inline void sa1_depth_probe(void) {
+    if (sa1_depth_hook && sa1_host_sp() < sa1_stack_floor) sa1_depth_hook();
+}
 
 /* HLE_ENTER's common case inline: an entry other than the last one counted
  * only bumps its counter and restarts the spin check, which is all

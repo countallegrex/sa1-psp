@@ -173,9 +173,11 @@ void sa1_watch_check(const char *where) {
 }
 
 void (*sa1_depth_hook)(void);
+uintptr_t sa1_stack_floor = UINTPTR_MAX;
+int sa1_probe_slow;
 
 void sa1_call(sh4_ctx *c, uint32_t addr) {
-    if (sa1_depth_hook) sa1_depth_hook();
+    sa1_depth_probe();
     if (sa1_watch_addr) sa1_watch_check("indirect call");
     sa1_fn fn = sa1_fn_lookup(addr);
     if (fn == NULL) {
@@ -186,7 +188,7 @@ void sa1_call(sh4_ctx *c, uint32_t addr) {
 }
 
 sa1_fn sa1_tail_target(sh4_ctx *c, uint32_t addr) {
-    if (sa1_depth_hook) sa1_depth_hook();
+    sa1_depth_probe();
     if (sa1_watch_addr) sa1_watch_check("indirect jump");
     sa1_fn fn = sa1_fn_lookup(addr);
     if (fn == NULL) sa1_trap(c, addr, "indirect jump to an address with no function");
@@ -279,7 +281,7 @@ struct sa1_hit_spin sa1_hit_spin;   /* the last entry, its frame, its repeats (s
 /* The frame counter is read only on a repeat of the last entry: a run starts
  * with the frame unknown and takes it at its first repeat. */
 static inline void seam_hit_count(sa1_hit *h, uint32_t addr, const char *name) {
-    if (sa1_depth_hook) sa1_depth_hook();
+    sa1_depth_probe();
     if (sa1_watch_addr) sa1_watch_check(name);
     if (h) h->hits++;
     struct sa1_hit_spin *s = &sa1_hit_spin;

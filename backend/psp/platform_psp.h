@@ -20,6 +20,11 @@
 #define SA1_CORO_ROOT_STACK   (256u << 10)
 #define SA1_CORO_STACK        (32u << 10)
 #define SA1_CORO_CANARY       (1u << 10)
+/* The probe traps with this much left above the canary; a slot's trap line
+ * lo + CANARY + MARGIN goes to sa1_stack_floor while it runs (coro_psp.c). */
+#ifndef SA1_CORO_PROBE_MARGIN
+#define SA1_CORO_PROBE_MARGIN 4096u
+#endif
 #define SA1_CORO_PAINT        0x5A1C0DE5u
 #define SA1_CORO_REGION_BYTES (SA1_CORO_ROOT_STACK + (SA1_CORO_SLOTS - 1) * SA1_CORO_STACK)
 

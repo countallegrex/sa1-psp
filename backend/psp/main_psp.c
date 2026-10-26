@@ -35,6 +35,8 @@
  *                   list_start, default on; off: the uncached alias, as before)
  *   --strip-fast on|off  draw_strip hands strip_emit its offset test and largest
  *                   w (draw_gu.c, default on; off: strip_emit takes them, as before)
+ *   --probe-slow    the debug hooks' full paths at every call, as before p9
+ *                   (stack probe, kamui ptr_trace): same-binary A/B
  *   --cell-ge on|off  renderer native: land models and cells the GE refused
  *                   for the near plane or the split go to the GE in the near
  *                   pass (or both) under a depth floor (draw_gu.c; default on)
@@ -255,8 +257,10 @@ static void mem_report(const char *when) {
 
 /* ---- host stack probe (sa1_depth_hook): the desktop's, against our slots ---- */
 static int stack_tripped;
-/* Runs on every indirect call and seam hit (2 % of the console's frame with
- * the slot lookup), so the current coroutine's limit is kept between calls. */
+/* Runs on every indirect call and seam hit whose sp is below
+ * sa1_stack_floor: the running slot's trap line, set at every coroutine
+ * switch, so normal play only compares (p9; --probe-slow: every call, as
+ * before).  The current coroutine's limit is kept between calls. */
 static const sa1_coro *probe_co;
 static uintptr_t probe_limit;
 static void stack_probe(void) {
@@ -267,7 +271,7 @@ static void stack_probe(void) {
     if (i < 0 || stack_tripped) return;
     uintptr_t lo, hi;
     sa1_plat_coro_stack(i, &lo, &hi);
-    probe_co = co; probe_limit = lo + SA1_CORO_CANARY + 4096u;
+    probe_co = co; probe_limit = lo + SA1_CORO_CANARY + SA1_CORO_PROBE_MARGIN;
     if (sp >= probe_limit) return;
     stack_tripped = 1;
     uint32_t task = hle_task_running();
@@ -593,6 +597,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--gu-split") && i + 1 < args_c) draw_gu_set_split((float)atof(av[++i]));
         else if (!strcmp(av[i], "--ge-shadow") && i + 1 < args_c) draw_gu_set_ge_shadow(strcmp(av[++i], "off") != 0);   /* draw_gu.c: state shadow in replay (f6b) */
         else if (!strcmp(av[i], "--list-cache") && i + 1 < args_c) draw_gu_set_list_cache(strcmp(av[++i], "off") != 0);   /* draw_gu.c: the frame's list through the cache (p6) */
+        else if (!strcmp(av[i], "--probe-slow")) sa1_probe_slow = 1;   /* sh4_rt.h: the debug hooks' old full paths (p9) */
         else if (!strcmp(av[i], "--strip-fast") && i + 1 < args_c) draw_gu_set_strip_fast(strcmp(av[++i], "off") != 0);   /* draw_gu.c: strip_class feeds strip_emit (p8) */
         else if (!strcmp(av[i], "--replay-v2") && i + 1 < args_c) draw_gu_set_replay_v2(atoi(av[++i]));   /* draw_gu.c: p2 replay levers (bitmask) */
         else if (!strcmp(av[i], "--cell-ge") && i + 1 < args_c) draw_gu_set_cell_ge(strcmp(av[++i], "off") != 0);   /* draw_gu.c: native land in the near pass on the GE */

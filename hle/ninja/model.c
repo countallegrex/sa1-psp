@@ -167,7 +167,6 @@ static int begin_material(sh4_ctx *c, uint32_t flags, uint32_t texid, int textur
 static tv_t tvs[MAX_VERTS];
 static sv_t svs[MAX_VERTS];
 
-int kamui_ptr_trace(void);
 static void draw_basic_model(sh4_ctx *c, uint32_t model) {
     env_t e; env_setup(c, &e);
     uint32_t points = hle_rd32(model), normals = hle_rd32(model + 4), np = hle_rd32(model + 8);

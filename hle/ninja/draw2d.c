@@ -31,7 +31,6 @@
 
 #include <math.h>
 
-int kamui_ptr_trace(void);
 #define FARG(i) (c->fr[4 + (i)])
 #define PCW_VTX 0xE0000000u
 #define PCW_VTX_END 0xF0000000u

@@ -108,13 +108,19 @@ static void dump_setup(void) {
         e = *end == ',' ? end + 1 : end;
     }
 }
-static int ptr_trace(void) {
+/* ninja.h kamui_ptr_trace: 0 = not read yet, 1 = no frames to dump (the
+ * inline test answers 0 without a call: the TA writers ask at every entry),
+ * 2 = frames to dump or --probe-slow (ask ptr_trace_read) (p9). */
+int kamui_dump_state;
+static int ptr_trace_read(void) {
     dump_setup();
+    if (!kamui_dump_state) kamui_dump_state = ndump_frames || sa1_probe_slow ? 2 : 1;
     uint32_t f = hle_frame_count();
     for (uint32_t i = 0; i < ndump_frames; i++) if (f >= dump_frames[i] && f < dump_frames[i] + 2) return 1;
     return 0;
 }
-int kamui_ptr_trace(void) { return ptr_trace(); }
+int kamui_ptr_trace_slow(void) { return ptr_trace_read(); }
+static inline int ptr_trace(void) { return kamui_ptr_trace(); }
 static int frame_rendered;
 static uint32_t stat_frames, stat_polys[3], stat_strips[3], stat_modvols, stat_overflow, stat_sprites, stat_fogmode[4];
 static uint64_t parse_us; static uint32_t parse_frames;     /* render_lists CPU time since the last report */

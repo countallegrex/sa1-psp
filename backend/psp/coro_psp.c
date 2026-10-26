@@ -17,6 +17,8 @@
 #include <string.h>
 
 void sa1_coro_swap(uintptr_t *from_sp, uintptr_t *to_sp);
+extern uintptr_t sa1_stack_floor;   /* sh4_rt.h: below it the stack probe runs */
+extern int sa1_probe_slow;
 void sa1_coro_trampoline(void);
 void sa1_coro_entry_c(void *co);
 
@@ -188,6 +190,9 @@ void sa1_plat_coro_switch(sa1_coro *to) {
     sa1_coro *from = current;
     if (to == from) return;
     current = to;
+    /* the probe's trap line for the stack we go to (main_psp.c stack_probe;
+     * the supervisor, index -1, is never probed) */
+    if (!sa1_probe_slow) sa1_stack_floor = to->index < 0 ? 0 : to->lo + SA1_CORO_CANARY + SA1_CORO_PROBE_MARGIN;
     sa1_coro_swap(&from->sp, &to->sp);
 }
 

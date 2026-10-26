@@ -31,7 +31,6 @@
 
 #include <stdlib.h>
 
-int kamui_ptr_trace(void);
 void kamui_mark2d_begin(void);
 void kamui_mark2d_end(void);
 
