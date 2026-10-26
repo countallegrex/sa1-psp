@@ -33,6 +33,8 @@
  *   --list-cache on|off  the frame's display list written through the data
  *                   cache and written back before each stall move (draw_gu.c
  *                   list_start, default on; off: the uncached alias, as before)
+ *   --strip-fast on|off  draw_strip hands strip_emit its offset test and largest
+ *                   w (draw_gu.c, default on; off: strip_emit takes them, as before)
  *   --cell-ge on|off  renderer native: land models and cells the GE refused
  *                   for the near plane or the split go to the GE in the near
  *                   pass (or both) under a depth floor (draw_gu.c; default on)
@@ -114,6 +116,7 @@ void draw_gu_set_split(float z);
 void draw_gu_set_cell_ge(int on);
 void draw_gu_set_ge_shadow(int on);
 void draw_gu_set_list_cache(int on);
+void draw_gu_set_strip_fast(int on);
 void draw_gu_set_replay_v2(int bits);
 void draw_gu_set_lod_bias(float b);
 void draw_gu_set_max_mip(int n);
@@ -590,6 +593,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--gu-split") && i + 1 < args_c) draw_gu_set_split((float)atof(av[++i]));
         else if (!strcmp(av[i], "--ge-shadow") && i + 1 < args_c) draw_gu_set_ge_shadow(strcmp(av[++i], "off") != 0);   /* draw_gu.c: state shadow in replay (f6b) */
         else if (!strcmp(av[i], "--list-cache") && i + 1 < args_c) draw_gu_set_list_cache(strcmp(av[++i], "off") != 0);   /* draw_gu.c: the frame's list through the cache (p6) */
+        else if (!strcmp(av[i], "--strip-fast") && i + 1 < args_c) draw_gu_set_strip_fast(strcmp(av[++i], "off") != 0);   /* draw_gu.c: strip_class feeds strip_emit (p8) */
         else if (!strcmp(av[i], "--replay-v2") && i + 1 < args_c) draw_gu_set_replay_v2(atoi(av[++i]));   /* draw_gu.c: p2 replay levers (bitmask) */
         else if (!strcmp(av[i], "--cell-ge") && i + 1 < args_c) draw_gu_set_cell_ge(strcmp(av[++i], "off") != 0);   /* draw_gu.c: native land in the near pass on the GE */
         else if (!strcmp(av[i], "--gu-lod-bias") && i + 1 < args_c) draw_gu_set_lod_bias((float)atof(av[++i]));

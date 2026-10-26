@@ -1957,19 +1957,25 @@ static void rec_depth_write(const draw_vertex *v) {
  * w > ws is bits > bits(ws) except for a +NaN w (above +inf's bits), where
  * pass_of decides. */
 static inline uint32_t fbits(float f) { union { float f; uint32_t u; } x = { f }; return x.u; }
-static int strip_class(const draw_vertex *v, int n, int *guard) {
+/*   p8: the same pass also hands strip_emit the OR of the offset colours
+ * (*ocol: its has_offset test) and the bits of the largest and smallest w
+ * (*wlo, *whi: strip_zs's largest w when every w is a non-negative number,
+ * where the bits order as the floats do). */
+static int strip_class(const draw_vertex *v, int n, int *guard, uint32_t *ocol, int32_t *wlo, int32_t *whi) {
     const uint32_t x0 = fbits(GUARD_X0), x1 = fbits(GUARD_X1), y0 = fbits(GUARD_Y0), y1 = fbits(GUARD_Y1);
     const uint32_t *p = (const uint32_t *)v;
-    uint32_t out = 0;
+    uint32_t out = 0, oc = 0;
     int32_t wmax = INT32_MIN, wmin = INT32_MAX;
     for (int i = 0; i < n; i++, p += sizeof *v / 4) {
         uint32_t x = p[0], y = p[1];
         int32_t w = (int32_t)p[2];
         uint32_t tx = (int32_t)x < 0 ? x0 : x1, ty = (int32_t)y < 0 ? y0 : y1;
         out |= (uint32_t)(x > tx) | (uint32_t)(y > ty);
+        oc |= p[6];
         wmax = w > wmax ? w : wmax;
         wmin = w < wmin ? w : wmin;
     }
+    *ocol = oc; *wlo = wmin; *whi = wmax;
     *guard = out && !in_guard(v, n);
     if (*guard) return -1;
     if (!depth_split || (cur.layer == DRAW_LAYER_2D && v[0].w >= 1.0f)) return PASS_NEAR;
@@ -1979,21 +1985,34 @@ static int strip_class(const draw_vertex *v, int n, int *guard) {
     return near && far ? -1 : near ? PASS_NEAR : PASS_FAR;
 }
 
+/* --strip-fast on|off (p8): draw_strip hands strip_emit the offset test and
+ * the largest w from strip_class's pass (default on; off: strip_emit takes
+ * them itself, as before). */
+static int strip_fast = 1;
+void draw_gu_set_strip_fast(int on) { strip_fast = on; }
+static void strip_emit_k(int pass, const draw_vertex *v, int n, int hoff, int wknown, float wk);
+
 void draw_strip(const draw_vertex *v, int n) {
     if (n < 3) return;
     stats.strips++; stats.triangles += (uint32_t)(n - 2);
     if (headless || !list_open || !cur_valid || n > BATCH_MAX - 4 || list_full()) return;
     select_proj(v, n);
     rec_depth_write(v);
-    int guard, pass = strip_class(v, n, &guard);
+    uint32_t ocol;
+    int32_t wlo, whi;
+    int guard, pass = strip_class(v, n, &guard, &ocol, &wlo, &whi);
     if (gu_debug & (32 | 64)) {       /* bisection: 32 skips 3D strips that reach the near plane, 64 guard-band ones */
         int near1 = 0;
         for (int i = 0; i < n; i++) if (v[i].w >= 0.999f) near1 = 1;
         if ((gu_debug & 32) && near1 && cur.layer != DRAW_LAYER_2D) return;
         if ((gu_debug & 64) && guard) return;
     }
-    if (pass >= 0) strip_emit(pass, v, n);
-    else strip_split(v, n, guard);
+    if (pass < 0) strip_split(v, n, guard);
+    else if (!strip_fast) strip_emit(pass, v, n);
+    else {
+        union { int32_t i; float f; } wk = { whi };
+        strip_emit_k(pass, v, n, cur.texture && (ocol & 0x00FFFFFFu), wlo >= 0 && whi <= (int32_t)fbits(__builtin_inff()), wk.f);
+    }
 }
 
 /* The strip's z values (vtx_z: 1/w, w clamped to 1e-6..1/depth_zn) four at
@@ -2047,16 +2066,53 @@ static float strip_zs(const draw_vertex *v, int n, float *z) {
     float a = w0.f > w1.f ? w0.f : w1.f, b = w2.f > w3.f ? w2.f : w3.f;
     return a > b ? a : b;
 }
+/* strip_zs's z values without its largest w (the caller has it). */
+static void strip_zs_only(const draw_vertex *v, int n, float *z) {
+    union { float f; uint32_t u; } lo = { 1e-6f }, hi = { 1.0f / depth_zn };
+    __asm__ volatile(
+        "mtv %0, S020\n mtv %0, S021\n mtv %0, S022\n mtv %0, S023\n"
+        "mtv %1, S030\n mtv %1, S031\n mtv %1, S032\n mtv %1, S033\n"
+        : : "r"(lo.u), "r"(hi.u));
+    const draw_vertex *last = &v[n - 1];
+    int i = 0;
+    for (; i + 4 < n; i += 8, z += 8) {
+        const draw_vertex *a = &v[i], *e = a + 4, *f = i + 5 < n ? a + 5 : last, *g = i + 6 < n ? a + 6 : last, *h = i + 7 < n ? a + 7 : last;
+        __asm__ volatile(
+            "lv.s S000, 8(%1)\n lv.s S001, 36(%1)\n lv.s S002, 64(%1)\n lv.s S003, 92(%1)\n"
+            "lv.s S010, 8(%2)\n lv.s S011, 8(%3)\n lv.s S012, 8(%4)\n lv.s S013, 8(%5)\n"
+            "vmin.q C000, C000, C030\n"
+            "vmin.q C010, C010, C030\n"
+            "vmax.q C000, C000, C020\n"
+            "vmax.q C010, C010, C020\n"
+            "vrcp.q C000, C000\n"
+            "vrcp.q C010, C010\n"
+            "sv.q C000, 0(%0)\n"
+            "sv.q C010, 16(%0)\n"
+            : : "r"(z), "r"(a), "r"(e), "r"(f), "r"(g), "r"(h) : "memory");
+    }
+    if (i < n) {
+        const draw_vertex *a = &v[i], *b = i + 1 < n ? a + 1 : last, *c = i + 2 < n ? a + 2 : last, *d = i + 3 < n ? a + 3 : last;
+        __asm__ volatile(
+            "lv.s S000, 8(%1)\n lv.s S001, 8(%2)\n lv.s S002, 8(%3)\n lv.s S003, 8(%4)\n"
+            "vmin.q C000, C000, C030\n"
+            "vmax.q C000, C000, C020\n"
+            "vrcp.q C000, C000\n"
+            "sv.q C000, 0(%0)\n"
+            : : "r"(z), "r"(a), "r"(b), "r"(c), "r"(d) : "memory");
+    }
+}
 
-static void strip_emit(int pass, const draw_vertex *v, int n) {
+static void strip_emit(int pass, const draw_vertex *v, int n) { strip_emit_k(pass, v, n, -1, 0, 0.0f); }
+/* hoff: the strip's has_offset, or -1 to test here; wknown: wk is its largest w. */
+static void strip_emit_k(int pass, const draw_vertex *v, int n, int hoff, int wknown, float wk) {
     /* A run's offset draw goes after all its strips (replay).  Opaque,
      * that is the per-strip order's picture; translucent, a strip after one
      * with offset vertices would blend before that offset instead of after
      * it.  So a translucent strip never joins a run with offsets pending:
      * each one's base-then-offset order is the desktop's (draw_gl.c). */
     if (cur.translucent && nobatch[pass]) batch_flush_pass(pass);
-    int has_offset = 0;
-    if (cur.texture) for (int i = 0; i < n && !has_offset; i++) if (v[i].ocolor & 0x00FFFFFFu) has_offset = 1;
+    int has_offset = hoff > 0;
+    if (hoff < 0 && cur.texture) for (int i = 0; i < n && !has_offset; i++) if (v[i].ocolor & 0x00FFFFFFu) has_offset = 1;
     if (nbatch[pass] + n + 3 > BATCH_MAX || (has_offset && nobatch[pass] + n + 3 > BATCH_MAX)) batch_flush_pass(pass);
     int need_v = !vend[pass] || batch[pass] + nbatch[pass] + n + 3 > vend[pass];
     int need_o = has_offset && (!oend[pass] || obatch[pass] + nobatch[pass] + n + 3 > oend[pass]);
@@ -2077,7 +2133,7 @@ static void strip_emit(int pass, const draw_vertex *v, int n) {
     uint8_t *vl = vline[pass], *ol = oline[pass];
     int scale = cur.use_alpha && cur.blend_dst == DRAW_BLEND_INV_SRC_ALPHA, mode = conv_mode();
     const uint32_t *zs = (const uint32_t *)strip_z;   /* z's bits: conv_vtx takes -z by the sign */
-    float wmax = strip_zs(v, n, strip_z);
+    float wmax = wknown ? (strip_zs_only(v, n, strip_z), wk) : strip_zs(v, n, strip_z);
     uint32_t aor = (mode & CONV_ALPHA) ? 0u : 0xFF000000u;
     int add = mode & CONV_ADD_OFFSET;
     if (nb) {                         /* degenerate joint; keep the next strip's winding parity */
