@@ -20,6 +20,8 @@
  *                   run (default: through frame 300, then buffered)
  *   --math M        exact|native|check: game math (hle/settings.c; native by
  *                   default, exact in strict runs unless given)
+ *   --math-exact A  these routines (hex, comma-separated) stay exact whatever
+ *                   --math says (sa1psp.ini math_exact)
  *   --cull-flip     the other winding convention for PowerVR culling (draw_gu.c)
  *   --no-ta-direct  the recompiled TA strip writers instead of the native ones (docs/ta-direct.md)
  *   --gu-split Z    the depth passes' split (draw_gu.c, default 16; 0: one pass)
@@ -557,6 +559,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--ta-direct")) hle_ta_direct = 1;
         else if (!strcmp(av[i], "--no-ta-direct")) hle_ta_direct = 0;
         else if (!strcmp(av[i], "--land-cull") && i + 1 < args_c) hle_land_cull_cli = hle_parse_land_cull(av[++i]);   /* on|opaque|off; hle/ninja/native_land.c */
+        else if (!strcmp(av[i], "--math-exact") && i + 1 < args_c) hle_parse_math_exact(av[++i]);   /* hle/settings.c */
         else if (!strcmp(av[i], "--math") && i + 1 < args_c) {   /* exact|native|check; hle/settings.c */
             int m = hle_parse_math(av[++i]);
             if (m >= 0) hle_math_cli = m; else sa1_log("--math %s: not exact, native or check; ignored", av[i]);

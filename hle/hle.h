@@ -133,5 +133,10 @@ int hle_parse_frame_skip(const char *v, int *force);   /* settings.c: auto|off|N
 extern int hle_math, hle_math_cli;
 int hle_parse_math(const char *v);  /* exact 0, native 1, check 2, else -1 */
 int hle_math_mode(void);
+/* A routine's own mode: exact when listed in sa1psp.ini math_exact or
+ * --math-exact (hex addresses, comma-separated), else hle_math_mode(). */
+void hle_parse_math_exact(const char *v);
+int hle_math_mode_for(uint32_t addr);
+void hle_math_report(void);         /* check mode summaries (kamui_report) */
 /* Runs a guest function from native code (callbacks): r4..r7 = a0..a3. */
 void hle_call_guest(sh4_ctx *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);

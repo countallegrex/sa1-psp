@@ -39,6 +39,8 @@
  *
  * --math exact|native|check: game math (hle/settings.c, sa1psp.ini math;
  * native by default, exact in strict runs unless given).
+ * --math-exact A[,A...]: these routines (hex addresses) stay exact whatever
+ * --math says (sa1psp.ini math_exact; A/B timing of one routine).
  *
  * --no-vmu: no VMU in port A1 (strict runs never have one); --vmu-dir DIR:
  * keep the VMU's files in DIR (default "vmu" beside the executable).
@@ -494,6 +496,7 @@ int main(int argc, char **argv) {
             snd_voice_lang_cli = v;
         }
         else if (!strcmp(argv[i], "--land-cull") && i + 1 < argc) hle_land_cull_cli = hle_parse_land_cull(argv[++i]);   /* on|opaque|off; hle/ninja/native_land.c */
+        else if (!strcmp(argv[i], "--math-exact") && i + 1 < argc) hle_parse_math_exact(argv[++i]);   /* hle/settings.c */
         else if (!strcmp(argv[i], "--math") && i + 1 < argc) {   /* exact|native|check; hle/settings.c */
             int m = hle_parse_math(argv[++i]);
             if (m < 0) { fprintf(stderr, "--math: exact, native or check\n"); return 2; }

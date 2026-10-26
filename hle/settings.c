@@ -24,6 +24,8 @@
  *                              the same within a band; exact: the console's
  *                              operations bit for bit (strict runs, unless
  *                              --math); check: exact plus a native shadow
+ *   math_exact = 8c029400,...  these routines stay exact whatever math says
+ *                              (A/B timing of one routine; --math-exact)
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
@@ -31,6 +33,7 @@
 #include "sound/snd_host.h"
 #include <string.h>
 #include <ctype.h>
+#include <stdlib.h>
 
 int hle_parse_frame_skip(const char *v, int *force) {
     if (force) *force = 0;
@@ -53,6 +56,25 @@ int hle_math_mode(void) {
     if (hle_math_cli >= 0) return hle_math_cli;
     return hle_strict ? 0 : hle_math;
 }
+static uint32_t math_exact[8];
+static int math_exact_n;
+void hle_parse_math_exact(const char *v) {
+    math_exact_n = 0;
+    while (*v && math_exact_n < 8) {
+        char *e;
+        const unsigned long a = strtoul(v, &e, 16);
+        if (e == v) break;
+        math_exact[math_exact_n++] = (uint32_t)a | 0x80000000u;
+        v = *e ? e + 1 : e;
+    }
+    sa1_log("settings: math_exact %d routine(s)", math_exact_n);
+}
+int hle_math_mode_for(uint32_t addr) {
+    for (int i = 0; i < math_exact_n; i++) if (math_exact[i] == (addr | 0x80000000u)) return 0;
+    return hle_math_mode();
+}
+void sph_check_report(void);
+void hle_math_report(void) { sph_check_report(); }
 
 int hle_parse_voice(const char *v) {
     if (!strcmp(v, "en") || !strcmp(v, "english") || !strcmp(v, "us")) return 1;
@@ -102,6 +124,8 @@ void hle_settings_load(void) {
                 int m = hle_parse_math(v);
                 if (m >= 0) { hle_math = m; sa1_log("settings: math %s", v); }
                 else sa1_log("settings: math = %s: not native, exact or check", v);
+            } else if (!strcmp(k, "math_exact")) {
+                hle_parse_math_exact(v);
             } else if (!strcmp(k, "land_cull")) {
                 hle_land_cull = hle_parse_land_cull(v);
                 sa1_log("settings: land_cull %s", hle_land_cull == 2 ? "opaque" : hle_land_cull ? "on" : "off");

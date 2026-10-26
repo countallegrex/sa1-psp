@@ -1142,6 +1142,7 @@ static void mark_finish(void) {
 void kamui_report(void) {
     if (!sh4_fsca_authentic) sa1_log("fsca: NOT the console's table (host libm): this run is not authentic");
     hle_frame_skip_report();
+    hle_math_report();
     native_land_report();
     if (stat_model_fail) sa1_log("render: %u persistent model draws refused by the backend (not drawn)", stat_model_fail);
     sa1_log("render: %u frames presented; last frame %u draw calls, %u triangles, polygons op %u tr %u pt %u; "

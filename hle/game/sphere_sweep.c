@@ -1239,16 +1239,14 @@ static void sph_compare(uint32_t oa, const sph_res *res, uint32_t r0) {
     if (r0 != res->r0 && !flips) { ck_bad++; ck_line("r0", 0, 1, 0); }
     sph_summary(0);
 }
-static void sph_atexit(void) { sph_summary(1); }
-
 static int sph_mode = -1;
+void sph_check_report(void) { if (sph_mode == 2) sph_summary(1); }
 void fn_8c029b00(sh4_ctx *c) {
     HLE_ENTER(0x8c029b00u, "sphere sweep fn_8c029b00");
     if (sph_use_rec()) { fn_8c029b00_orig(c); return; }
     if (sph_mode < 0) {
-        sph_mode = hle_math_mode();
+        sph_mode = hle_math_mode_for(0x8c029b00u);
         sa1_log("sphere sweep: math %s", sph_mode == 1 ? "native" : sph_mode == 2 ? "check" : "exact");
-        if (sph_mode == 2) atexit(sph_atexit);
     }
     if (sph_mode == 0 || (int32_t)RD8S(DEBUG_BYTE, 0) >= 0) { sph_8c029b00(c); return; }
     static sph_res res;
@@ -1266,4 +1264,6 @@ void fn_8c029b00(sh4_ctx *c) {
     if (drive < 0) drive = getenv("SA1_SPH_DRIVE") != NULL;
     if (drive && !res.full) sph_commit(c, oa, &res);
 }
+#else
+void sph_check_report(void) {}
 #endif
