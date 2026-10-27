@@ -42,6 +42,10 @@ static inline int hle_in_ram(uint32_t a) { return ((a & 0x1F000000u) == 0x0C0000
 
 /* ---- platform interface (backend/<target>/platform_*.c) ---------------- */
 uint64_t sa1_plat_time_us(void);              /* monotonic microseconds */
+/* Vblanks guest frame `frame` is behind the backend's 60 Hz pacing (its due
+ * vblank, after the pacer's own re-base); 0 when not paced.  The frame skip
+ * reads this so that it and the pacer keep one schedule. */
+int sa1_plat_pace_late(uint32_t frame);
 /* Game data files.  Paths are relative to the data root and spelled as the
  * disc spells them ("SONICADV/ADV00.PRS"); the backend maps them to its own
  * file system.  Returns 0 on success. */

@@ -494,6 +494,16 @@ void draw_gl_pace(uint32_t frame) {
     (void)frame;
 #endif
 }
+int sa1_plat_pace_late(uint32_t frame) {
+#ifndef SA1_NO_SDL
+    if (headless || !pace_on || !pace_t0) return 0;
+    int64_t late = (int64_t)(sa1_plat_time_us() - pace_t0) * 60 / 1000000 - (int64_t)(frame - pace_frame0);
+    return (int)late;
+#else
+    (void)frame;
+    return 0;
+#endif
+}
 
 void draw_set_fog(uint32_t color_argb, float z_near, float z_far) {
 #ifndef SA1_NO_SDL

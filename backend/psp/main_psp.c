@@ -342,6 +342,10 @@ static void pace(uint32_t frame) {
     if ((int)(now - due) > 15) { pace_v0 = now; pace_f0 = frame; return; }
     while ((int)(due - sceDisplayGetVcount()) > 0) sceDisplayWaitVblankStart();
 }
+int sa1_plat_pace_late(uint32_t frame) {
+    if (!pace_set || headless || no_pace) return 0;
+    return (int)(sceDisplayGetVcount() - (pace_v0 + (frame - pace_f0)));
+}
 
 /* Milestones for the hardware log: the game mode and the level as the
  * check files name them (tests/replay/NAME.check: 0x8C760970 mode, 0x8C7493BA

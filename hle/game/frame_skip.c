@@ -17,9 +17,12 @@
  *
  * Modes (sa1psp.ini frame_skip = auto | off | N, or the backend's
  * --frame-skip, which wins):
- *   auto  (default) skip the picture of a frame that starts more than a
- *         frame behind the 60 Hz schedule, at most MAX_RUN in a row; a stall
- *         of a second or more (a load) restarts the schedule
+ *   auto  (default) skip the picture of a turn when the game is a whole
+ *         turn behind the backend's 60 Hz pacing (sa1_plat_pace_late, the
+ *         pacer's own schedule and re-base, so a load forgiven by the pacer
+ *         is forgiven here too), at most MAX_RUN in a row.  A turn is the
+ *         game's frame interval in vblanks (TURN_VBLANKS: 2 in play).
+ *         Unpaced runs never skip.
  *   off   draw every frame
  *   N     draw one frame in N (a fixed pattern, for tests)
  * Never in strict runs (tapes, the oracle) unless forced (--frame-skip
@@ -30,8 +33,8 @@
  * Part of sa1-psp (MIT). */
 #include "hle.h"
 
-#define FRAME_US 16667
 #define MAX_RUN 3
+#define TURN_VBLANKS 0x8C754EBCu   /* the game's frame interval (set by 0x8C051760) */
 
 int hle_frame_skip = -1;          /* sa1psp.ini: -1 auto, 0 off, N >= 2 */
 int hle_frame_skip_cli = -2;      /* backend option, wins: -2 unset, else as above */
@@ -39,9 +42,7 @@ int hle_frame_skip_force;         /* backend: also in strict runs (tests) */
 
 int hle_draw_skip;                /* this frame draws nothing (set by the previous frame's end) */
 
-static uint64_t sched_t0;
-static uint32_t sched_f0, run, n_skipped, n_drawn;
-static int sched_on;
+static uint32_t run, n_skipped, n_drawn;
 
 static int decide(void) {
     int mode = hle_frame_skip_cli != -2 ? hle_frame_skip_cli : hle_frame_skip;
@@ -50,11 +51,11 @@ static int decide(void) {
     int skip;
     if (mode >= 2) skip = (f % (uint32_t)mode) != 0;
     else {
-        uint64_t now = sa1_plat_time_us();
-        if (!sched_on || f < sched_f0) { sched_on = 1; sched_t0 = now; sched_f0 = f; }
-        int64_t behind = (int64_t)(now - sched_t0) - (int64_t)(f - sched_f0) * FRAME_US;
-        if (behind > 1000000 || behind < -4 * FRAME_US) { sched_t0 = now; sched_f0 = f; behind = 0; }
-        skip = behind > FRAME_US && run < MAX_RUN;
+        uint32_t turn = hle_rd32(TURN_VBLANKS);
+        if (turn < 1 || turn > 4) turn = 2;
+        /* late counts from the vblank this turn started on: the next turn
+         * starts a whole turn late once it reaches two turns */
+        skip = sa1_plat_pace_late(f) >= 2 * (int)turn && run < MAX_RUN;
     }
     run = skip ? run + 1 : 0;
     if (skip) n_skipped++; else n_drawn++;
