@@ -133,7 +133,6 @@ static int pool_mode = -1;        /* -1 not read, 0 off, 1 budget, 2 budget + re
 static int in_frame;
 static uint32_t pool_frame, pool_log_frame = 0xFFFFFFFFu, pool_fail_logs, mirror_need, mirror_epoch, mirror_room_frame;
 static void *pool_chunk_alloc(void) { return (void *)(uintptr_t)0x1000; }
-static void pool_chunk_free(void *c) { (void)c; }
 static void pool_moved(int owner, uint8_t *addr) { (void)owner; (void)addr; }
 static void pool_evict(int owner) {
     tex_slot *t = &texs[owner & 0xFFFF];
@@ -147,7 +146,7 @@ static uint32_t pool_drop_top(int owner) {
     t->pw >>= 1; t->ph >>= 1; t->plevels--; t->dropped++;
     return texpool_psp_bytes(t->pw, t->ph, t->pbits, t->plevels, NULL);
 }
-static const texpool_ops pool_ops = { pool_chunk_alloc, pool_chunk_free, pool_moved, pool_evict, pool_drop_top };
+static const texpool_ops pool_ops = { pool_chunk_alloc, pool_moved, pool_evict, pool_drop_top };
 static void pool_log(const char *why) {
     const texpool_stats *p = texpool_get_stats();
     sa1_log("texpool (%s): %u chunks (peak %u, %u refused), %u KB used (peak %u KB); %u compactions (%u KB moved), %u evictions, %u top levels dropped, %u failures",
@@ -158,7 +157,7 @@ static int pool_alloc(uint32_t size, int owner, int cache) {
     const texpool_stats *p = texpool_get_stats();
     uint32_t ev = p->compactions + p->evictions + p->drops + p->failures;
     uint8_t *a;
-    int b = texpool_alloc(size, owner, cache, pool_mode == 2 && !in_frame, &a);
+    int b = texpool_alloc(size, owner, cache, pool_mode == 2 && (!in_frame || !cache), &a);
     if (ev != p->compactions + p->evictions + p->drops + p->failures && pool_log_frame != pool_frame) {
         pool_log_frame = pool_frame;
         pool_log(b >= 0 ? "reclaimed" : "full");
@@ -185,8 +184,8 @@ static int fmt_bits(int fmt) {
     }
 }
 /* The texture is drawn: touch it, and account the mirror variant the PSP
- * builds for a flipped repeat (draw_gu.c mirror_variant: inside a frame, so
- * never reclaiming; a failure is a plain repeat there, not white). */
+ * builds for a flipped repeat (draw_gu.c mirror_variant: inside replay, so
+ * never reclaiming; the game's own textures reclaim, as draw_gu.c in_replay; a failure is a plain repeat there, not white). */
 static void pool_use(const draw_state *s) {
     tex_slot *t = &texs[s->texture];
     if (t->pblk[0] > 0) texpool_touch(t->pblk[0] - 1);

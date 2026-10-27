@@ -78,9 +78,6 @@ static void compact(void) {
         }
         o += blk[b].size;
     }
-    /* Trailing chunks left empty go back to the heap. */
-    int keep = head < 0 ? 0 : (o ? c + 1 : c);
-    while (nchunks > keep) ops.chunk_free(chunk[--nchunks]);
     st.compactions++;
 }
 

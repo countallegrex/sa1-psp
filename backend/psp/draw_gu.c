@@ -385,7 +385,7 @@ static void unswizzle(uint8_t *dst, const uint8_t *src, uint32_t rb, uint32_t ro
 }
 
 /* Texture memory (backend/texpool.h): chunks of the heap only textures use,
- * compacted and reclaimed between frames, so the heap's fragmentation can
+ * compacted and reclaimed outside replay, so the heap's fragmentation can
  * no longer leave a level's textures without room (Emerald Coast drew white
  * after a few level changes).  --tex-pool off: memalign per texture, as
  * before.  The pool keeps --tex-reserve KB of the heap free for the rest. */
@@ -401,9 +401,23 @@ void draw_gu_set_tex_pool(int on, int reserve_kb) {
     if (reserve_kb >= 0) tex_reserve = (uint32_t)reserve_kb * 1024u;
 }
 
+/* Inside replay() the list being built and run holds texture addresses:
+ * no reclaiming there (mirror variants).  Everywhere else nothing the GE
+ * reads refers to texture memory that a move could change under it: the
+ * recorded draws hold handles, the models' lists rebuild on tex_epoch, and
+ * the ops wait for the last frame's list (ge_wait).  So the game's own
+ * loads, which come in the middle of a frame, may reclaim. */
+static int in_replay;
+/* The first chunk is EDRAM: the frame and Z buffers leave 1.2 MB of it
+ * unused.  Chunks are kept once taken (texpool.c), so it is taken once. */
+static int edram_chunk_taken;
 /* sbrk does not refuse: a block that ends past user RAM (0x0C000000, as
  * main_psp.c heap_largest_free) is a refusal too. */
 static void *pool_chunk_alloc(void) {
+    if (!edram_chunk_taken && sceGeEdramGetSize() >= 3u * FB_BYTES + TEXPOOL_CHUNK) {
+        edram_chunk_taken = 1;
+        return (uint8_t *)sceGeEdramGetAddr() + 3u * FB_BYTES;
+    }
     uint8_t *probe = malloc(TEXPOOL_CHUNK + tex_reserve);
     int ok = probe && (uintptr_t)probe + TEXPOOL_CHUNK + tex_reserve <= 0x0C000000u;
     free(probe);
@@ -412,7 +426,6 @@ static void *pool_chunk_alloc(void) {
     if (c && (uintptr_t)c + TEXPOOL_CHUNK > 0x0C000000u) { free(c); return NULL; }
     return c;
 }
-static void pool_chunk_free(void *c) { free(c); }
 static void pool_moved(int owner, uint8_t *addr) {
     ge_wait();
     texs[owner].mem = addr;
@@ -442,7 +455,7 @@ static uint32_t pool_drop_top(int owner) {
     bound_tex = 0; tex_flush_pending = 1;
     return t->total;
 }
-static const texpool_ops pool_ops = { pool_chunk_alloc, pool_chunk_free, pool_moved, pool_evict, pool_drop_top };
+static const texpool_ops pool_ops = { pool_chunk_alloc, pool_moved, pool_evict, pool_drop_top };
 
 static void pool_log(const char *why) {
     const texpool_stats *p = texpool_get_stats();
@@ -459,7 +472,9 @@ static uint8_t *tex_mem_alloc(int slot, uint32_t total, int cache) {
         const texpool_stats *p = texpool_get_stats();
         uint32_t ev = p->compactions + p->evictions + p->drops + p->failures;
         uint8_t *a = NULL;
-        int b = texpool_alloc(total, slot, cache, !list_open, &a);
+        /* a compaction moves blocks before ops.moved waits for the GE: wait first */
+        if (!in_replay) ge_wait();
+        int b = texpool_alloc(total, slot, cache, !in_replay, &a);
         if (ev != p->compactions + p->evictions + p->drops + p->failures && tex_log_frame != tex_frame) {
             tex_log_frame = tex_frame;
             pool_log(b >= 0 ? "reclaimed" : "full");
@@ -504,8 +519,15 @@ static int texture_build(int slot, int w, int h, int fmt, const uint8_t *pixels,
         total += rb[l] * rows[l];
     }
     t->mem = tex_mem_alloc(slot, total, cache);
-    uint8_t *pad = t->mem ? malloc(rb[0] * rows[0]) : NULL;
-    if (!t->mem || !pad) {
+    /* A level whose rows need no padding swizzles straight from its pixels;
+     * only the small ones (under 16 bytes a row or 8 rows) go through pad:
+     * a level 0 sized pad failed on a nearly full heap on its own. */
+    uint32_t pad_bytes = 0;
+    for (int l = 0; l < levels; l++)
+        if (row_bytes(w >> l, bits) != rb[l] || (uint32_t)(h >> l) != rows[l] || (gu_debug & 4))
+            if (rb[l] * rows[l] > pad_bytes) pad_bytes = rb[l] * rows[l];
+    uint8_t *pad = t->mem && pad_bytes ? malloc(pad_bytes) : NULL;
+    if (!t->mem || (pad_bytes && !pad)) {
         if (t->mem) tex_mem_free(t);
         free(pad);
         for (int l = 1; l < levels; l++) free(lin[l]);
@@ -520,6 +542,11 @@ static int texture_build(int slot, int w, int h, int fmt, const uint8_t *pixels,
     for (int l = 0; l < levels; l++) {
         lw = w >> l; lh = h >> l;
         uint32_t src_rb = row_bytes(lw, bits);
+        if (src_rb == rb[l] && (uint32_t)lh == rows[l] && !(gu_debug & 4)) {
+            swizzle(t->mem + t->off[l], lin[l], rb[l], rows[l]);
+            if (l) free(lin[l]);
+            continue;
+        }
         if (src_rb == 0) src_rb = 1;
         memset(pad, 0, rb[l] * rows[l]);
         for (int y = 0; y < lh; y++) memcpy(pad + (size_t)y * rb[l], lin[l] + (size_t)y * src_rb, src_rb);
@@ -951,7 +978,9 @@ void draw_end_frame(void) {
     if (headless || !list_open) return;
     uint64_t t_replay = sa1_plat_time_us();
     sceKernelDcacheWritebackAll();    /* the arena's vertices into RAM before the GE reads them */
+    in_replay = 1;
     replay();
+    in_replay = 0;
     gs.replay_us += sa1_plat_time_us() - t_replay;
     uint32_t used = (uint32_t)sceGuCheckList();
     if (used > gs.list_high) gs.list_high = used;

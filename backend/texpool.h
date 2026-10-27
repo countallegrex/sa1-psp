@@ -4,7 +4,7 @@
  * heap, textures and the game's other blocks interleave, and after a few
  * level changes the free space is there but in pieces too small for the
  * next level's textures, which then fail to build and draw white.  The pool
- * takes memory from the heap in chunks (1 MB) that only textures use, packs
+ * takes memory from the heap (and on the PSP, EDRAM) in chunks (1 MB) that only textures use, packs
  * textures into them and, when a texture does not fit:
  *   1. takes another chunk while the heap keeps a reserve free;
  *   2. compacts: moves every texture down so the free space is one piece
@@ -15,7 +15,9 @@
  *      not drawn for TEXPOOL_IDLE frames first, then any not drawn this
  *      frame, then (a level larger than the pool) any: the texture stays,
  *      at half the resolution.
- * Steps 2-4 only when the caller says it may (no list open).
+ * Steps 2-4 only when the caller says it may (no display list holds
+ * texture addresses).  Chunks are never given back: the heap's other
+ * users took a freed chunk, and the pool could not grow again.
  *
  * The desktop runs the same pool on virtual chunks (no memory, no moves)
  * with SA1_TEX_BUDGET, sized as the PSP sizes textures, so a texture that
@@ -32,7 +34,6 @@ typedef struct texpool_ops {
     /* A chunk of TEXPOOL_CHUNK bytes from the heap, NULL = refused.  Virtual
      * pools get any non-NULL token and never touch it. */
     void *(*chunk_alloc)(void);
-    void (*chunk_free)(void *chunk);
     /* The owner's block now starts at addr (compaction). */
     void (*moved)(int owner, uint8_t *addr);
     /* Release a cache-copy owner (it calls texpool_free itself). */

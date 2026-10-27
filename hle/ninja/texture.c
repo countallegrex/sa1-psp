@@ -137,8 +137,13 @@ static uint32_t decode_info(const pvr_info *pinfo, int *out_w, int *out_h, int *
     const pvr_info info = *pinfo;
     uint32_t w = info.w, h = info.h;
     int pixfmt = info.pixfmt, datafmt = info.datafmt;
-    uint16_t *img = calloc((size_t)w * h, 2);
+    /* Up to 512 x 512 the texels decode into one fixed buffer: on the PSP
+     * a calloc of w*h*2 failed on a nearly full heap ("decode failed")
+     * while the texture pool itself had room. */
+    static uint16_t scratch[512 * 512];
+    uint16_t *img = (size_t)w * h <= sizeof scratch / 2 ? scratch : calloc((size_t)w * h, 2);
     if (!img) return 0;
+    if (img == scratch) memset(img, 0, (size_t)w * h * 2);
     static int tex_log = -1;
     if (tex_log < 0) tex_log = getenv("SA1_TEX_LOG") != NULL;       /* debug aid: every decode */
     if (tex_log) sa1_log("texture: decode %s %ux%u pixel %d data 0x%x size %u", decode_name, w, h, pixfmt, datafmt, info.data_len + 8);
@@ -146,7 +151,7 @@ static uint32_t decode_info(const pvr_info *pinfo, int *out_w, int *out_h, int *
     uint64_t t0 = sa1_plat_time_us();
     if (pvr_decode(&info, palette, img, &fmt) != PVR_OK) {
         sa1_log("texture: data format 0x%x not supported (pixel format %d, %ux%u)", datafmt, pixfmt, w, h);
-        free(img);
+        if (img != scratch) free(img);
         return 0;
     }
     uint64_t t1 = sa1_plat_time_us();
@@ -185,7 +190,7 @@ static uint32_t decode_info(const pvr_info *pinfo, int *out_w, int *out_h, int *
             fclose(o);
         }
     }
-    free(img);
+    if (img != scratch) free(img);
     if (!handle) return 0;
     *out_w = (int)w; *out_h = (int)h; *out_fmt = pixfmt; *out_bytes = w * h * 2;
     return handle;
