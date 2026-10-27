@@ -65,6 +65,8 @@
  *                   kubridge) into FILE (default prof_pc.bin);
  *                   tools/psp_prof.py --pcs names the samples
  *   --prof-us N     the sampling period (default 1000 us)
+ *   --me-test MODE  the Media Engine loader proof (me/sa1me.c): logs and
+ *                   exits; 0 stubs, 1 + reset vector write, 2 + ME run
  *
  * Without args.txt the EBOOT plays: the pad drives the game, frames are
  * paced to the vblank.  HOME exits.
@@ -362,6 +364,40 @@ static void milestones(uint32_t frame) {
 /* --prof: load the sampler with the buffer's address as its argument; it
  * records while run == 1 and stops its alarm when run == 2. */
 static const char *abs_path(char *out, unsigned n, const char *p);
+/* --me-test MODE: the Media Engine loader proof (me/sa1me.c, qd step 1):
+ * 0 = import stubs only, 1 = + the program at the ME reset vector, read
+ * back, 2 = + start the ME, count ~1 s, stop it and hold it in reset.  The
+ * results are logged; the game does not run.  Never on the card. */
+static int me_test_mode = -1;
+struct me_test {                /* me/sa1me.c's */
+    volatile uint32_t magic, mode, done, step;
+    volatile uint32_t stub[3][2];
+    volatile int32_t r_reset, r_clock, r_release, r_hold;
+    volatile uint32_t readback_ok, count1, count2, ack, us1, us2;
+};
+static void me_test(int mode) {
+    char path[300];
+    static struct me_test t;
+    memset((void *)&t, 0, sizeof t);
+    t.magic = 0x31454D53u; t.mode = (uint32_t)mode;
+    struct me_test *arg = &t;
+    SceUID m = kuKernelLoadModule(abs_path(path, sizeof path, "sa1me.prx"), 0, NULL);
+    int st = 0, r = m >= 0 ? sceKernelStartModule(m, sizeof arg, &arg, &st, NULL) : m;
+    sa1_log("me-test %d: sa1me.prx load 0x%08x, start 0x%08x, done %u step %u", mode, (unsigned)m, (unsigned)r,
+            (unsigned)t.done, (unsigned)t.step);
+    sa1_log("me-test: import stubs ResetEnable %08x %08x BusClockEnable %08x %08x ResetDisable %08x %08x",
+            (unsigned)t.stub[0][0], (unsigned)t.stub[0][1], (unsigned)t.stub[1][0], (unsigned)t.stub[1][1],
+            (unsigned)t.stub[2][0], (unsigned)t.stub[2][1]);
+    sa1_log("me-test: readback %u words; reset 0x%08x clock 0x%08x release 0x%08x hold 0x%08x",
+            (unsigned)t.readback_ok, (unsigned)t.r_reset, (unsigned)t.r_clock, (unsigned)t.r_release, (unsigned)t.r_hold);
+    sa1_log("me-test: counter %u at %u us, %u at %u us; ack %u", (unsigned)t.count1, (unsigned)t.us1,
+            (unsigned)t.count2, (unsigned)t.us2, (unsigned)t.ack);
+    if (m >= 0) {
+        int sr = sceKernelStopModule(m, 0, NULL, &st, NULL);
+        int ur = sceKernelUnloadModule(m);
+        sa1_log("me-test: stop 0x%08x unload 0x%08x", (unsigned)sr, (unsigned)ur);
+    }
+}
 static void prof_start(void) {
     char path[300];
     prof = malloc(sizeof *prof + PROF_CAP * 4u);
@@ -673,6 +709,7 @@ int main(int argc, char **argv) {
             prof_to = *end == ':' ? (uint32_t)strtoul(end + 1, &end, 0) : prof_from + 300;
             prof_path = *end == ':' ? end + 1 : "prof_pc.bin";
         } else if (!strcmp(av[i], "--prof-us") && i + 1 < args_c) prof_us = (uint32_t)strtoul(av[++i], NULL, 0);
+        else if (!strcmp(av[i], "--me-test") && i + 1 < args_c) me_test_mode = (int)strtol(av[++i], NULL, 0);
         else if (!strcmp(av[i], "--stage") && i + 1 < args_c) {
             if (stage_arg(av[++i]) != 0) { /* logged below */ }
         } else if (input_tape_arg(args_c, av, &i)) continue;
@@ -699,6 +736,13 @@ int main(int argc, char **argv) {
                 r >= 0 ? " (exceptions now show their registers)" : " (not installed: an exception powers the console off)");
     }
     if (prof_path) prof_start();
+    if (me_test_mode >= 0) {
+        me_test(me_test_mode);
+        sa1_log("exit: me-test %d, code 0", me_test_mode);
+        plat_log_close();
+        sceKernelExitGame();
+        return 0;
+    }
     /* The FPU as the SH-4 runs the game (FPSCR 0x00040001: every exception
      * masked, denormals are zero).  The PSP starts threads with the invalid,
      * divide-by-zero and overflow traps enabled (FCSR 0x00000E00): a float

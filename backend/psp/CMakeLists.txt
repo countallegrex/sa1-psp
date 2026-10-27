@@ -232,6 +232,19 @@ add_custom_command(
   COMMENT "Building sa1prof.prx (kernel-mode PC sampler)")
 add_custom_target(sa1prof ALL DEPENDS ${CMAKE_BINARY_DIR}/sa1psp/sa1prof.prx)
 
+# sa1me.prx: the Media Engine loader for --me-test (me/sa1me.c), built the
+# same way.
+set(SA1_ME_DIR ${CMAKE_BINARY_DIR}/sa1me)
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/sa1psp/sa1me.prx
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/me ${SA1_ME_DIR}
+  COMMAND make -C ${SA1_ME_DIR}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/sa1psp
+  COMMAND ${CMAKE_COMMAND} -E copy ${SA1_ME_DIR}/sa1me.prx ${CMAKE_BINARY_DIR}/sa1psp/sa1me.prx
+  DEPENDS me/sa1me.c me/Makefile
+  COMMENT "Building sa1me.prx (Media Engine loader)")
+add_custom_target(sa1me ALL DEPENDS ${CMAKE_BINARY_DIR}/sa1psp/sa1me.prx)
+
 file(GLOB SA1_GAME_SRCS CONFIGURE_DEPENDS "${SA1_RECOMP_OUT}/emitter/game_[0-9]*.c")
 file(GLOB SA1_OVERLAY_SRCS CONFIGURE_DEPENDS "${SA1_RECOMP_OUT}/overlays/emitter/*/ovl_*.c")
 if(SA1_GAME_SRCS)

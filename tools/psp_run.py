@@ -725,6 +725,8 @@ def main() -> int:
         stage_prx(prx, os.path.join(stage, "sa1psp.prx"))
         if os.path.isfile(os.path.join(src, "sa1prof.prx")):            # --prof's sampler
             shutil.copyfile(os.path.join(src, "sa1prof.prx"), os.path.join(stage, "sa1prof.prx"))
+        if os.path.isfile(os.path.join(src, "sa1me.prx")):              # --me-test's loader
+            shutil.copyfile(os.path.join(src, "sa1me.prx"), os.path.join(stage, "sa1me.prx"))
         args = write_args(os.path.join(stage, "args.txt"), game_args)
     except (SetupError, OSError) as e:
         print(f"psp_run: {e}", file=sys.stderr)
