@@ -22,7 +22,7 @@ pointers = true
 sweep = true
 # Header entry pointers, then executed call targets discovery missed
 # (tools/trace_diff.py --overlay; also in adv00_seeds.txt).
-extra = [0x0C900732, 0x0C90B26A, 0x0C90BA04, 0x0C90F620]
+extra = [0x0C900732, 0x0C90B26A, 0x0C90BA04, 0x0C90F620, 0x0C900068, 0x0C90011A, 0x0C900148, 0x0C904668, 0x0C9078BC, 0x0C90B2E0, 0x0C90B4CC, 0x0C90B4F8]
 exclude = []
 
 # Read by recomp/emitter/emit_overlay.py and tools/extract_overlays.py;

@@ -49,6 +49,7 @@ extern const sa1_overlay sa1_ovl_ev0028 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_ev0029 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_ev002a HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_ev002b HLE_OVERLAY_WEAK;
+extern const sa1_overlay sa1_ovl_ev0180 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_shooting HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_stg01 HLE_OVERLAY_WEAK;
 extern const sa1_overlay sa1_ovl_stg02 HLE_OVERLAY_WEAK;
@@ -108,6 +109,7 @@ const hle_overlay_file hle_overlay_files[] = {
     {"SONICADV/EV0029.PRS",    SA1_SLOT_EVENT,    92420, "58648e981906308f80475b7695c95d7acb1d266d5f6896713800c856139785f5", &sa1_ovl_ev0029},
     {"SONICADV/EV002A.PRS",    SA1_SLOT_EVENT,    85856, "caeb05a64a0f4c8d83097674a4283488c29be527ddc643e81b6baee7426de465", &sa1_ovl_ev002a},
     {"SONICADV/EV002B.PRS",    SA1_SLOT_EVENT,   325560, "24958a1055e9aa83580f6777ba9a4e3675c44e290842f31b86375755853a985e", &sa1_ovl_ev002b},
+    {"SONICADV/EV0180.PRS",    SA1_SLOT_EVENT,    82208, "a79f948b514bde152598b719b4f8390df5b1e8b96ef5e72b9fc7fe99475433f6", &sa1_ovl_ev0180},
     {"SONICADV/SHOOTING.PRS",  SA1_SLOT_AREA,   1916104, "83aef5dc9b3ea44a4fe653bc727af8aa20e7c5fd4bebfd298f95d08e41dab162", &sa1_ovl_shooting},
     {"SONICADV/STG01.PRS",     SA1_SLOT_AREA,   1954056, "38edbe29b2da1ee267cb53b089cdd231732f28cb1e7136093cfe751f57c7f7ab", &sa1_ovl_stg01},
     {"SONICADV/STG02.PRS",     SA1_SLOT_AREA,   1138093, "59e1b467567021cee5eb69e02b86bfdb54a94b94d0330419f60a3b56f33deb11", &sa1_ovl_stg02},
@@ -122,4 +124,4 @@ const hle_overlay_file hle_overlay_files[] = {
     {"SONICADV/STG12.PRS",     SA1_SLOT_AREA,   1904268, "9ce6ec66592476b285df6e4a6c16f483a8047d2f6d8b25d5cff3cd62427c51c2", &sa1_ovl_stg12},
     {"SONICADV/SUMMARY.PRS",   SA1_SLOT_AREA,    695821, "9fc758d366c9c22730440245de2e0d058fa9c29110af1b5c2afa022ca29d60cc", &sa1_ovl_summary},
 };
-const unsigned hle_overlay_file_count = 57;
+const unsigned hle_overlay_file_count = 58;

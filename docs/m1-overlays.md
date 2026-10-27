@@ -334,3 +334,48 @@ unchanged. Both `hle/overlay` files also compile with psp-gcc (`-Os -G0
   become a PRX loaded with its file.
 - The remaining route files (`B_CHAOS0`, `STG01`, `SUMMARY`, `MOVIE.BIN`) and
   a trace covering more events.
+
+## 9. Cross-image entry seeds (2026-10-27)
+
+A stage survey by `--stage LEVEL:ACT:MODE` found 21 of 44 places in Sonic's
+story trapping within 30 frames ("indirect call to an address with no
+function"), on the desktop and the PSP alike. Discovery reads one image at a
+time, so it never sees a function that only a pointer in another image
+reaches:
+
+- **Level tables in 1ST_READ.BIN.** Two tables indexed by level number
+  (0x8C19DE2C and 0x8C19E0E0) point into each stage's overlay: Windy Valley's
+  0x0C90011A, Twinkle Park's 0x0C90843E, Speed Highway's 0x0C90BAD2, Ice
+  Cap's 0x0C90EA56, Lost World's 0x0C90B4CC, Egg Hornet's 0x0C904A40.
+- **Pointers in an overlay's own data in the 0x0C... form** (ADV0100's
+  0x0C927FE0 for the Egg Carrier deck, STG08's 0x0C906F00), whose start the
+  pointer pass did not take.
+- **Overlay data pointing back into the main image**: STG05's and STG07's
+  object records ({name, function}) name 0x8C06C080, 0x8C06C0A8 and
+  0x8C100E20, STG10's 0x8C06C022; nothing in 1ST_READ.BIN does.
+
+`tools/overlay_xref.py --write` adds all three kinds to the configs' `extra`
+lists (and `<name>_seeds.txt`, `overlay_main_seeds.txt`, the main config).
+Every overlay of a slot shares its addresses, so a word does not say whose it
+is: a seed must land just after the end of a block (`rts`, `rte`, `bra`,
+`braf`, `jmp` and the delay slot, or nop padding; zero padding only before a
+`mov.l rN,@-r15` / `sts.l pr,@-r15`). An overlay's own words may also start
+with such a push; main-image targets also when they follow a pointer into the
+same overlay image (a record). The code ranges hold data tables too: without
+the block-end test ADV0100 alone gets 485 seeds into one. Run it after adding
+a config, then `tools/overlays.py build`, the main discovery
+(`recomp/sa1_us_1005/README.md`) and `emit_sa1.py`.
+
+Two more causes:
+
+- **Event files outside Sonic's IDs.** Red Mountain act 1 loads `EV0180.PRS`
+  (the Egg Carrier passing), which had no config (`overlay: ... no recompiled
+  code for it`): `overlays.py new EV0180`.
+- **A switch table in data.** Station Square act 0 (ADV00 0x0C9108A6, a
+  `jmp @r0` through 7 words at 0x0CB32F5C, no bound compare) lost its last
+  two cases: the unbounded walk stopped at the first target outside the
+  function's window (0x0C90FDE6). A table outside the code range now ends at
+  its first word that is not a code address (`sh4emit/cfg.py`).
+
+Result: all 44 places run 600 frames on the desktop. Main image 9,668
+functions; the overlays' C grew about 1 MB (EV0180 0.23 MB).

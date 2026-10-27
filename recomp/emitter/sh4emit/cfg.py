@@ -521,6 +521,7 @@ class FunctionCFG:
         addr = table
         code_addrs = set(self.addr2block)
         limit = bound if bound is not None else 512
+        in_data = not self.env.in_code(table)
         while len(targets) < limit:
             if not img.contains(addr, size):
                 break
@@ -551,7 +552,10 @@ class FunctionCFG:
                 # function's discovery end becomes a tail call to that entry).
                 if not (self.env.code_lo <= t < self.env.code_hi):
                     break
-            elif not (lo <= t < hi):
+            elif not (lo <= t < hi) and not (in_data and self.env.in_code(t)):
+                # A table in data (ADV00's at 0x0CB32F5C, 7 entries) ends at
+                # its first word that is not a code address; its cases may
+                # lie outside the function's window (0x0C90FDE6).
                 break
             targets.append(t)
             addr += size

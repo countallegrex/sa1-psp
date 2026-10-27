@@ -24,7 +24,7 @@ entry = 0x8C900040
 pointers = true
 sweep = true
 # The eight header entry pointers.
-extra = [0x0C900040, 0x0C900260, 0x0C900166, 0x0C900B60, 0x0C900DC0, 0x0C900C62, 0x0C901BE0, 0x0C901E20]
+extra = [0x0C900040, 0x0C900260, 0x0C900166, 0x0C900B60, 0x0C900DC0, 0x0C900C62, 0x0C901BE0, 0x0C901E20, 0x0C9000D0, 0x0C901A34, 0x0C902490, 0x0C9031E0]
 exclude = []
 
 # Read by recomp/emitter/emit_overlay.py and tools/extract_overlays.py;
