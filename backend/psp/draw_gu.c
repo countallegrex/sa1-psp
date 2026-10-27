@@ -87,6 +87,18 @@ static struct { uint32_t list_high, pool_high, pool_full, dropped, offscreen, un
                 uint32_t mesh_no[4];          /* why not: other, near plane, guard band, depth split */
                 float zmin_frame, zmin_win, zmin_last; uint32_t znear_verts[4];   /* nearest 3D z; vertices with z < 2, 4, 8, 16 */
                 uint64_t gpu_wait_us, swap_wait_us, replay_us, frame_us_sum, frame_us_max, last_end; } gs;
+/* The stats window's frame times in 0.5 ms bins (the last one: 255.5 ms and
+ * more), for its median and 95th percentile. */
+#define FT_BINS 512u
+static uint32_t ft_hist[FT_BINS];
+static double ft_quantile(double q) {
+    uint32_t n = 0, k = 0;
+    for (uint32_t i = 0; i < FT_BINS; i++) n += ft_hist[i];
+    if (!n) return 0.0;
+    const uint32_t want = (uint32_t)(q * n + 0.999);
+    for (uint32_t i = 0; i < FT_BINS; i++) { k += ft_hist[i]; if (k >= want) return (i + 0.5) * 0.5; }
+    return FT_BINS * 0.5;
+}
 /* The largest strip w folded into gs.zmin_frame since it was last reset: a
  * strip whose w is no larger cannot lower it (1/w falls as w grows), so
  * strip_emit divides only for a new largest w. */
@@ -964,6 +976,7 @@ void draw_end_frame(void) {
         uint64_t ft = now - gs.last_end;
         gs.frame_us_sum += ft;
         if (ft > gs.frame_us_max) gs.frame_us_max = ft;
+        ft_hist[ft / 500u < FT_BINS ? ft / 500u : FT_BINS - 1u]++;
         gs.frames++;
     }
     gs.last_end = now;
@@ -1180,7 +1193,9 @@ void draw_gu_report(void) {
     memset(&rc, 0, sizeof rc);
     gs.zmin_win = 1e30f; memset(gs.znear_verts, 0, sizeof gs.znear_verts);
     gs.flush_state = gs.flush_proj = gs.flush_offset = 0;
-    gs.frames = 0; gs.frame_us_sum = gs.frame_us_max = gs.gpu_wait_us = gs.swap_wait_us = gs.replay_us = 0; gs.dropped = gs.offscreen = gs.unseen = 0;
+    if (gs.frames) sa1_log("draw: frame time p50 %.2f ms p95 %.2f ms", ft_quantile(0.50), ft_quantile(0.95));
+    memset(ft_hist, 0, sizeof ft_hist);
+    gs.frames = 0; gs.frame_us_sum = gs.frame_us_max =gs.gpu_wait_us = gs.swap_wait_us = gs.replay_us = 0; gs.dropped = gs.offscreen = gs.unseen = 0;
 }
 
 /* ---- state ---------------------------------------------------------------------- */
