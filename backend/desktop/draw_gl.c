@@ -132,6 +132,7 @@ static tex_slot texs[TEX_MAX];
 static int pool_mode = -1;        /* -1 not read, 0 off, 1 budget, 2 budget + reclaim */
 static int in_frame;
 static uint32_t pool_frame, pool_log_frame = 0xFFFFFFFFu, pool_fail_logs, mirror_need, mirror_epoch, mirror_room_frame;
+static int mirror_room_ok;
 static void *pool_chunk_alloc(void) { return (void *)(uintptr_t)0x1000; }
 static void pool_moved(int owner, uint8_t *addr) { (void)owner; (void)addr; }
 static void pool_evict(int owner) {
@@ -198,7 +199,7 @@ static void pool_use(const draw_state *s) {
             uint32_t need = texpool_psp_bytes(nw, nh, t->pbits, 8, NULL);
             int b = pool_alloc(need, s->texture | k << 16, 1);
             if (b >= 0) t->pblk[k] = b + 1;
-            else { t->mfail[k] = mirror_epoch + 1; if (need > mirror_need) mirror_need = need; }
+            else { t->mfail[k] = mirror_epoch + 1; mirror_need += need; }
         }
     }
     if (t->pblk[k] > 0) texpool_touch(t->pblk[k] - 1);
@@ -428,9 +429,10 @@ void draw_begin_frame(uint32_t clear_argb) {
     stats.draw_calls = stats.triangles = stats.strips = stats.state_changes = 0;
     in_frame = 1;
     if (pool_mode > 0) texpool_set_frame(++pool_frame);
-    if (pool_mode == 2 && mirror_need && pool_frame - mirror_room_frame >= 60) {
+    if (pool_mode == 2 && mirror_need && pool_frame - mirror_room_frame >= (mirror_room_ok ? 1u : 60u)) {   /* as draw_gu.c */
         mirror_room_frame = pool_frame;
-        if (texpool_make_room(mirror_need)) { mirror_epoch++; mirror_need = 0; }
+        mirror_room_ok = texpool_make_room(mirror_need < TEXPOOL_CHUNK ? mirror_need : TEXPOOL_CHUNK);
+        if (mirror_room_ok) { mirror_epoch++; mirror_need = 0; }
     }
     cur_valid = 0;
     cur_proj = -1;                /* the clear below resets the scissor; the first strip sets it again */

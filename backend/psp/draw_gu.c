@@ -395,6 +395,7 @@ static int tex_pool_on = 1, tex_flush_pending;
  * frame's start makes room (texpool_make_room) and opens a new epoch in
  * which it is tried again. */
 static uint32_t mirror_need, mirror_epoch, mirror_room_frame;
+static int mirror_room_ok;
 static uint32_t tex_reserve = 2u << 20, tex_frame, tex_log_frame = 0xFFFFFFFFu;
 void draw_gu_set_tex_pool(int on, int reserve_kb) {
     tex_pool_on = on;
@@ -533,6 +534,10 @@ static int texture_build(int slot, int w, int h, int fmt, const uint8_t *pixels,
         for (int l = 1; l < levels; l++) free(lin[l]);
         memset(t, 0, sizeof *t);
         if (own_clut) free(clut);
+        if (cache) {                /* a mirror variant: drawn as a plain repeat until a frame start makes room */
+            sa1_log("draw: no room yet for a %dx%d mirror variant (%u bytes); retried at a frame start", w, h, total);
+            return -1;
+        }
         struct mallinfo mi = mallinfo();
         sa1_log("draw: no memory for a %dx%d texture (%u bytes; %u textures, %u KB; heap free %u KB)", w, h, total,
                 stats.textures_alive, stats.texture_bytes / 1024u, (unsigned)mi.fordblks / 1024u);
@@ -708,7 +713,7 @@ static uint32_t mirror_variant(uint32_t h, int fu, int fv) {
     free(out);
     if (!ok && tex_pool_on) {
         uint32_t need = texpool_psp_bytes(nw, nh, bits, (gu_debug & 2) ? 1 : max_levels, NULL);
-        if (need > mirror_need) mirror_need = need;
+        mirror_need += need;        /* every variant that failed this epoch (once each, mfail): room for all of them */
         t->mfail = mirror_epoch + 1;
         return h;
     }
@@ -916,9 +921,11 @@ void draw_begin_frame(uint32_t clear_argb) {
     stats.draw_calls = stats.triangles = stats.strips = stats.state_changes = 0;
     cur_valid = 0; cur_proj = -1; bound_tex = 0;
     texpool_set_frame(++tex_frame);
-    if (mirror_need && tex_frame - mirror_room_frame >= 60) {   /* a full pool retries once a second */
+    /* a full pool retries once a second; after a success, at the next frame */
+    if (mirror_need && tex_frame - mirror_room_frame >= (mirror_room_ok ? 1u : 60u)) {
         mirror_room_frame = tex_frame;
-        if (texpool_make_room(mirror_need)) { mirror_epoch++; mirror_need = 0; }
+        mirror_room_ok = texpool_make_room(mirror_need < TEXPOOL_CHUNK ? mirror_need : TEXPOOL_CHUNK);
+        if (mirror_room_ok) { mirror_epoch++; mirror_need = 0; }
     }
     rec_reset();
     if (headless) return;

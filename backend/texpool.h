@@ -8,11 +8,12 @@
  * textures into them and, when a texture does not fit:
  *   1. takes another chunk while the heap keeps a reserve free;
  *   2. compacts: moves every texture down so the free space is one piece
- *      (only between frames: a display list holds texture addresses);
- *   3. evicts cache copies (the PSP's mirrored variants, rebuilt on use),
- *      least recently drawn first;
+ *      (not while a display list holds texture addresses);
+ *   3. evicts cache copies (the PSP's mirrored variants, rebuilt on use)
+ *      not drawn for TEXPOOL_IDLE frames, least recently drawn first;
  *   4. drops the top mip level of the least recently drawn textures, those
- *      not drawn for TEXPOOL_IDLE frames first, then any not drawn this
+ *      not drawn for TEXPOOL_IDLE frames first; then evicts the cache
+ *      copies still in use; then drops levels of any texture not drawn this
  *      frame, then (a level larger than the pool) any: the texture stays,
  *      at half the resolution.
  * Steps 2-4 only when the caller says it may (no display list holds

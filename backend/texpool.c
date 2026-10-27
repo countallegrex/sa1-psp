@@ -126,9 +126,17 @@ int texpool_alloc(uint32_t size, int owner, int cache, int may_reclaim, uint8_t 
         if (!may_reclaim) break;
         uint32_t freeb = (uint32_t)nchunks * TEXPOOL_CHUNK - st.used;
         if (freeb >= size && (!compacted || freeb >= at_compact + margin)) { compact(); compacted = 1; at_compact = freeb; continue; }
-        int v = pick(1, 0xFFFFFFFFu);
+        /* Cache copies idle for TEXPOOL_IDLE frames, then a level of a game
+         * texture as idle, and only then copies in use: with the game's own
+         * textures filling the pool, evicting the copies first made three
+         * mirror variants of Emerald Coast act 3 take each other's place
+         * every second (each one drawn every few frames). */
+        uint32_t idle = now > TEXPOOL_IDLE ? now - TEXPOOL_IDLE : 0;
+        int v = pick(1, idle);
         if (v >= 0) { ops.evict(blk[v].owner); st.evictions++; continue; }
-        v = pick(0, now > TEXPOOL_IDLE ? now - TEXPOOL_IDLE : 0);
+        v = pick(0, idle);
+        if (v < 0) v = pick(1, 0xFFFFFFFFu);
+        if (v >= 0 && blk[v].cache) { ops.evict(blk[v].owner); st.evictions++; continue; }
         if (v < 0) v = pick(0, now);
         if (v < 0) v = pick(0, 0xFFFFFFFFu);   /* even this frame's loads: half resolution beats white */
         if (v >= 0) {
