@@ -79,7 +79,7 @@ endif()
 # The PSP half of the platform interface, the sceGu renderer, and the tape
 # code shared with the desktop (plain stdio).
 add_library(sa1_backend_psp OBJECT
-  platform_psp.c coro_psp.c draw_gu.c crash_psp.c main_psp.c savestate_psp.c vmu_store_psp.c
+  platform_psp.c coro_psp.c draw_gu.c crash_psp.c main_psp.c savestate_psp.c vmu_store_psp.c audio_psp.c
   ${CMAKE_SOURCE_DIR}/backend/desktop/input_tape.c
   ${CMAKE_SOURCE_DIR}/backend/desktop/sha256.c
   ${CMAKE_SOURCE_DIR}/backend/texpool.c)
@@ -275,7 +275,7 @@ if(SA1_GAME_SRCS)
   # Object libraries, not static ones: the weak stubs in hle/seam_stubs.c
   # must see every strong HLE body at link time (as on the desktop).
   set(SA1_PSP_OBJS $<TARGET_OBJECTS:sa1_hle_psp> $<TARGET_OBJECTS:sa1_backend_psp> $<TARGET_OBJECTS:sa1_game_psp>)
-  set(SA1_PSP_LIBS pspgu pspge pspdisplay pspctrl psppower psprtc pspdebug pspkubridge)
+  set(SA1_PSP_LIBS pspgu pspge pspdisplay pspctrl psppower psprtc pspdebug pspkubridge pspaudio)
   # draw_gu.c --list-cache (p6): every stall move of the frame's display list,
   # libpspgu's included, writes the cached list back first.
   set(SA1_PSP_WRAP "-Wl,--wrap=sceGeListUpdateStallAddr,--wrap=sceGuGetMemory")

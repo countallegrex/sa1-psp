@@ -22,6 +22,9 @@
  *                   default, exact in strict runs unless given)
  *   --math-exact A  these routines (hex, comma-separated) stay exact whatever
  *                   --math says (sa1psp.ini math_exact)
+ *   --no-audio      the sound core runs, nothing is played (audio_psp.c)
+ *   --audio-chan    a sceAudio channel instead of sceAudioOutput2 (audio_psp.c)
+ *   --audio on|off  off: no decoding or mixing (sa1psp.ini audio)
  *   --cull-flip     the other winding convention for PowerVR culling (draw_gu.c)
  *   --no-ta-direct  the recompiled TA strip writers instead of the native ones (docs/ta-direct.md)
  *   --gu-split Z    the depth passes' split (draw_gu.c, default 16; 0: one pass)
@@ -80,6 +83,8 @@ int hle_parse_land_cull(const char *v), hle_parse_land_decide(const char *v);
 #include "../desktop/savestate.h"
 #include "state.h"
 #include "platform_psp.h"
+#include "sound/snd_host.h"
+#include "../audio.h"
 
 #include <pspkernel.h>
 #include <pspdisplay.h>
@@ -162,7 +167,9 @@ static const char *data_dir = "data", *log_path = "sa1psp.log";
 static int headless, no_pad, no_pace, to_stdout, sync_log, stats_every, coro_heap, no_crash_screen;
 static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
-static sh4_ctx ctx __attribute__((aligned(16)));   /* XMTRX (xf) for lv.q/sv.q (hle/ninja/math.c) */
+static sh4_ctx ctx __attribute__((aligned(16)));
+extern int audio_psp_enabled, audio_psp_out2;   /* audio_psp.c */
+static int audio_cli = -1;              /* --audio on|off */   /* XMTRX (xf) for lv.q/sv.q (hle/ninja/math.c) */
 #define PRESS_MAX 64
 static struct { uint32_t frame, buttons, hold; } presses[PRESS_MAX];
 static int npresses;
@@ -297,6 +304,8 @@ static void report_and_exit(int code) {
     uint64_t t_end = sa1_plat_time_us();
     kamui_report();
     draw_gu_report();
+    snd_host_report();
+    audio_close();
     mem_report("exit");
     sa1_seam_report(20);
     sa1_log("exit: %u frames, %.3f s, code %d", hle_frame_count(), (t_end - t0) / 1e6, code);
@@ -566,6 +575,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--ta-direct")) hle_ta_direct = 1;
         else if (!strcmp(av[i], "--no-ta-direct")) hle_ta_direct = 0;
         else if (!strcmp(av[i], "--land-cull") && i + 1 < args_c) hle_land_cull_cli = hle_parse_land_cull(av[++i]);   /* on|opaque|off; hle/ninja/native_land.c */
+        else if (!strcmp(av[i], "--no-audio")) audio_psp_enabled = 0;
+        else if (!strcmp(av[i], "--audio-chan")) audio_psp_out2 = 0;   /* audio_psp.c: a sceAudio channel, not Output2 */   /* audio_psp.c: the core runs, nothing is played */
+        else if (!strcmp(av[i], "--audio") && i + 1 < args_c) audio_cli = strcmp(av[++i], "off") ? 1 : 0;   /* off: no decoding or mixing (as sa1psp.ini audio = off) */
         else if (!strcmp(av[i], "--math-exact") && i + 1 < args_c) hle_parse_math_exact(av[++i]);   /* hle/settings.c */
         else if (!strcmp(av[i], "--math") && i + 1 < args_c) {   /* exact|native|check; hle/settings.c */
             int m = hle_parse_math(av[++i]);
@@ -757,6 +769,7 @@ int main(int argc, char **argv) {
     if (dump_trig_path) { dump_trig(dump_trig_path); plat_log_flush(); sceKernelExitGame(); return 0; }
     sa1_log("step: hle_init");
     hle_init();
+    if (audio_cli >= 0) snd_audio_enabled = audio_cli;   /* --audio wins over sa1psp.ini */
     sa1_log("step: function map");
     plat_crash_init();
     sa1_log("step: draw_init");
