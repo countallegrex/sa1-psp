@@ -128,6 +128,7 @@ extern int hle_frame_skip, hle_frame_skip_cli, hle_frame_skip_force;
 extern int hle_draw_skip;          /* the current frame draws nothing */
 void hle_frame_skip_decide(void);   /* at a frame's end: whether the next one draws */
 void hle_frame_skip_report(void);
+int hle_frame_skip_hold(void);     /* vblanks of lateness a pacer re-base keeps (auto mode behind), else 0 */
 int hle_parse_frame_skip(const char *v, int *force);   /* settings.c: auto|off|N[, force:...]; -3 = bad */
 /* Game math (settings.c; hle/game/sphere_sweep.c): exact = the console's
  * float operations in its order (bit-exact); native = host/VFPU math, the

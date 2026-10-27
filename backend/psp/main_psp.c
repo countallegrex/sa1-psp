@@ -331,7 +331,8 @@ static void on_badaddr(uint32_t addr) { (void)addr; plat_backtrace(); }
 
 /* Guest frame N waits for vblank N (from the first frame on): 60 Hz, as
  * the console, whatever the game draws.  More than 15 vblanks behind (a
- * load) re-bases instead of running fast to catch up. */
+ * load) re-bases instead of running fast to catch up (keeping the lateness
+ * the frame skip holds while it is behind, hle/game/frame_skip.c). */
 static unsigned pace_v0;
 static uint32_t pace_f0;
 static int pace_set;
@@ -339,7 +340,7 @@ static void pace(uint32_t frame) {
     unsigned now = sceDisplayGetVcount();
     if (!pace_set) { pace_set = 1; pace_v0 = now; pace_f0 = frame; return; }
     unsigned due = pace_v0 + (frame - pace_f0);
-    if ((int)(now - due) > 15) { pace_v0 = now; pace_f0 = frame; return; }
+    if ((int)(now - due) > 15) { pace_v0 = now - (unsigned)hle_frame_skip_hold(); pace_f0 = frame; return; }
     while ((int)(due - sceDisplayGetVcount()) > 0) sceDisplayWaitVblankStart();
 }
 int sa1_plat_pace_late(uint32_t frame) {

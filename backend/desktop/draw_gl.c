@@ -487,7 +487,7 @@ void draw_gl_pace(uint32_t frame) {
     uint64_t now = sa1_plat_time_us();
     if (!pace_t0) { pace_t0 = now; pace_frame0 = frame; return; }
     uint64_t due = pace_t0 + (uint64_t)(frame - pace_frame0) * 1000000ull / 60ull;
-    if (now > due + 250000ull) { pace_t0 = now; pace_frame0 = frame; return; }
+    if (now > due + 250000ull) { pace_t0 = now - (uint64_t)hle_frame_skip_hold() * 1000000ull / 60ull; pace_frame0 = frame; return; }
     if (due > now + 2500ull) SDL_Delay((Uint32)((due - now - 2000ull) / 1000ull));
     while (sa1_plat_time_us() < due) { }
 #else

@@ -22,7 +22,11 @@
  *         pacer's own schedule and re-base, so a load forgiven by the pacer
  *         is forgiven here too), at most MAX_RUN in a row.  A turn is the
  *         game's frame interval in vblanks (TURN_VBLANKS: 2 in play).
- *         Unpaced runs never skip.
+ *         Unpaced runs never skip.  While it is behind (it wanted to skip
+ *         at its last decision), a pacer re-base keeps two turns of
+ *         lateness (hle_frame_skip_hold) instead of none, so a slow place
+ *         stays at the cap instead of drawing a run of turns after every
+ *         re-base at a loss of game speed.
  *   off   draw every frame
  *   N     draw one frame in N (a fixed pattern, for tests)
  * Never in strict runs (tapes, the oracle) unless forced (--frame-skip
@@ -43,6 +47,7 @@ int hle_frame_skip_force;         /* backend: also in strict runs (tests) */
 int hle_draw_skip;                /* this frame draws nothing (set by the previous frame's end) */
 
 static uint32_t run, n_skipped, n_drawn;
+static int hold_vblanks;          /* auto mode is behind: what a pacer re-base keeps */
 
 static int decide(void) {
     int mode = hle_frame_skip_cli != -2 ? hle_frame_skip_cli : hle_frame_skip;
@@ -55,7 +60,9 @@ static int decide(void) {
         if (turn < 1 || turn > 4) turn = 2;
         /* late counts from the vblank this turn started on: the next turn
          * starts a whole turn late once it reaches two turns */
-        skip = sa1_plat_pace_late(f) >= 2 * (int)turn && run < MAX_RUN;
+        int behind = sa1_plat_pace_late(f) >= 2 * (int)turn;
+        hold_vblanks = behind ? 2 * (int)turn : 0;
+        skip = behind && run < MAX_RUN;
     }
     run = skip ? run + 1 : 0;
     if (skip) n_skipped++; else n_drawn++;
@@ -63,6 +70,7 @@ static int decide(void) {
 }
 
 void hle_frame_skip_decide(void) { hle_draw_skip = decide(); }
+int hle_frame_skip_hold(void) { return hold_vblanks; }
 
 void hle_frame_skip_report(void) {
     int mode = hle_frame_skip_cli != -2 ? hle_frame_skip_cli : hle_frame_skip;
