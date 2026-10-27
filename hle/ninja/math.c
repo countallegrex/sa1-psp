@@ -21,6 +21,7 @@
 #include "../seam.h"
 
 #include <math.h>
+#include <string.h>
 
 #define G_DEPTH  0x8C88F69Cu
 #define G_MAX    0x8C88F698u
@@ -83,7 +84,73 @@ static inline void m_copy(void *d, const void *s) {
     q[0] = t0; q[1] = t1; q[2] = t2; q[3] = t3; q[4] = t4; q[5] = t5; q[6] = t6; q[7] = t7;
     q[8] = t8; q[9] = t9; q[10] = t10; q[11] = t11; q[12] = t12; q[13] = t13; q[14] = t14; q[15] = t15;
 }
-static void m_store(sh4_ctx *c, uint32_t addr, const float *m) { m_copy(m_wp(c, addr), m); }
+/* The copies on the VFPU (PSP): math = native (the default) moves an
+ * aligned 64-byte block (XMTRX, the matrix stack, most game matrices) with
+ * four lv.q and four sv.q, all loads before any store as m_copy does; an
+ * unaligned one takes m_copy.  The bits are the bits.  math = check counts
+ * the VFPU copies and compares each destination with its source (the
+ * summary at the end, kamui_report); math = exact, a strict run, or
+ * sa1psp.ini math_exact / --math-exact 8c639c70 keep m_copy.  The desktop
+ * always runs m_copy.  (VFPU arithmetic was tried for the rotations,
+ * products and transforms: vmul.q / vadd.q differ from the FPU in the last
+ * bit or two in most calls, 2026-10-26, so the arithmetic stays scalar.)
+ * VFPU registers: C000-C030 are scratch here, as in draw_gu.c. */
+#ifdef __psp__
+#define NJ_VFPU 1
+#define NJ_KEY 0x8c639c70u
+static int nj_mode = -1;
+static inline int nj_m(void) {
+    if (__builtin_expect(nj_mode < 0, 0)) {
+        nj_mode = hle_math_mode_for(NJ_KEY);
+        sa1_log("ninja math: copies %s", nj_mode == 1 ? "on the VFPU" : nj_mode == 2 ? "on the VFPU, checked" : "scalar (exact)");
+    }
+    return nj_mode;
+}
+#define VF_AL(p) ((((uintptr_t)(const void *)(p)) & 15u) == 0)
+static uint32_t njc_calls, njc_diff, njc_unal, njc_logged;
+void nj_check_report(void) {
+    if (nj_mode == 2) sa1_log("check: ninja math copies %u differing %u unaligned (scalar) %u", njc_calls, njc_diff, njc_unal);
+}
+/* d = s, 64 bytes, both aligned. */
+static inline void vf_copy16(void *d, const void *s) {
+    __asm__ volatile(
+        "lv.q C000, 0(%1)\n lv.q C010, 16(%1)\n lv.q C020, 32(%1)\n lv.q C030, 48(%1)\n"
+        "sv.q C000, 0(%0)\n sv.q C010, 16(%0)\n sv.q C020, 32(%0)\n sv.q C030, 48(%0)\n"
+        : : "r"(d), "r"(s) : "memory");
+}
+/* d1 = d2 = s (njPushMatrix(0) pushes XMTRX and keeps it): one load. */
+static inline void vf_copy16x2(void *d1, void *d2, const void *s) {
+    __asm__ volatile(
+        "lv.q C000, 0(%2)\n lv.q C010, 16(%2)\n lv.q C020, 32(%2)\n lv.q C030, 48(%2)\n"
+        "sv.q C000, 0(%0)\n sv.q C010, 16(%0)\n sv.q C020, 32(%0)\n sv.q C030, 48(%0)\n"
+        "sv.q C000, 0(%1)\n sv.q C010, 16(%1)\n sv.q C020, 32(%1)\n sv.q C030, 48(%1)\n"
+        : : "r"(d1), "r"(d2), "r"(s) : "memory");
+}
+static void njc_cmp(const void *d, const void *s) {
+    njc_calls++;
+    const intptr_t gap = (const char *)d - (const char *)s;
+    if (gap != 0 && gap < 64 && gap > -64) return;      /* overlapping: nothing to compare */
+    if (memcmp(d, s, 64)) {
+        njc_diff++;
+        if (njc_logged < 16) { njc_logged++; sa1_log("check: ninja math copy f%u differs", hle_frame_count()); }
+    }
+}
+#else
+void nj_check_report(void) {}
+#endif
+static void nj_copy(void *d, const void *s) {
+#ifdef NJ_VFPU
+    const int md = nj_m();
+    if (md && VF_AL(d) && VF_AL(s)) {
+        vf_copy16(d, s);
+        if (md == 2) njc_cmp(d, s);
+        return;
+    }
+    if (md == 2) njc_unal++;
+#endif
+    m_copy(d, s);
+}
+static void m_store(sh4_ctx *c, uint32_t addr, const float *m) { nj_copy(m_wp(c, addr), m); }
 static void v_load(uint32_t addr, float *v) { const sa1_f32a *p = g_rd(addr); for (int i = 0; i < 3; i++) v[i] = p[i]; }
 static void v_store(uint32_t addr, const float *v) { sa1_f32a *p = g_wr(addr); for (int i = 0; i < 3; i++) p[i] = v[i]; }
 
@@ -181,11 +248,15 @@ void sdk_8c639c70(sh4_ctx *c) {         /* njPushMatrix(m) */
     uint32_t depth = hle_rd32(G_DEPTH);
     if (depth >= hle_rd32(G_MAX)) { RET(0); return; }
     uint32_t ptr = hle_rd32(G_PTR);
-    m_copy(g_wr(ptr), c->xf);
+    sa1_f32a *p0 = g_wr(ptr);
     ptr += 64;
     hle_wr32(G_DEPTH, depth + 1); hle_wr32(G_PTR, ptr);
-    if (ARG0 == 0) m_copy(g_wr(ptr), c->xf);
-    else m_copy(c->xf, g_rd(ARG0));
+#ifdef NJ_VFPU
+    if (ARG0 == 0 && nj_m() == 1 && VF_AL(p0) && VF_AL(c->xf)) { vf_copy16x2(p0, p0 + 16, c->xf); RET(1); return; }
+#endif
+    nj_copy(p0, c->xf);
+    if (ARG0 == 0) nj_copy(g_wr(ptr), c->xf);
+    else nj_copy(c->xf, g_rd(ARG0));
     RET(1);
 }
 
@@ -195,13 +266,13 @@ void sdk_8c639b98(sh4_ctx *c) {         /* njPopMatrix(n) */
     if ((int32_t)(depth - n) < 1) { RET(0); return; }
     uint32_t ptr = hle_rd32(G_PTR) - 64 * n;
     hle_wr32(G_DEPTH, depth - n); hle_wr32(G_PTR, ptr);
-    m_copy(c->xf, g_rd(ptr));
+    nj_copy(c->xf, g_rd(ptr));
     RET(1);
 }
 
 void sdk_8c63a8e0(sh4_ctx *c) { HLE_ENTER(0x8c63a8e0u, "njUnitMatrix"); float m[16]; m_unit(m); m_store(c, ARG0, m); }
-void sdk_8c63a770(sh4_ctx *c) { HLE_ENTER(0x8c63a770u, "njSetMatrix"); const sa1_f32a *s = m_rp(c, ARG1); m_copy(m_wp(c, ARG0), s); }
-void sdk_8c638f94(sh4_ctx *c) { HLE_ENTER(0x8c638f94u, "njGetMatrix"); m_copy(m_wp(c, ARG0), c->xf); }
+void sdk_8c63a770(sh4_ctx *c) { HLE_ENTER(0x8c63a770u, "njSetMatrix"); const sa1_f32a *s = m_rp(c, ARG1); nj_copy(m_wp(c, ARG0), s); }
+void sdk_8c638f94(sh4_ctx *c) { HLE_ENTER(0x8c638f94u, "njGetMatrix"); nj_copy(m_wp(c, ARG0), c->xf); }
 void sdk_8c63997c(sh4_ctx *c) {         /* njMultiMatrix(md, ms): Md = Md * Ms */
     HLE_ENTER(0x8c63997cu, "njMultiMatrix");
     const sa1_f32a *b = m_rp(c, ARG1); sa1_f32a *a = m_wp(c, ARG0); m_mul(a, a, b);

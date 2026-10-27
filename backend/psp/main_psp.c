@@ -162,7 +162,7 @@ static const char *data_dir = "data", *log_path = "sa1psp.log";
 static int headless, no_pad, no_pace, to_stdout, sync_log, stats_every, coro_heap, no_crash_screen;
 static uint32_t frame_limit;
 static uint64_t time_limit_us, t0;
-static sh4_ctx ctx;
+static sh4_ctx ctx __attribute__((aligned(16)));   /* XMTRX (xf) for lv.q/sv.q (hle/ninja/math.c) */
 #define PRESS_MAX 64
 static struct { uint32_t frame, buttons, hold; } presses[PRESS_MAX];
 static int npresses;

@@ -25,7 +25,9 @@
  *                              operations bit for bit (strict runs, unless
  *                              --math); check: exact plus a native shadow
  *   math_exact = 8c029400,...  these routines stay exact whatever math says
- *                              (A/B timing of one routine; --math-exact)
+ *                              (A/B timing of one routine; --math-exact;
+ *                              8c639c70 = the Ninja matrix copies on the
+ *                              VFPU, hle/ninja/math.c)
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
@@ -76,7 +78,8 @@ int hle_math_mode_for(uint32_t addr) {
 void sph_check_report(void);
 void pr_check_report(void);
 void ss_check_report(void);
-void hle_math_report(void) { sph_check_report(); pr_check_report(); ss_check_report(); }
+void nj_check_report(void);
+void hle_math_report(void) { sph_check_report(); pr_check_report(); ss_check_report(); nj_check_report(); }
 
 int hle_parse_voice(const char *v) {
     if (!strcmp(v, "en") || !strcmp(v, "english") || !strcmp(v, "us")) return 1;
