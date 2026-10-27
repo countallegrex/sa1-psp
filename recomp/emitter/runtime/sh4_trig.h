@@ -8,7 +8,10 @@
  * sinf/cosf differ from it at about 70 % of the angles, and differ between
  * the desktop's libm and newlib (PSP) as well.  The table is exactly
  * cos(a) = sin(a + 0x4000) and sin(a + 0x8000) = -sin(a) (bit for bit), so
- * half a turn of sines is all of it.
+ * half a turn is all of it: cos(a + 0x8000) = -cos(a) as well.  The sine and
+ * cosine of an angle sit side by side (one 8-byte entry), so an fsca reads
+ * one cache line, not two 64 KB apart (qf, 2026-10-27: the table loads were
+ * half of every rotation's time on the PSP-3001).
  *
  * Without the file sh4_trig_init falls back to libm (sh4_fsca_authentic 0):
  * the backends log it loudly and refuse strict runs.
@@ -18,7 +21,7 @@
 #include <stdint.h>
 #include <string.h>
 
-extern uint32_t sh4_fsca_sin[32768];   /* float bits of sin(a), a = 0..0x7FFF */
+extern uint32_t sh4_fsca_sc[32768][2];   /* float bits of sin(a), cos(a), a = 0..0x7FFF */
 extern int sh4_fsca_ready;             /* the table is filled (from the file or libm) */
 extern int sh4_fsca_authentic;         /* 1: the console's table */
 
@@ -27,9 +30,10 @@ extern int sh4_fsca_authentic;         /* 1: the console's table */
  * fsca table (then the fallback is in place). */
 int sh4_trig_init(const void *table, uint32_t size);
 
-static inline uint32_t sh4_sin16_bits(uint32_t a) {
+static inline uint32_t sh4_sc16_bits(uint32_t a, int k) {
     if (__builtin_expect(!sh4_fsca_ready, 0)) sh4_trig_init(NULL, 0);
-    return sh4_fsca_sin[a & 0x7FFFu] ^ ((a & 0x8000u) << 16);
+    return sh4_fsca_sc[a & 0x7FFFu][k] ^ ((a & 0x8000u) << 16);
 }
-static inline float sh4_sin16(uint32_t a) { uint32_t w = sh4_sin16_bits(a); float f; memcpy(&f, &w, 4); return f; }
-static inline float sh4_cos16(uint32_t a) { return sh4_sin16(a + 0x4000u); }
+static inline uint32_t sh4_sin16_bits(uint32_t a) { return sh4_sc16_bits(a, 0); }
+static inline float sh4_sin16(uint32_t a) { uint32_t w = sh4_sc16_bits(a, 0); float f; memcpy(&f, &w, 4); return f; }
+static inline float sh4_cos16(uint32_t a) { uint32_t w = sh4_sc16_bits(a, 1); float f; memcpy(&f, &w, 4); return f; }

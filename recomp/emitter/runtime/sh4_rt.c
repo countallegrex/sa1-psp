@@ -11,7 +11,7 @@
 #include <math.h>
 
 /* ---- fsca (sh4_trig.h) ---------------------------------------------------- */
-uint32_t sh4_fsca_sin[32768];
+uint32_t sh4_fsca_sc[32768][2];
 int sh4_fsca_ready, sh4_fsca_authentic;
 
 int sh4_trig_init(const void *table, uint32_t size) {
@@ -28,13 +28,18 @@ int sh4_trig_init(const void *table, uint32_t size) {
     }
     if (ok && (((const uint32_t *)(const void *)t)[0] != 0 || ((const uint32_t *)(const void *)t)[1] != 0x3F800000u)) ok = 0;
     if (ok)
-        for (uint32_t a = 0; a < 32768u; a++) memcpy(&sh4_fsca_sin[a], t + 8u * a, 4);
-    else
+        for (uint32_t a = 0; a < 32768u; a++) memcpy(sh4_fsca_sc[a], t + 8u * a, 8);   /* checked: cos = sin a quarter on */
+    else {
         for (uint32_t a = 0; a < 32768u; a++) {      /* the platform's libm: not the console's values */
             float f = sinf((float)a * (float)(6.283185307179586 / 65536.0));
             if (a == 0) f = 0.0f;
-            memcpy(&sh4_fsca_sin[a], &f, 4);
+            memcpy(&sh4_fsca_sc[a][0], &f, 4);
         }
+        for (uint32_t a = 0; a < 32768u; a++) {      /* cos(a) = sin(a + 0x4000), as before */
+            uint32_t b = a + 0x4000u;
+            sh4_fsca_sc[a][1] = sh4_fsca_sc[b & 0x7FFFu][0] ^ ((b & 0x8000u) << 16);
+        }
+    }
     sh4_fsca_authentic = ok;
     sh4_fsca_ready = 1;
     return ok || !t ? 0 : -1;
