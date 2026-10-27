@@ -180,7 +180,12 @@ static void draw_basic_model(sh4_ctx *c, uint32_t model) {
       if (mdbg()) sa1_log("  centre view z %.1f (near %.1f far %.1f) screen %.0f,%.0f lit %d", cen.z, e.clipn, hle_rdf(NJ_G_CLIPF), cen.sx, cen.sy, e.lit);
       if (cen.z + r < e.clipn) return;
       if (cen.z - r > hle_rdf(NJ_G_CLIPF)) return; }
-    for (uint32_t i = 0; i < np; i++) {
+    /* frame skip (hle/game/frame_skip.c): on a turn without a picture only the
+     * geometry is dropped (transforms, shading, vertices: TA list scratch that
+     * kmFlip resets); the sphere test and every material's save / texture /
+     * header / restore still run, since the restore leaves the strip head as
+     * the last material set it */
+    if (!hle_draw_skip) for (uint32_t i = 0; i < np; i++) {
         xform(&e, hle_rdf(points + 12 * i), hle_rdf(points + 12 * i + 4), hle_rdf(points + 12 * i + 8), &tvs[i]);
         if (normals) xform_n(&e, hle_rdf(normals + 12 * i), hle_rdf(normals + 12 * i + 4), hle_rdf(normals + 12 * i + 8), &tvs[i]);
         else { tvs[i].nx = 0; tvs[i].ny = 0; tvs[i].nz = -1; }
@@ -201,7 +206,7 @@ static void draw_basic_model(sh4_ctx *c, uint32_t model) {
         int textured = vuv != 0;
         int ignore_light = (flags & FLAG_IGN_LIGHT) != 0;
         if (mdbg()) sa1_log("  meshset %u: type %u mat %u nmesh %u flags 0x%08x texid %u uv %d col %d", s, type, matid, nmesh, flags, texid, vuv != 0, vcol != 0);
-        if (kamui_ptr_trace()) {   /* SA1_KAMUI_DUMP: which model wrote which strips, and its worst vertex */
+        if (!hle_draw_skip && kamui_ptr_trace()) {   /* SA1_KAMUI_DUMP: which model wrote which strips, and its worst vertex */
             uint32_t worst = 0; float far = 0.0f; int bad = 0;
             for (uint32_t i = 0; i < np; i++) if (tvs[i].ok) { float d = fabsf(tvs[i].sx - 320.0f) + fabsf(tvs[i].sy - 240.0f); if (d > far) { far = d; worst = i; } }
             { uint32_t p2 = meshes; for (uint32_t mi = 0; mi < nmesh && mi < 4096; mi++) { int cnt = (type == 3 || type == 2) ? (int)(hle_rd16(p2) & 0x7FFF) : type == 0 ? 3 : 4; if (type == 3 || type == 2) p2 += 2; for (int q = 0; q < cnt; q++) if (hle_rd16(p2 + 2u * (uint32_t)q) >= np) bad++; p2 += 2u * (uint32_t)cnt; } }
@@ -210,7 +215,7 @@ static void draw_basic_model(sh4_ctx *c, uint32_t model) {
         }
         int list = begin_material(c, flags, texid, textured);
         uint32_t p = meshes, k = 0;    /* k: running index into the per-mesh-vertex arrays */
-        for (uint32_t mi = 0; mi < nmesh && mi < 4096; mi++) {
+        if (!hle_draw_skip) for (uint32_t mi = 0; mi < nmesh && mi < 4096; mi++) {
             int count, strip_dir = 0;
             if (type == 3 || type == 2) { int16_t len = (int16_t)hle_rd16(p); p += 2; count = len & 0x7FFF; strip_dir = (len < 0); }
             else count = type == 0 ? 3 : 4;
@@ -382,7 +387,7 @@ static void draw_cnk_model(sh4_ctx *c, uint32_t model) {
             if (textured) mflags |= FLAG_USE_TEXTURE;
             int list = begin_material(c, mflags, texid, textured);
             uint32_t q = p + 6;
-            for (uint32_t s = 0; s < nstrips && s < 2048; s++) {
+            if (!hle_draw_skip) for (uint32_t s = 0; s < nstrips && s < 2048; s++) {   /* frame skip: as draw_basic_model */
                 int16_t len = (int16_t)hle_rd16(q); q += 2;
                 int count = len & 0x7FFF, rev = len < 0, nv = 0;
                 if (count <= 0 || count > MAX_VERTS - 1) break;

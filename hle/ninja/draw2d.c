@@ -146,7 +146,7 @@ static void draw_sprite(sh4_ctx *c, uint32_t sp, uint32_t n, uint32_t attr, floa
     float rot[4];
     const float *r = NULL;
     if (attr & 1) { rot[0] = px; rot[1] = py; rot[2] = rs; rot[3] = rc; r = rot; }
-    sprite_quad(list, x0, y0, x1, y1, z, u1, v1, u2, v2, r);
+    if (!hle_draw_skip) sprite_quad(list, x0, y0, x1, y1, z, u1, v1, u2, v2, r);   /* frame skip: state only (model.c) */
     kamui_draw_end(c);
 }
 
@@ -245,7 +245,7 @@ static void point_list(sh4_ctx *c, uint32_t pl, uint32_t n, float z, uint32_t at
     }
     uint32_t stride = 8;
     float px = 0, py = 0, pz = z;
-    for (uint32_t i = 0; i < num; i++) {
+    if (!hle_draw_skip) for (uint32_t i = 0; i < num; i++) {   /* frame skip: state only (model.c) */
         uint32_t k = i;
         if (ring) k = (i & 1) ? num - 1 - i / 2 : i / 2;   /* 0, n-1, 1, n-2, 2, ... */
         float x = hle_rdf(pts + k * stride), y = hle_rdf(pts + k * stride + 4);
@@ -324,7 +324,7 @@ void sdk_8c63ce24(sh4_ctx *c) {
         }
         static const int end[4] = {0, 1, 0, 1};
         static const float off[4] = {-1.0f, -1.0f, 2.0f, 2.0f};
-        for (int i = 0; i < 4; i++) {
+        if (!hle_draw_skip) for (int i = 0; i < 4; i++) {   /* frame skip: the clip tests decide the header; no vertices */
             const cv_t *p = &e[end[i]];
             kamui_put_vertex(list, i == 3 ? PCW_VTX_END : PCW_VTX, sx[end[i]] + off[i] * nx, sy[end[i]] + off[i] * ny, iz[end[i]],
                              p->u, p->v, cv_pack(p->col), 0);

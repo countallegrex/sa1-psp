@@ -8,7 +8,10 @@
  * draws, and kmFlip keeps the last picture.  Everything else runs: every
  * object's MainSub and display code (matrices, timers, motion), the other TA
  * writers (callers use the TA pointer they return), kmFlip's buffer reset and
- * the frame counter.  The pipeline writes only draw scratch that the next
+ * the frame counter.  The Ninja model, sprite, polygon and line draws
+ * (hle/ninja/model.c, draw2d.c) drop only their geometry: their context
+ * save, texture, header and restore still run, since the restore leaves the
+ * strip head as the draw set it.  The pipeline writes only draw scratch that the next
  * drawn frame rewrites (the transformed vertices at 0x8C7AC8E0, the offset
  * colours at 0x8C03D760, its own stack), so the game runs exactly as without
  * the skip: the replay tapes and guest-RAM compares at the drawn frames
