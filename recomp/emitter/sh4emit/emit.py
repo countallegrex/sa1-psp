@@ -180,6 +180,26 @@ class Program:
                 break
         else:
             raise SystemExit("analysis: no fixpoint after 64 rounds")
+        self.check_exits()
+
+    def check_exits(self):
+        """Self-check: at every transfer to another function (tail call,
+        conditional tail call, a switch case outside the function) the
+        registers the target reads must be live there, so the emitter stores
+        them or the caller passes them through.  A miss is the 2026-10-27
+        class of bug (a switch's out-of-function cases were not counted):
+        fail the build instead of emitting a stale register."""
+        bad = []
+        for e in self.order:
+            fa = self.analyses[e]
+            for s in fa.cfg.blocks:
+                for t, need in fa.exit_targets(s):
+                    miss = need & ~bit(regs.PR) & ~fa.live_out.get(s, 0)
+                    if miss:
+                        bad.append("0x%08x block 0x%08x -> 0x%08x: %s not live" % (e, s, t, ",".join(regs.name(r) for r in iter_bits(miss))))
+        if bad:
+            raise SystemExit("analysis: %d exits to other functions miss live-in registers:\n  %s" % (len(bad), "\n  ".join(bad[:40])))
+        self.log("analysis: exit check passed")
 
     def find_patched(self, cfgs, env):
         """Image words some store writes through a constant address."""

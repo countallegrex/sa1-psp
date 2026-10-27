@@ -68,6 +68,14 @@ class Summaries:
                 self.fpscr_ret.get(entry, IDENTITY))
 
 
+class _Exit:
+    """A transfer to another function, shaped as call_info wants a block."""
+    kind = "tail"
+
+    def __init__(self, target):
+        self.target = target
+
+
 class FunctionAnalysis:
     def __init__(self, cfg, program):
         self.cfg = cfg
@@ -106,6 +114,39 @@ class FunctionAnalysis:
                 return CallInfo("sdk_dead", t, None, regs.ALL, regs.ALL, IDENTITY)
             return CallInfo("indirect", t, None, regs.ALL, regs.ALL, IDENTITY)
         return CallInfo("indirect", None, None, regs.ALL, regs.ALL, IDENTITY)
+
+    def switch_info(self, b):
+        """A switch whose table reaches outside the function: each such case
+        is a tail call (emit.py), so the block reads what every one of those
+        callees reads and may write what any of them writes.  None when all
+        the cases stay inside.  (Without this the copy helper 0x8C10CD38,
+        which jumps into 0x8C10CD66 and its neighbours, read only r0, so
+        its callers never stored r1, the destination: 2026-10-27, the
+        save-select crash.)"""
+        ext = [t for t in b.table.targets if t not in self.cfg.blocks]
+        if not ext:
+            return None
+        li = mw = 0
+        for t in sorted(set(ext)):
+            ci = self.call_info(_Exit(t))
+            li |= ci.live_in
+            mw |= ci.may_write
+        return CallInfo("switch", None, None, li, mw, IDENTITY)
+
+    def exit_targets(self, s):
+        """(target, live-in it needs) for every transfer out of block s to
+        another function: the self-check in Program.check_exits."""
+        b = self.cfg.blocks[s]
+        out = []
+        if b.kind == "tail" and b.target is not None:
+            out.append(b.target)
+        elif b.kind == "switch":
+            out += sorted(set(t for t in b.table.targets if t not in self.cfg.blocks))
+        elif b.kind == "cond" and b.target is not None and b.target not in b.succs:
+            out.append(b.target)
+        elif b.kind == "ijump":         # computed: the target is unknown, all of it
+            return [(0, regs.ALL)]
+        return [(t, self.call_info(_Exit(t)).live_in) for t in out]
 
     # ----------------------------------------------------------- FPSCR pass
     def fpscr_transfer(self, state, ins, consts, tags):
@@ -276,6 +317,10 @@ class FunctionAnalysis:
             self.ud[s] = seq
             if b.kind in ("call", "tail", "ijump"):
                 self.calls[s] = self.call_info(b)
+            elif b.kind == "switch":
+                si = self.switch_info(b)
+                if si is not None:
+                    self.calls[s] = si
         self.used = used
 
     # -------------------------------------------------- preserved registers
@@ -349,6 +394,8 @@ class FunctionAnalysis:
                         live |= bit(b.call_reg) if b.call_reg is not None else 0
                 elif b.kind == "switch":
                     live |= bit(b.branch.n)
+                    if s in self.calls:     # cases that tail-call: as a tail
+                        live |= self.dirty_out[s] | self.calls[s].live_in
                 elif b.kind == "stop":
                     live |= self.dirty_out[s]
                 elif b.kind == "cond" and b.target is not None and b.target not in b.succs:

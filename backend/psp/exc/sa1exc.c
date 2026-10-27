@@ -51,7 +51,17 @@ static void hex(u32 v) {
 }
 
 static void on_exception(PspDebugRegBlock *r) {
-    pspDebugScreenInit();
+    /* Paint into the frame buffer on screen now.  pspDebugScreenInit
+     * points the display at VRAM 0 from the next vblank, which needs the
+     * display interrupt, and this handler runs with interrupts off: on the
+     * card the screen froze on the game's last picture and the text went
+     * to a buffer nobody showed (2026-10-27, the save-select crash). */
+    void *top = 0;
+    int width = 512, fmt = PSP_DISPLAY_PIXEL_FORMAT_565;
+    if (sceDisplayGetFrameBuf(&top, &width, &fmt, PSP_DISPLAY_SETBUF_IMMEDIATE) >= 0 && top)
+        pspDebugScreenInitEx((void *)(((u32)top & 0x0FFFFFFFu) | 0x40000000u), fmt, 0);
+    else
+        pspDebugScreenInit();
     pspDebugScreenSetBackColor(0x00400000);
     pspDebugScreenSetTextColor(0xFFFFFFFF);
     pspDebugScreenClear();
@@ -78,7 +88,7 @@ static void on_exception(PspDebugRegBlock *r) {
         }
     }
     puts_("\n\nPhotograph this screen; hold POWER to turn the PSP off.");
-    for (;;) sceDisplayWaitVblankStart();
+    for (;;) { }        /* no waits: they need the interrupts this context has off */
 }
 
 int module_start(SceSize args, void *argp) {

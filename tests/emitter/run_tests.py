@@ -748,6 +748,40 @@ main:
  rts
  nop
 """, {}, {"r0": 3, "r1": 5}, entry=0x20)
+# A switch whose case is another function (0x8C10CD38's copy ladder,
+# 2026-10-27): the caller's r1 must reach that case through the context.
+case("switch_case_other_function", """
+store1:
+ mov.l r2,@r1
+ rts
+ nop
+ .skip 10
+helper:
+ shll2 r0
+ mov.l tbl2,r3
+ mov.l @(r0,r3),r3
+ jmp @r3
+ nop
+ .align 4
+tbl2: .long tbl
+tbl: .long store1
+ .skip 28
+main:
+ sts.l pr,@-r15
+ mov.l dst,r1
+ mov.l val,r2
+ mov.l hlp,r3
+ jsr @r3
+ mov #0,r0
+ lds.l @r15+,pr
+ rts
+ nop
+ .align 4
+dst: .long %#x
+val: .long 0x12345678
+hlp: .long helper
+""" % (DATA + 0x20), {"r15": DATA + 0x100, "r1": DATA + 0x40},
+     {"mem32@%#x" % (DATA + 0x20): 0x12345678}, entry=0x40, extra=(0x0, 0x10))
 case("fpscr_save_restore", """
  sts.l fpscr,@-r15
  fschg
