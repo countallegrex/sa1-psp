@@ -30,8 +30,24 @@ import tempfile
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(os.path.dirname(REPO), "private", "ci-local")
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _main_checkout() -> str:
+    """The main checkout when REPO is a linked worktree: its .git is a file
+    pointing at a Windows path that WSL git cannot follow, so the clones come
+    from the common git directory, and results go next to the main checkout."""
+    try:
+        common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=REPO,
+                                check=True, capture_output=True, text=True, creationflags=NOWIN).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return REPO
+    common = os.path.abspath(common)
+    return os.path.dirname(common) if os.path.basename(common) == ".git" else REPO
+
+
+MAIN = _main_checkout()
+OUT = os.path.join(os.path.dirname(MAIN), "private", "ci-local")
 
 # Shared compile lines (build.yml's, per OS).  {cc} is clang or cc; {lm} is
 # -lm on Linux; {exe} is .exe on Windows.
@@ -183,12 +199,12 @@ def main() -> int:
     print(f"ci_local: {sha} -> {tmp} + WSL {lintree}", flush=True)
 
     if win:
-        subprocess.run(["git", "clone", "--local", "--quiet", "--no-checkout", REPO, wintree], check=True,
+        subprocess.run(["git", "clone", "--local", "--quiet", "--no-checkout", MAIN, wintree], check=True,
                        creationflags=NOWIN)
         git("checkout", "--quiet", "--detach", sha, cwd=wintree)
     if lin:
         prep = (f"set -e; rm -rf {lintree}; mkdir -p /root/sa1-ci; "
-                f"git -c safe.directory='*' clone --quiet --no-checkout {sh_quote(wsl_path(REPO))} {lintree}; "
+                f"git -c safe.directory='*' clone --quiet --no-checkout {sh_quote(wsl_path(MAIN))} {lintree}; "
                 f"git -C {lintree} checkout --quiet --detach {sha}")
         subprocess.run(["wsl", "-u", "root", "-e", "bash", "-c", prep], check=True, creationflags=NOWIN)
 
