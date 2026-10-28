@@ -1,0 +1,479 @@
+[
+ {
+  "order": 1,
+  "lever": "Texture lookup by handle map",
+  "status": "done",
+  "cpu_share": "27%",
+  "est_ms": 41,
+  "measured_ms": 41.0,
+  "note": "99638d4"
+ },
+ {
+  "order": 2,
+  "lever": "TA buffer single walk, no divides",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 11,
+  "measured_ms": 11.0,
+  "note": "bb6ec9e, 1892b13"
+ },
+ {
+  "order": 3,
+  "lever": "Hot chunks at -O2, stack_probe cache",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 5,
+  "measured_ms": 5.9,
+  "note": "7f477bc, 2923339"
+ },
+ {
+  "order": 4,
+  "lever": "Guest memory fast path (sa1_off, base register)",
+  "status": "done",
+  "cpu_share": "2%",
+  "est_ms": 1,
+  "measured_ms": 1.72,
+  "note": "Identical. 2ad56bf: stack accesses skip the guest address-area test (R15 provably RAM); 68.21 -> 66.49 ms, median of 2"
+ },
+ {
+  "order": 5,
+  "lever": "Ninja straight to sceGu, skip the TA round trip",
+  "status": "done",
+  "cpu_share": "~45%",
+  "est_ms": 16,
+  "measured_ms": 7.1,
+  "note": "Identical. Stages 1-3 landed (1f48542, 346c693, fd7514d) plus the native mesh-set loop and strip work: 66.49 -> 59.5 over the stage commits. What remains of the TA round trip is the land (lever 19)."
+ },
+ {
+  "order": 6,
+  "lever": "Vertices written once into a cached arena",
+  "status": "done",
+  "cpu_share": "4%",
+  "est_ms": 3,
+  "measured_ms": 2.1,
+  "note": "a93cec7"
+ },
+ {
+  "order": 7,
+  "lever": "GE hardware transform and lighting",
+  "status": "dropped",
+  "cpu_share": "",
+  "est_ms": 7,
+  "measured_ms": null,
+  "note": "Per-frame GE T&L of TA data rejected 10-22 (+4.04 ms): emission of per-frame vertex data is memory-bound and lighting is a palette lookup. Does not apply to prebuilt lists (lever 19), where nothing is emitted per frame."
+ },
+ {
+  "order": 8,
+  "lever": "Recompiler register allocation",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 8,
+  "measured_ms": 0.16,
+  "note": "SH-4 registers kept in MIPS registers; Started: 6137513 R15 accesses without the mask, 0.16 ms, text -491 KB. Next: exact callee-saved preservation (skip r8-r15 reloads). Closed 10-22: 6137513 (R15 without mask, 0.16 ms) landed; stack-derived bases (+0.20) and exact callee-saved preservation (+0.87) rejected on the fixed layout; only a guest-register ABI redesign could pay (parked)."
+ },
+ {
+  "order": 9,
+  "lever": "VFPU for game math, physics, camera",
+  "status": "planned",
+  "cpu_share": "",
+  "est_ms": 3,
+  "measured_ms": null,
+  "note": "strip z already on the VFPU (4575f2a)"
+ },
+ {
+  "order": 10,
+  "lever": "More -O2 chunks, hot/cold code layout",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 2,
+  "measured_ms": 0.64,
+  "note": "Identical. 44074e7: nine hottest chunks at -O2, text +361 KB (free heap 2624 -> 2304 KB); hot/cold layout already pinned (SA1_PSP_HOT_ORDER)"
+ },
+ {
+  "order": 11,
+  "lever": "Scratchpad for the guest registers",
+  "status": "planned",
+  "cpu_share": "",
+  "est_ms": 1.5,
+  "measured_ms": null,
+  "note": ""
+ },
+ {
+  "order": 12,
+  "lever": "Audio on the Media Engine",
+  "status": "later",
+  "cpu_share": "1.3 ms",
+  "est_ms": 1.3,
+  "measured_ms": null,
+  "note": "Audio costs 1.3 ms on the main CPU and the PSP build has NO audio output yet (card README). First an output backend (orders a1), then the ME only if slack is needed after 30 fps."
+ },
+ {
+  "order": 13,
+  "lever": "Vertex pool claims cache lines (no RAM fill)",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 1,
+  "measured_ms": 1.0,
+  "note": "fd7eed3; found in the profile"
+ },
+ {
+  "order": 14,
+  "lever": "Prefetch TA buffers ahead of the parse",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 0.4,
+  "measured_ms": 0.4,
+  "note": "464ceb5; found in the profile"
+ },
+ {
+  "order": 15,
+  "lever": "strip_emit z on the VFPU",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 1,
+  "measured_ms": 1.2,
+  "note": "4575f2a"
+ },
+ {
+  "order": 16,
+  "lever": "Dispatch caches (call-site slot, indirect targets)",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 1,
+  "measured_ms": 2.0,
+  "note": "2f49aa6"
+ },
+ {
+  "order": 17,
+  "lever": "Clip only guard-band triangles that cross",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 1,
+  "measured_ms": 1.4,
+  "note": "609954d"
+ },
+ {
+  "order": 18,
+  "lever": "GE kicked every 32 draws",
+  "status": "dropped",
+  "cpu_share": "",
+  "est_ms": 0,
+  "measured_ms": null,
+  "note": "Slower; reverted in fe83992"
+ },
+ {
+  "order": 19,
+  "lever": "Static level geometry as cached GE command lists",
+  "status": "next",
+  "cpu_share": "",
+  "est_ms": 19,
+  "measured_ms": null,
+  "note": "Identical. THE lever: the land costs 21.24 ms of 48.99 (ta minus noland), all CPU (GE wait 0.01). Iteration 2 (9877555, 51.51 ms) still gathered and re-converted vertices every frame; iteration 3 = persistent buffers + prebuilt lists + convert-time splitting (orders f3). GO = frame <= 33.3. Iteration 2 measured 51.51 (+2.5): per-frame gather/convert; iteration 3 = prebuilt lists (orders f3); 6142c4b: per-set lists, per-COL lighting, EC converted; native ss 35.77 / ec 70.87 but distant-land pixels differ (far pass/fog suspected): off by default until <= 0.05 % px; b1b5cde cells: no gain, native ss pictures 5.7 % px (CPU cell path). Next: send near-plane refusals straight to the GE (console-tested), cells only for guard band; with f6b"
+ },
+ {
+  "order": 20,
+  "lever": "Swizzled and indexed textures kept in VRAM",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 2,
+  "measured_ms": null,
+  "note": "Identical. Mostly GPU time; matters once the CPU is fast"
+ },
+ {
+  "order": 21,
+  "lever": "Cull whole models before transform (VFPU bounds)",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 3,
+  "measured_ms": null,
+  "note": "Identical. DONE as land_cull 87d4bea: -7.3 ms ss (50 % of land tris were out of view; the game has no frustum cull). Translucent models exempt (+3 ms left: a 5 px sort shift to root-cause); 818db39: exemption gone (run-break fix), ss 39.11, ec 79.88. Flush costs ~1.4 ms (follow-up: flush only with pending offset vertices)"
+ },
+ {
+  "order": 22,
+  "lever": "Recompiler: cross-block flags, dead stores, leaf inlining",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 6,
+  "measured_ms": null,
+  "note": "Identical. "
+ },
+ {
+  "order": 23,
+  "lever": "Native versions of hot game routines (matrix, collision, skinning)",
+  "status": "next",
+  "cpu_share": "",
+  "est_ms": 5,
+  "measured_ms": null,
+  "note": "Identical. HLE further down the stack. Matrix part started: 88ad38f in-place Ninja matrix ops, 2.80 ms; collision and skinning still open. Mesh-set loop 0x8C0376D0 native (4d918c4); collision list build next. Collision list build native (e4b0d3f, 0.30 ms; same-binary A/B 51.09 -> 50.65). Next: fn_8c029b00, libm, kamui qsort. Sphere sweep 8c029b00 native (679ba40, 0.55 ms). Next: game libm."
+ },
+ {
+  "order": 24,
+  "lever": "PGO and LTO on the generated code",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 4,
+  "measured_ms": null,
+  "note": "Identical. Cheap to try"
+ },
+ {
+  "order": 25,
+  "lever": "Media Engine as a second CPU (render prep in parallel)",
+  "status": "later",
+  "cpu_share": "",
+  "est_ms": 10,
+  "measured_ms": null,
+  "note": "Identical. Demoted 10-24: hardware-only debugging for a bounded share (kamui ~14 ms minus sync). After 30 fps, only if slack is needed."
+ },
+ {
+  "order": 26,
+  "lever": "Skip work nobody sees (off-screen animation, tiny effects)",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 2,
+  "measured_ms": null,
+  "note": "Toggle, default off. "
+ },
+ {
+  "order": 27,
+  "lever": "PSP-only detail cuts (draw distance, particles)",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": null,
+  "measured_ms": null,
+  "note": "Toggle, default off. Trade-off: ask the maintainer first"
+ },
+ {
+  "order": 28,
+  "lever": "Hand-written native C for the hottest game functions",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 10,
+  "measured_ms": null,
+  "note": "Identical. Long shot; tapes and oracle prove it bit-exact"
+ },
+ {
+  "order": 29,
+  "lever": "Launcher converts assets to PSP-native formats",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 6,
+  "measured_ms": null,
+  "note": "Identical. Long shot; GE lists, swizzled textures, 8/16-bit vertices"
+ },
+ {
+  "order": 30,
+  "lever": "Fully native renderer replacing Ninja/Kamui",
+  "status": "next",
+  "cpu_share": "",
+  "est_ms": 10,
+  "measured_ms": null,
+  "note": "Identical. Lever 19 is its first slice; characters and effects follow only if the land GO holds and 33.3 is not yet reached."
+ },
+ {
+  "order": 31,
+  "lever": "Whole-program recompiler (trace-resolved calls, specialization)",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 5,
+  "measured_ms": null,
+  "note": "Identical. Long shot"
+ },
+ {
+  "order": 32,
+  "lever": "Collision spatial grid",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": null,
+  "measured_ms": null,
+  "note": "Toggle, default off. May shift timing"
+ },
+ {
+  "order": 33,
+  "lever": "Distance-based object update rates",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": null,
+  "measured_ms": null,
+  "note": "Toggle, default off. Changes behavior"
+ },
+ {
+  "order": 34,
+  "lever": "Animation detail by distance",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": null,
+  "measured_ms": null,
+  "note": "Toggle, default off"
+ },
+ {
+  "order": 35,
+  "lever": "TA bypass stage 1 (model strip writer native)",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 4,
+  "measured_ms": 4.2,
+  "note": "a4875e6. Identical"
+ },
+ {
+  "order": 36,
+  "lever": "GE bounding-box test for hardware culling",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 3,
+  "measured_ms": null,
+  "note": "Identical. GPU rejects off-screen models before they are drawn"
+ },
+ {
+  "order": 37,
+  "lever": "DMA engine for large copies",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 1,
+  "measured_ms": null,
+  "note": "Identical. Copies run beside the CPU"
+ },
+ {
+  "order": 38,
+  "lever": "DXT-compressed textures",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 1,
+  "measured_ms": null,
+  "note": "Identical. Mostly memory: a quarter to an eighth of the size; helps the PSP-1000"
+ },
+ {
+  "order": 39,
+  "lever": "GE hardware morphing (up to 8 targets)",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": 1,
+  "measured_ms": null,
+  "note": "Identical. Where the game morphs vertices on the CPU"
+ },
+ {
+  "order": 40,
+  "lever": "Asynchronous Memory Stick reads",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": null,
+  "measured_ms": null,
+  "note": "Identical. Shorter or hidden loads, not ms a frame"
+ },
+ {
+  "order": 41,
+  "lever": "FMV through the hardware H.264 decoder",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": null,
+  "measured_ms": null,
+  "note": "Identical. Launcher converts the movies; near-zero CPU while they play"
+ },
+ {
+  "order": 42,
+  "lever": "Volatile partition, kernel spare RAM, ME eDRAM",
+  "status": "idea",
+  "cpu_share": "",
+  "est_ms": null,
+  "measured_ms": null,
+  "note": "Identical. Granted on the 3001, -2.4 MB bss; measured 1.3 ms slower, maybe layout noise; re-test after pinning"
+ },
+ {
+  "order": 43,
+  "lever": "Sound streams read ahead in the background",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 1,
+  "measured_ms": 2.2,
+  "note": "536f07e. Identical. RAM +64 KB"
+ },
+ {
+  "order": 44,
+  "lever": "Draw states compared a word at a time",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 0.5,
+  "measured_ms": 0.6,
+  "note": "31b5347. Identical"
+ },
+ {
+  "order": 45,
+  "lever": "Pin game code to a fixed boundary (stable layout)",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 2,
+  "measured_ms": 0.35,
+  "note": "Identical. Code placement swings a frame by up to 5 ms. Hot code pinned (SA1_PSP_HOT_ORDER) and data sections at fixed 8 KB-aligned starts (3c238bc, SA1_PSP_DATA_ALIGN, RAM +18.4 KB); cold-code change sensitivity 0.58 -> 0.12 ms. 27273bf: all hot entries + list end pinned, warm HLE code added (drift cause: warm code outside the list moved with any HLE edit); levers now measure without +-1 ms layout noise."
+ },
+ {
+  "order": 46,
+  "lever": "Hot textures in free EDRAM",
+  "status": "planned",
+  "cpu_share": "",
+  "est_ms": 0.6,
+  "measured_ms": null,
+  "note": "Identical. -0.58 ms in one binary; waits for stable layout"
+ },
+ {
+  "order": 47,
+  "lever": "Seam repeat-count check inline (sh4_rt.h)",
+  "status": "dropped",
+  "cpu_share": "",
+  "est_ms": 0.55,
+  "measured_ms": null,
+  "note": "Identical. Profile -0.4 ms but bench +0.26..0.4 ms; reverted. Out-of-line variant landed instead: 6c5beae, 0.40 ms; a second inline try cost +1.94 ms (text +24 KB)."
+ },
+ {
+  "order": 48,
+  "lever": "CPU overlaps the GE (pipelined display lists)",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 1.7,
+  "measured_ms": 0.98,
+  "note": "Identical. 2a69a56: helper-thread list swaps + stall address every 8 draws; GE wait 1.71 -> 0.01 ms; RAM +8 KB; the kernel 0x88020000 share was mostly this wait"
+ },
+ {
+  "order": 49,
+  "lever": "Writer cache-line claims in ta_xform / ta_direct_clip",
+  "status": "dropped",
+  "cpu_share": "",
+  "est_ms": 0.4,
+  "measured_ms": null,
+  "note": "Identical. +1.64 ms: the writers themselves got slower; reverted"
+ },
+ {
+  "order": 50,
+  "lever": "Guest RAM base loaded once per function",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 1,
+  "measured_ms": 0,
+  "note": "Identical. fd503ba: speed neutral, text -1.03 MB (free heap 2304 -> 3264 KB)"
+ },
+ {
+  "order": 51,
+  "lever": "strip_emit second pass",
+  "status": "dropped",
+  "cpu_share": "",
+  "est_ms": 0.3,
+  "measured_ms": null,
+  "note": "Identical. Bench +-0.02 ms, profile 10.1 -> 9.8 %; not worth the code"
+ },
+ {
+  "order": 52,
+  "lever": "Cached Ninja sin/cos (bit-identical)",
+  "status": "done",
+  "cpu_share": "2.3%",
+  "est_ms": 1,
+  "measured_ms": 0.87,
+  "note": "Identical. de06003: direct-mapped cache in math.c, results bit-identical to sinf/cosf; RAM +64 KB"
+ },
+ {
+  "order": 53,
+  "lever": "Translucent strip sort by radix (identical order)",
+  "status": "done",
+  "cpu_share": "",
+  "est_ms": 0.4,
+  "measured_ms": 0.41,
+  "note": "Identical. 1059e05, 50.50 -> 50.09"
+ }
+]

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SA1 PSP speed tracker</title>
+<!--
+  Static page, no external scripts.  It reads history.json and levers.json from this
+  folder with fetch(), which browsers refuse for file:// pages, so serve the folder:
+      cd devkit/speed
+      python -m http.server 8000
+  then open http://localhost:8000/ .  Add steps with add_step.py and reload.
+-->
+<style>
+  :root { --bg:#fff; --fg:#1d1d1f; --muted:#6b6b70; --grid:#e4e4e8; --ss:#2a6fdb; --ec:#d9622b; --target:#2e9e5b; --card:#f6f6f8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#151517; --fg:#ececf0; --muted:#9a9aa3; --grid:#2c2c31; --ss:#6fa2ff; --ec:#ff9a62; --target:#5fd08e; --card:#1f1f23; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 16px 48px; background:var(--bg); color:var(--fg);
+         font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:var(--muted); margin-bottom:8px; }
+  .legend i { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:6px; }
+  svg { width:100%; height:auto; display:block; background:var(--card); border-radius:8px; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  #tip { position:fixed; pointer-events:none; background:var(--card); color:var(--fg); border:1px solid var(--grid);
+         border-radius:6px; padding:8px 10px; font-size:12px; max-width:360px; display:none; box-shadow:0 4px 14px rgba(0,0,0,.15); }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:12px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--grid); vertical-align:top; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap; }
+  .wrap { overflow-x:auto; }
+  h2 { font-size: 17px; margin: 28px 0 4px; }
+  .err { color: var(--ec); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Speed tracker</h1>
+  <p class="sub">Mean ms per game frame on the PSP-3001, per landed step. Target: 33.3 ms (30 fps).
+    Station Square (ss) and Emerald Coast (ec, measured from step 37 on).</p>
+  <div class="legend">
+    <span><i style="background:var(--ss)"></i>Station Square</span>
+    <span><i style="background:var(--ec)"></i>Emerald Coast</span>
+    <span><i style="background:var(--target)"></i>33.3 ms target</span>
+  </div>
+  <svg id="chart" viewBox="0 0 960 420" role="img" aria-label="ms per frame by step"></svg>
+  <h2>Levers</h2>
+  <p class="sub">From levers.json: estimated and measured savings, with notes.</p>
+  <div class="wrap"><table id="levers"><thead><tr><th>#</th><th>Lever</th><th>Status</th><th>Est. ms</th><th>Measured ms</th><th>Note</th></tr></thead><tbody></tbody></table></div>
+  <h2>Steps</h2>
+  <div class="wrap"><table id="steps"><thead><tr><th>Step</th><th>Date</th><th>Commit</th><th>ss ms</th><th>ec ms</th><th>What</th></tr></thead><tbody></tbody></table></div>
+</main>
+<div id="tip"></div>
+<script>
+(function () {
+  "use strict";
+  const NS = "http://www.w3.org/2000/svg";
+  const W = 960, H = 420, L = 52, R = 16, T = 16, B = 40, TARGET = 33.3;
+  function el(name, attrs, parent) {
+    const e = document.createElementNS(NS, name);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+  function cell(tr, v, cls) { const td = document.createElement("td"); td.textContent = v == null ? "" : v; if (cls) td.className = cls; tr.appendChild(td); }
+
+  function draw(hist) {
+    const svg = document.getElementById("chart");
+    const steps = hist.map(h => h.step);
+    const vals = [TARGET];
+    hist.forEach(h => { vals.push(h.ms); if (h.ec != null) vals.push(h.ec); });
+    const x0 = Math.min.apply(null, steps), x1 = Math.max.apply(null, steps);
+    // log scale: the early steps are 100+ ms, the late ones near 30
+    const lo = Math.log(Math.max(1, Math.min.apply(null, vals) * 0.9)), hi = Math.log(Math.max.apply(null, vals) * 1.05);
+    const X = s => L + (s - x0) / Math.max(1, x1 - x0) * (W - L - R);
+    const Y = v => T + (hi - Math.log(v)) / (hi - lo) * (H - T - B);
+    [20, 25, 30, 40, 50, 60, 80, 100, 150, 200].forEach(v => {
+      if (Math.log(v) < lo || Math.log(v) > hi) return;
+      el("line", {x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: "var(--grid)"}, svg);
+      el("text", {x: L - 6, y: Y(v) + 4, "text-anchor": "end"}, svg).textContent = v;
+    });
+    for (let s = x0; s <= x1; s += 5) {
+      el("text", {x: X(s), y: H - B + 18, "text-anchor": "middle"}, svg).textContent = s;
+    }
+    el("text", {x: (L + W - R) / 2, y: H - 6, "text-anchor": "middle"}, svg).textContent = "step";
+    el("line", {x1: L, x2: W - R, y1: Y(TARGET), y2: Y(TARGET), stroke: "var(--target)", "stroke-width": 2, "stroke-dasharray": "6 4"}, svg);
+    el("text", {x: W - R - 4, y: Y(TARGET) - 6, "text-anchor": "end", style: "fill:var(--target)"}, svg).textContent = "33.3 ms";
+    function series(key, color) {
+      const pts = hist.filter(h => h[key] != null);
+      if (!pts.length) return;
+      el("polyline", {points: pts.map(h => X(h.step) + "," + Y(h[key])).join(" "), fill: "none", stroke: color, "stroke-width": 2}, svg);
+      pts.forEach(h => {
+        const c = el("circle", {cx: X(h.step), cy: Y(h[key]), r: 3.5, fill: color}, svg);
+        c.addEventListener("mousemove", ev => tip(ev, h, key));
+        c.addEventListener("mouseleave", () => { document.getElementById("tip").style.display = "none"; });
+      });
+    }
+    series("ms", "var(--ss)");
+    series("ec", "var(--ec)");
+  }
+  function tip(ev, h, key) {
+    const t = document.getElementById("tip");
+    t.innerHTML = "<b>step " + esc(h.step) + "</b> (" + esc(h.date) + ", " + esc(h.commit) + ")<br>" +
+      (key === "ms" ? "ss " : "ec ") + esc(h[key]) + " ms" + (key === "ms" && h.ec != null ? ", ec " + esc(h.ec) : "") +
+      "<br>" + esc(h.what);
+    t.style.display = "block";
+    t.style.left = Math.min(ev.clientX + 12, window.innerWidth - 380) + "px";
+    t.style.top = (ev.clientY + 12) + "px";
+  }
+  function tables(hist, levers) {
+    const lb = document.querySelector("#levers tbody");
+    levers.slice().sort((a, b) => a.order - b.order).forEach(l => {
+      const tr = document.createElement("tr");
+      cell(tr, l.order); cell(tr, l.lever); cell(tr, l.status);
+      cell(tr, l.est_ms, "num"); cell(tr, l.measured_ms, "num"); cell(tr, l.note);
+      lb.appendChild(tr);
+    });
+    const sb = document.querySelector("#steps tbody");
+    hist.slice().reverse().forEach(h => {
+      const tr = document.createElement("tr");
+      cell(tr, h.step); cell(tr, h.date); cell(tr, h.commit);
+      cell(tr, h.ms, "num"); cell(tr, h.ec, "num"); cell(tr, h.what);
+      sb.appendChild(tr);
+    });
+  }
+  Promise.all([fetch("history.json").then(r => r.json()), fetch("levers.json").then(r => r.json())])
+    .then(([hist, levers]) => { draw(hist); tables(hist, levers); })
+    .catch(e => {
+      document.querySelector("p.sub").insertAdjacentHTML("afterend",
+        '<p class="err">Could not load history.json / levers.json (' + esc(e) + '). Serve this folder with ' +
+        '<code>python -m http.server</code> and open it through http://localhost:8000/, not as a file.</p>');
+    });
+})();
+</script>
+</body>
+</html>

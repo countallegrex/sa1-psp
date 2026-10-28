@@ -1,0 +1,406 @@
+[
+ {
+  "step": 1,
+  "date": "2026-10-19",
+  "commit": "M4",
+  "ms": 141.0,
+  "what": "M4 build, first console profile"
+ },
+ {
+  "step": 2,
+  "date": "2026-10-19",
+  "commit": "99638d4",
+  "ms": 100.0,
+  "what": "Texture lookup by handle map"
+ },
+ {
+  "step": 3,
+  "date": "2026-10-19",
+  "commit": "1892b13",
+  "ms": 89.0,
+  "what": "One walk per TA buffer, no divides"
+ },
+ {
+  "step": 4,
+  "date": "2026-10-20",
+  "commit": "52f885a",
+  "ms": 88.33,
+  "what": "Re-measured baseline (FPU rounding)"
+ },
+ {
+  "step": 5,
+  "date": "2026-10-20",
+  "commit": "a46778e",
+  "ms": 82.45,
+  "what": "Hot chunks at -O2, stack_probe cache"
+ },
+ {
+  "step": 6,
+  "date": "2026-10-20",
+  "commit": "a93cec7",
+  "ms": 80.31,
+  "what": "Vertices written once into a cached pool"
+ },
+ {
+  "step": 7,
+  "date": "2026-10-20",
+  "commit": "fd7eed3",
+  "ms": 79.29,
+  "what": "Vertex pool claims cache lines, no RAM fill"
+ },
+ {
+  "step": 8,
+  "date": "2026-10-20",
+  "commit": "464ceb5",
+  "ms": 78.89,
+  "what": "Prefetch the TA buffers ahead of the parse"
+ },
+ {
+  "step": 9,
+  "date": "2026-10-20",
+  "commit": "4575f2a",
+  "ms": 77.74,
+  "what": "strip_emit z on the VFPU"
+ },
+ {
+  "step": 10,
+  "date": "2026-10-20",
+  "commit": "2f49aa6",
+  "ms": 75.77,
+  "what": "Dispatch caches per call site"
+ },
+ {
+  "step": 11,
+  "date": "2026-10-20",
+  "commit": "609954d",
+  "ms": 74.4,
+  "what": "Clip only triangles past the guard band"
+ },
+ {
+  "step": 12,
+  "date": "2026-10-21",
+  "commit": "a4875e6",
+  "ms": 70.17,
+  "what": "TA bypass stage 1: model strips go straight to sceGu"
+ },
+ {
+  "step": 13,
+  "date": "2026-10-21",
+  "commit": "536f07e",
+  "ms": 69.57,
+  "what": "Sound streams read ahead in the background"
+ },
+ {
+  "step": 14,
+  "date": "2026-10-21",
+  "commit": "31b5347",
+  "ms": 68.82,
+  "what": "Draw states compared a word at a time"
+ },
+ {
+  "step": 15,
+  "date": "2026-10-21",
+  "commit": "2ad56bf",
+  "ms": 66.49,
+  "what": "5a emitter: skip the address-area test for stack accesses (R15 provably RAM); median of 2, fresh emit vs fresh emit, from 68.21"
+ },
+ {
+  "step": 16,
+  "date": "2026-10-21",
+  "commit": "1f48542",
+  "ms": 65.74,
+  "what": "5b stage 1: ta_direct reads guest arrays via host pointers resolved once; median of 3, from 66.49"
+ },
+ {
+  "step": 17,
+  "date": "2026-10-21",
+  "commit": "346c693",
+  "ms": 64.67,
+  "what": "5b stage 2: native near-plane writer + hot-code placement (SA1_PSP_HOT_ORDER); median of 3, from 65.75"
+ },
+ {
+  "step": 18,
+  "date": "2026-10-21",
+  "commit": "fd7514d",
+  "ms": 62.84,
+  "what": "5b stage 3: native model transform + lighting (ta_xform.c), hot list regenerated; median of 3, from 64.64"
+ },
+ {
+  "step": 19,
+  "date": "2026-10-21",
+  "commit": "74b1fa3",
+  "ms": 61.28,
+  "what": "strip_emit per-strip loop variants, fewer divides + math.c one-base matrix/vector access (24c9ab0), hot list regenerated; strip_emit 6.45 -> 5.25 ms; median of 3, from 62.88 (re-bench of fd7514d)"
+ },
+ {
+  "step": 20,
+  "date": "2026-10-21",
+  "commit": "ef859cd",
+  "ms": 59.5,
+  "what": "0x8C037990 writer: cache-line claims on its output, one strip reservation, split env/plain loops; hot list regenerated; writer+reservations 4.0 -> 3.3 ms; median of 3, from 61.27"
+ },
+ {
+  "step": 21,
+  "date": "2026-10-21",
+  "commit": "b6ee4f2",
+  "ms": 57.63,
+  "what": "clip_plane / strip_split / draw_strip per-vertex work (profile 9.6 -> 7.6 %); median of 2, from 61.92 (main had regressed 59.11 -> 61.92 from a data-layout shift after 8f3ce7b, a cold-code change)"
+ },
+ {
+  "step": 22,
+  "date": "2026-10-21",
+  "commit": "3c238bc",
+  "ms": 57.29,
+  "what": "SA1_PSP_DATA_ALIGN: data sections at fixed 8 KB-aligned starts, fixed input order (game, libs, HLE); cold-code change sensitivity 0.58 -> 0.12 ms; RAM +18.4 KB padding; from 57.64"
+ },
+ {
+  "step": 23,
+  "date": "2026-10-21",
+  "commit": "2a69a56",
+  "ms": 57.02,
+  "what": "GE pipelining: a helper thread swaps display lists so the CPU overlaps the GE (as on the Dreamcast), stall address every 8 draws; GE wait 1.71 -> 0.01 ms; RAM +8 KB; --no-ge-pipeline restores the old mode; same-binary median of 3, from 58.00"
+ },
+ {
+  "step": 24,
+  "date": "2026-10-21",
+  "commit": "88ad38f",
+  "ms": 54.18,
+  "what": "math.c: Ninja matrix ops in place on the host current matrix (no per-call 64 B load/store, ~9,000 copies a frame gone); RAM 0; median of 3, from 56.98"
+ },
+ {
+  "step": 25,
+  "date": "2026-10-21",
+  "commit": "44074e7",
+  "ms": 53.54,
+  "what": "Nine hottest game chunks at -O2 (inlines sa1_off there); text +361 KB, largest free heap block after title_menu 2624 -> 2304 KB; median of 3, from 54.18"
+ },
+ {
+  "step": 26,
+  "date": "2026-10-21",
+  "commit": "fd503ba",
+  "ms": 53.68,
+  "what": "Constant guest RAM base (one load per function, not per store): speed neutral (game-code share -1.6 pts, eaten by layout), landed for RAM: text -1.03 MB, largest free heap block 2304 -> 3264 KB; median of 3, from 53.55"
+ },
+ {
+  "step": 27,
+  "date": "2026-10-21",
+  "commit": "4d918c4",
+  "ms": 52.45,
+  "what": "Native mesh-set loop 0x8C0376D0 (ta_mesh.c), hot list regenerated; desktop native vs recompiled byte-identical on 21 frames; RAM +0; median of 3, from 53.73"
+ },
+ {
+  "step": 28,
+  "date": "2026-10-21",
+  "commit": "de06003",
+  "ms": 51.58,
+  "what": "Ninja angle sin/cos through a bit-identical direct-mapped cache (math.c; host sinf/cosf + rem_pio2f were 2.3 % of the frame); RAM +64 KB bss; median of 3, from 52.45"
+ },
+ {
+  "step": 29,
+  "date": "2026-10-21",
+  "commit": "6c5beae",
+  "ms": 51.17,
+  "what": "Runtime: a repeated seam entry reads the frame counter only every 65536 repeats (out-of-line path only); RAM +0, text unchanged; median of 3, from 51.57"
+ },
+ {
+  "step": 30,
+  "date": "2026-10-21",
+  "commit": "e4b0d3f",
+  "ms": 50.65,
+  "what": "Native collision list build (0x8C028EC2 / 028D0A / 02D2E0, hash id lookups) with hot-list address pins; RAM text +24 KB; new f300/f450 metric (base 6c5beae 50.95 on it), from 50.95"
+ },
+ {
+  "step": 31,
+  "date": "2026-10-21",
+  "commit": "1059e05",
+  "ms": 50.09,
+  "what": "Translucent strip sort: qsort(cmp_key) -> stable radix sort, identical order (+ hot-list pin); RAM text +24 KB (16 KB pin padding), heap +8 B per strip; interleaved vs e4b0d3f at 50.50 this hour, from 50.50"
+ },
+ {
+  "step": 32,
+  "date": "2026-10-21",
+  "commit": "679ba40",
+  "ms": 49.59,
+  "what": "Native sphere sweep fn_8c029b00 (hle/game/sphere_sweep.c, + hot-list pin); RAM text +8 KB; interleaved vs 1059e05 at 50.14, from 50.14"
+ },
+ {
+  "step": 33,
+  "date": "2026-10-21",
+  "commit": "6137513",
+  "ms": 49.54,
+  "what": "sh4_rt RAMK: R15 (stack) accesses as bias + guest address, no mask (recompiler register pressure); RAM text -491 KB (-4.1 %); interleaved vs 679ba40 at 49.70, from 49.70"
+ },
+ {
+  "step": 34,
+  "date": "2026-10-21",
+  "commit": "3b9a14b",
+  "ms": 49.53,
+  "what": "Emitter summary fixpoint run to convergence (round 18, was capped at 8: 21 missing FPUL reloads after calls, a correctness fix) and recomp/out re-emitted; RAM 0, no hot function moved; interleaved vs the old emit at 49.77, from 49.77"
+ },
+ {
+  "step": 35,
+  "date": "2026-10-21",
+  "commit": "27273bf",
+  "ms": 48.97,
+  "what": "Deterministic layout: every hot-list entry and the list end pinned (psp_hot_order.py --pin), 63 warm HLE/backend functions added, seam weak stubs excluded; 1 KB of new cold code now moves SS by only 0.06 ms; RAM +8 B; interleaved, from 49.06"
+ },
+ {
+  "step": 36,
+  "date": "2026-10-24",
+  "commit": "9877555",
+  "ms": 48.99,
+  "what": "Baseline on 9877555 after the native land slice (off by default): TA path, ABBA x3; land not drawn 27.75, so the land is 21.24 ms"
+ },
+ {
+  "step": 37,
+  "date": "2026-10-24",
+  "commit": "87d4bea",
+  "ms": 42.14,
+  "what": "View cull of land models (default on; translucent models exempt): ss 49.46 -> 42.14, ec 79.28 -> 80.19 (first Emerald Coast measurement; EC land is mostly in view, the decision costs 0.9 ms there). Native prebuilt lists behind renderer=native: ss 40.43",
+  "ec": 80.19
+ },
+ {
+  "step": 38,
+  "date": "2026-10-24",
+  "commit": "818db39",
+  "ms": 39.11,
+  "what": "Cheap land-cull decision + translucent land models culled (run-break fix in draw_gu.c): ss 42.18 -> 39.11, ec 80.23 -> 79.88; console pictures identical with cull on/off (0 px); RAM ec -384 KB",
+  "ec": 79.88
+ },
+ {
+  "step": 39,
+  "date": "2026-10-24",
+  "commit": "6142c4b",
+  "ms": 38.29,
+  "what": "Off-screen tris skip the strip clipper + converter dedupe/EC map + per-set native land (renderer=native still off): ss 39.10 -> 38.29, ec 79.91 -> 78.05; pictures byte-identical. With native (unlanded default): ss 35.77, ec 70.87",
+  "ec": 78.05
+ },
+ {
+  "step": 40,
+  "date": "2026-10-24",
+  "commit": "b1b5cde",
+  "ms": 38.59,
+  "what": "Converter v2 cells + CPU path for GE-refused land models + GE near-clip test (native still off): ss 38.29 -> 38.59, ec 78.05 -> 78.14 (drift). Native: no gain (ec 71.05, ss 36.30) and ss pictures fail the gate (5.7 % px): CPU cell path suspect. Console test: the GE clips near-plane triangles cleanly",
+  "ec": 78.14
+ },
+ {
+  "step": 41,
+  "date": "2026-10-25",
+  "commit": "a3f2929",
+  "ms": 38.17,
+  "what": "f6b replay GE state shadow (default ta): same-binary A/B ss 39.61 -> 39.19, ec 79.19 -> 77.63; values are drift-corrected onto b1b5cde (session ran ~1 ms slow: ta ec 79.19 vs 78.14 logged); native ss 36.64, ec 69.82; pictures byte-identical",
+  "ec": 76.58
+ },
+ {
+  "step": 42,
+  "date": "2026-10-25",
+  "commit": "f26580b",
+  "ms": 35.25,
+  "what": "native renderer becomes the default (n1): same-binary ABBA ss 38.42 -> 35.50, ec 76.98 -> 68.81; drift-corrected onto step 41; RAM ec +516 KB (largest free 2496 KB); pictures pass the region gate",
+  "ec": 68.41
+ },
+ {
+  "step": 43,
+  "date": "2026-10-25",
+  "commit": "554085c",
+  "ms": 34.83,
+  "what": "p2 replay texture binds as prebuilt CALLs (--replay-v2 26 default): same-binary ss 35.22 -> 34.80, ec 68.35 -> 66.79; recorded as step 42 + delta; ec replay 7.05 -> 4.12",
+  "ec": 66.85
+ },
+ {
+  "step": 44,
+  "date": "2026-10-25",
+  "commit": "9d71eaf",
+  "ms": 32.67,
+  "what": "p4 land collision sweep native (math = native default): same-binary ss 35.52 -> 33.36, ec 67.35 -> 65.89; recorded as step 43 + delta (this session's baseline ran ~0.6 ms slow); check mode 0 flips, segments 11/11 desktop + PSP",
+  "ec": 65.39
+ },
+ {
+  "step": 45,
+  "date": "2026-10-25",
+  "commit": "1556174",
+  "ms": 32.46,
+  "what": "p6 display list through the cached alias (default on): same-binary ss 33.42 -> 33.21, ec 65.95 -> 65.27; recorded as step 44 + delta; pictures byte-identical",
+  "ec": 64.71
+ },
+ {
+  "step": 46,
+  "date": "2026-10-25",
+  "commit": "b3a2ee3",
+  "ms": 32.48,
+  "what": "routine 2 poly ray test fn_8c029400 native, bit-exact (default on): same-binary ss 32.89 -> 32.91, ec 65.19 -> 64.97; recorded as step 45 + delta",
+  "ec": 64.49
+ },
+ {
+  "step": 47,
+  "date": "2026-10-25",
+  "commit": "f803a4e",
+  "ms": 32.46,
+  "what": "routine 3 SET range-in scan fn_8c091380 native, bit-exact (e2176c4 + f803a4e, default on): same-binary ss 33.00 -> 32.98, ec 65.12 -> 64.89; recorded as step 46 + delta",
+  "ec": 64.26
+ },
+ {
+  "step": 48,
+  "date": "2026-10-26",
+  "commit": "b8b6b99",
+  "ms": 31.43,
+  "what": "p7 HLE sa1_off area test only (bound kept at TA list writers + cfg/syscalls/sd), default on: ss 33.08 -> 32.05, ec 64.84 -> 62.95 (two binaries, ranges disjoint, pictures byte-identical); recorded as step 47 + delta",
+  "ec": 62.37
+ },
+ {
+  "step": 49,
+  "date": "2026-10-26",
+  "commit": "6d88242",
+  "ms": 31.15,
+  "what": "p8 strip_class feeds strip_emit (offset test + largest w), default on: same-binary ss 32.05 -> 31.77, ec 62.55 -> 61.58, pictures byte-identical; recorded as step 48 + delta",
+  "ec": 61.4
+ },
+ {
+  "step": 50,
+  "date": "2026-10-26",
+  "commit": "d4e897a",
+  "ms": 30.86,
+  "what": "p9 stack probe + kamui ptr_trace cost a compare (--probe-slow = old paths), default on: two binaries ss 31.82 -> 31.53, ec 61.57 -> 61.41 (same-binary lever ec -1.64, code placement ate ~1.5); recorded as step 49 + delta",
+  "ec": 61.24
+ },
+ {
+  "step": 51,
+  "date": "2026-10-26",
+  "commit": "1c05851",
+  "ms": 30.42,
+  "what": "p10 hot-code order regenerated from ss+ec profiles (tools/psp_hot_regen.sh): two binaries ss 31.55 -> 31.11, ec 61.40 -> 61.09, text -934 KB, pictures byte-identical; recorded as step 50 + delta",
+  "ec": 60.93
+ },
+ {
+  "step": 52,
+  "date": "2026-10-26",
+  "commit": "9fa53c9",
+  "ms": 30.01,
+  "what": "p12 sorted bypass strips drawn by reference from dverts (--strip-ref off = copy), default on: two binaries ss 31.20 -> 30.79, ec 61.15 -> 59.99 (same binary ec -1.34), pictures byte-identical; recorded as step 51 + delta",
+  "ec": 59.77
+ },
+ {
+  "step": 53,
+  "date": "2026-10-26",
+  "commit": "bceb03a",
+  "ms": 29.85,
+  "what": "single 2 Ninja matrix copies on the VFPU (bit-exact), default on: two binaries ss 30.79 -> 30.63, ec 59.98 -> 59.75 (same binary ec -0.30); recorded as step 52 + delta",
+  "ec": 59.54
+ },
+ {
+  "step": 54,
+  "date": "2026-10-26",
+  "commit": "0d20494",
+  "ms": 30.07,
+  "what": "a1 PSP audio output on (feature; costs time): same-binary ss 30.59 -> 30.81, ec 59.78 -> 60.13 vs --no-audio; recorded as step 53 + delta",
+  "ec": 59.89
+ },
+ {
+  "step": 55,
+  "date": "2026-10-27",
+  "commit": "237135e",
+  "ms": 30.69,
+  "what": "o1 overlay entry coverage (correctness: 44/44 places run, was 23): regression from new code/layout, two binaries ss 30.87 -> 31.49, ec 59.98 -> 60.83; recorded as step 54 + delta",
+  "ec": 60.73
+ }
+]

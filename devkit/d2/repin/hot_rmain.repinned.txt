@@ -1,0 +1,875 @@
+# The PSP build's hot code, placed first in .text in this order (SA1_PSP_HOT_ORDER,
+# backend/psp/CMakeLists.txt).  Written by tools/psp_hot_order.py from console
+# profiles: prof_hot_ss.bin + prof_hot_ec.bin, 182 functions, 90.0 % of the samples inside the PRX, 317676 bytes.
+# Share of samples and size are of the profiled build.
+@0x0
+fn_8c079476                              #  0.07 %    5756 B
+@0x167c
+fn_8c058434                              #  0.07 %     200 B
+@0x1744
+sdk_8c605dac.part.0                      #  0.24 %     968 B
+@0x1b0c
+fn_8c050be4                              #  0.12 %    5524 B
+@0x30a0
+fn_8c032d98                              #  0.07 %    5088 B
+@0x480
+fn_8c05117e                              #  0.07 %    6920 B
+@0x1f88
+sdk_8c605dac                             #  0.07 %     136 B
+@0x2010
+sdk_8c63a770                             #  0.07 %     240 B
+@0x2278
+fn_8c041a2e                              #  0.07 %    1612 B
+@0x28c4
+m_mul                                    #  0.13 %     224 B
+@0x29a4
+sdk_8c640540                             #  0.08 %    1108 B
+@0x2e10
+native_land_lit                          #  0.09 %     884 B
+@0x3184
+fn_8c057b40                              #  0.17 %    1432 B
+@0x371c
+fn_8c078eb0                              #  0.09 %     456 B
+@0x38e4
+fn_8c0925a0                              #  0.09 %    3960 B
+@0x85c
+fn_8c0275e0                              #  0.09 %    1728 B
+@0xf1c
+fn_8c07bac0                              #  0.09 %    1532 B
+@0x1518
+native_land_skip_light                   #  0.10 %     104 B
+@0x1580
+fn_8c0417c8                              #  0.10 %    1580 B
+@0x1bac
+game_012.c:sa1_off                       #  0.10 %      36 B
+@0x1bd0
+fn_8c03700c                              #  0.12 %     616 B
+m_scale                                  #  0.18 %      68 B
+@0x1e38
+sdk_8c63a69c                             #  0.12 %     216 B
+@0x1f90
+kamui_direct_strip                       #  0.14 %     176 B
+@0x2040
+fn_8c02e7e4                              #  0.16 %     668 B
+@0x22dc
+kamui_native_model                       #  0.17 %     320 B
+@0x241c
+sdk_8c608ccc                             #  0.17 %     180 B
+@0x24d0
+fn_8c037108                              #  0.20 %     624 B
+@0x2740
+adx_decode_block                         #  0.73 %     172 B
+@0x27ec
+snd_core_render                          #  3.57 %   10492 B
+@0x10e8
+tone_sample                              #  0.35 %     756 B
+@0x13dc
+libc.a:libc_a-memset.o                   #  0.24 %     284 B
+@0x14f8
+fn_8c03ff90                              #  0.32 %     712 B
+@0x17c0
+fn_8c040150                              #  0.24 %     504 B
+@0x19b8
+native_land_set                          #  0.26 %    1212 B
+@0x1e74
+fn_8c03feb8                              #  0.27 %     380 B
+@0x1ff0
+model_of                                 #  0.31 %     484 B
+@0x21d4
+find_model                               #  0.39 %    5224 B
+@0x363c
+native_land_decide                       #  1.55 %    4208 B
+@0x6ac
+fn_8c037294                              #  0.28 %     380 B
+@0x828
+m_rot_y                                  #  0.84 %     288 B
+@0x9d4
+m_rot_x                                  #  0.38 %     288 B
+@0xb80
+m_rot_z                                  #  0.46 %     288 B
+@0xd2c
+sdk_8c639cf4                             #  0.30 %     276 B
+@0xe34
+fn_8c02ca00                              #  0.31 %    5588 B
+@0x2408
+ta_xform_8c037294                        #  4.57 %    1148 B
+@0x2884
+sa1_mmio_wr                              #  0.35 %     228 B
+@0x2968
+ta_direct_8c037ccc                       #  1.15 %    7528 B
+@0x6d0
+ta_mesh_8c0376d0                         #  3.37 %    3864 B
+@0x15e8
+ta_direct_8c037990                       #  5.50 %    5004 B
+@0x2974
+fn_8c0376d0                              #  0.32 %     300 B
+@0x2aa0
+fn_8c036bc0                              #  0.33 %    4272 B
+@0x3b50
+fn_8c051e56                              #  0.34 %    1668 B
+@0x1d4
+sdk_8c63a9c4                             #  0.34 %     216 B
+@0x2ac
+fn_8c028ec2                              #  0.34 %    4660 B
+@0x14e0
+sdk_8c638f28                             #  0.36 %     432 B
+@0x1714
+fn_8c0400a0                              #  0.36 %     588 B
+@0x1960
+ta_xform_8c037350                        #  3.74 %    1412 B
+@0x1ee4
+fn_8c037350                              #  0.38 %     292 B
+@0x2008
+sdk_8c63a804                             #  0.41 %     292 B
+@0x2178
+fn_8c03718c                              #  0.81 %    1184 B
+@0x2618
+fn_8c037098                              #  0.45 %     584 B
+m_xform                                  #  0.94 %      84 B
+@0x2860
+sdk_8c63a878                             #  0.46 %     256 B
+@0x29a8
+fn_8c07a55c                              #  0.49 %    6228 B
+@0x1fc
+fn_8c0522c0_orig                         #  0.50 %    2696 B
+@0xc84
+sa1_fn_lookup                            #  0.51 %     440 B
+@0xe3c
+sa1_call                                 #  0.52 %     164 B
+@0xee0
+sdk_8c639b98                             #  0.54 %     284 B
+@0x1168
+fn_8c052518_orig                         #  0.76 %    4124 B
+nj_copy                                  #  0.80 %     508 B
+@0x2184
+sdk_8c639c70                             #  1.04 %     688 B
+@0x291c
+fn_8c057bc0                              #  0.88 %    6384 B
+@0x20c
+fn_8c040784                              #  0.56 %    1464 B
+@0x7c4
+fn_8c091380                              #  1.16 %    3260 B
+@0x1480
+sa1_seam_hit_at                          #  0.56 %     420 B
+@0x1624
+fn_8c02d2e0                              #  0.67 %    1712 B
+@0x1cd4
+fn_8c028d0a                              #  1.07 %    2172 B
+@0x2550
+radix_keys                               #  0.64 %     516 B
+@0x2754
+draw_set_state                           #  1.18 %     548 B
+@0x2978
+sdk_8c642440                             #  1.23 %    2384 B
+@0x32c8
+strip_emit_k                             #  6.25 %    5728 B
+@0x928
+draw_strip                               #  3.37 %    1152 B
+@0xda8
+direct_strip                             #  1.61 %    1308 B
+@0x12c4
+parse_region                             #  2.67 %    7188 B
+@0x2ed8
+draw_model                               #  1.06 %    4244 B
+@0x3f6c
+draw_ge_geo.constprop.0                  #  0.85 %     536 B
+@0x184
+draw_cell_class                          #  0.60 %     792 B
+@0x49c
+batch_flush_pass                         #  0.42 %     312 B
+@0x5d4
+apply_state                              #  1.60 %    4444 B
+@0x1718
+draw_end_frame                           #  1.39 %    4680 B
+@0x296c
+apply_blend_depth                        #  1.07 %    1004 B
+@0x2d58
+fn_8c0520c8                              #  0.31 %    1828 B
+@0x347c
+fn_8c040612                              #  0.29 %     332 B
+@0x35c8
+select_proj                              #  0.28 %     260 B
+@0x36cc
+sdk_8c638ecc                             #  0.26 %     368 B
+@0x387c
+fn_8c09878c                              #  0.26 %     360 B
+@0x39e4
+libc.a:libc_a-memcpy.o                   #  0.25 %     880 B
+@0x3d54
+libpspgu.a:sceGuSetMatrix.o              #  0.23 %     428 B
+@0x3f00
+fn_8c029b00                              #  0.22 %   19512 B
+@0xb38
+sph_native.constprop.0                   #  1.77 %    5124 B
+@0x1f00
+libpspgu.a:sceGuCheckList.o              #  0.20 %      24 B
+@0x1f18
+strip_split                              #  0.20 %    2044 B
+@0x2714
+sdk_8c639f5c                             #  0.20 %     192 B
+@0x27d4
+texpool_touch                            #  0.18 %      44 B
+@0x2800
+fn_8c028bfe                              #  0.18 %    2908 B
+@0x335c
+clip_plane                               #  0.18 %    1216 B
+@0x381c
+fn_8c0b2376                              #  0.17 %    3168 B
+@0x47c
+fn_8c01a480                              #  0.16 %    1648 B
+@0xaec
+model_cpu_tris                           #  0.16 %     356 B
+@0xc50
+draw_cpu_tri                             #  0.27 %    1404 B
+@0x11cc
+fn_8c019be6                              #  0.16 %     764 B
+@0x14c8
+fn_8c01995e                              #  0.23 %    1424 B
+@0x1a58
+ovl_stg01_8c902e40                       #  0.15 %     460 B
+@0x1c24
+libpspgu.a:sceGuEnable.o                 #  0.15 %    1048 B
+@0x203c
+fn_8c0730fc                              #  0.14 %    6744 B
+@0x3a94
+sdk_8c605e0a                             #  0.13 %     136 B
+@0x3b1c
+sdk_8c605e0a.part.0                      #  0.34 %    1172 B
+@0x3fb0
+fn_8c074cf0                              #  0.13 %    1608 B
+@0x5f8
+sdk_8c63a8e0                             #  0.13 %     292 B
+@0x6ec
+__wrap_sceGeListUpdateStallAddr          #  0.13 %     180 B
+@0x7a0
+sh_offset_pass                           #  0.13 %     448 B
+@0x960
+sdk_8c63a75c                             #  0.12 %     248 B
+@0xa58
+fn_8c0738cc                              #  0.12 %    9140 B
+@0x2e0c
+draw_basic_model                         #  0.11 %    4292 B
+@0x3f50
+game_011.c:sa1_off                       #  0.10 %      36 B
+@0x3f74
+game_019.c:sa1_off                       #  0.10 %      36 B
+@0x3f98
+ovl_stg01_8c902d08                       #  0.09 %    1120 B
+@0x3f8
+fn_8c02f63c                              #  0.31 %    1616 B
+@0xa48
+fn_8c02f5e0                              #  0.24 %     424 B
+@0xbf0
+sph_commit.part.0.constprop.0            #  0.09 %     724 B
+@0xec4
+libpspgu.a:sceGuTexWrap.o                #  0.09 %      48 B
+@0xef4
+fn_8c0919cc                              #  0.17 %     216 B
+@0xfcc
+fn_8c0919e8                              #  0.38 %     936 B
+@0x1374
+fn_8c09111a                              #  0.15 %     348 B
+@0x14d0
+fn_8c02d410                              #  0.08 %    2124 B
+@0x1d1c
+sdk_8c639ec8                             #  0.08 %     192 B
+@0x1ddc
+sdk_8c638f94                             #  0.08 %     200 B
+@0x2010
+fn_8c056a04                              #  0.08 %    4920 B
+@0x3348
+fn_8c01bba0                              #  0.07 %    1376 B
+@0x38a8
+fn_8c01b684                              #  0.11 %     804 B
+@0x3bcc
+fn_8c02d2b2                              #  0.07 %     276 B
+@0x3ce0
+fn_8c055dac                              #  0.07 %     528 B
+@0x3ef0
+sdk_8c639090                             #  0.07 %     384 B
+@0x70
+fn_8c01bd9e                              #  0.07 %    3372 B
+@0xd9c
+flush_strip                              #  0.07 %     692 B
+@0x1050
+draw_mesh_ge_whole                       #  0.07 %     396 B
+@0x11dc
+fn_8c028666                              #  0.07 %    1136 B
+@0x164c
+fn_8c0287a0                              #  0.21 %    3960 B
+@0x25c4
+fn_8c01e32a                              #  0.07 %    3120 B
+@0x31f4
+fn_8c056738                              #  0.92 %     568 B
+@0x342c
+m_invert                                 #  0.84 %    2048 B
+@0x3cb8
+fn_8c03339e                              #  0.14 %    1572 B
+@0x2dc
+fn_8c03357a                              #  0.20 %     632 B
+@0x554
+fn_8c033a10                              #  0.25 %    2468 B
+@0xef8
+fn_8c033dae                              #  0.14 %    1364 B
+@0x144c
+fn_8c033f00                              #  0.10 %    3456 B
+@0x21cc
+fn_8c10e5ac                              #  0.21 %     840 B
+@0x2514
+fn_8c10ef84                              #  0.29 %    1620 B
+@0x2b68
+fn_8c10fbb8                              #  0.14 %     828 B
+@0x2ea4
+fn_8c10e6a0                              #  0.08 %     312 B
+@0x2fdc
+ovl_stg01_002.c:sa1_off                  #  0.22 %      36 B
+@0x3000
+ovl_stg01_8c909fda                       #  0.21 %    1964 B
+@0x37ac
+hw_wr                                    #  0.34 %     324 B
+@0x38f0
+pr_native                                #  0.33 %    3220 B
+@0x584
+libm.a:libm_a-ef_sqrt.o                  #  0.15 %     352 B
+@0x6e4
+libm.a:libm_a-ef_acos.o                  #  0.17 %     848 B
+@0xa34
+fn_8c05f382                              #  0.09 %     352 B
+@0xb94
+fn_8c05f26a                              #  0.14 %    1000 B
+@0xf7c
+fn_8c05f498                              #  0.08 %     136 B
+@0x1004
+sh_commit                                #  0.24 %    1908 B
+@0x1778
+kamui_append                             #  0.14 %     272 B
+@0x1888
+draw_sprite                              #  0.10 %    4764 B
+@0x2b24
+slot_of_handle                           #  0.23 %     180 B
+@0x2bd8
+libm.a:libm_a-sf_atan.o                  #  0.16 %     728 B
+@0x2eb0
+fn_8c038516_orig                         #  0.14 %    5608 B
+@0x498
+ovl_adv00_8c91043e                       #  0.12 %     796 B
+@0x7b4
+fn_8c0948a0                              #  0.09 %    4992 B
+@0x1b34
+snd_ring_write                           #  0.09 %      64 B
+@0x1b74
+fn_8c037c3c_orig                         #  0.08 %    1240 B
+@0x204c
+fn_8c040df0                              #  0.08 %     828 B
+@0x2388
+ovl_stg01_001.c:sa1_off                  #  0.07 %      36 B
+# Warm HLE, backend and library code (up to 99 % of the samples, 76348 bytes) after
+# the hot list: outside it, any edit to the code before it would move it.
+@0x23ac
+libpspgu.a:sceGuBlendFunc.o              #  0.07 %      88 B  warm
+@0x2404
+fn_8c023360                              #  0.06 %    7108 B  warm
+@0x3fc8
+fn_8c06d254                              #  0.06 %    5848 B  warm
+@0x16a0
+ovl_adv00_8c90f35e                       #  0.06 %    1324 B  warm
+@0x1bcc
+libpspgu.a:sceGuDisable.o                #  0.06 %     956 B  warm
+@0x1f88
+sdk_8c6390b0                             #  0.06 %     184 B  warm
+@0x2040
+sdk_8c639b50                             #  0.06 %     512 B  warm
+@0x2240
+libgcc.a:_udivdi3.o                      #  0.06 %    1340 B  warm
+@0x277c
+libm.a:libm_a-wf_acos.o                  #  0.06 %     136 B  warm
+@0x2804
+draw_mesh_test                           #  0.06 %      28 B  warm
+@0x2820
+env_setup                                #  0.06 %     764 B  warm
+@0x2b1c
+fn_8c036f12                              #  0.06 %     152 B  warm
+@0x2bb4
+fn_8c041600                              #  0.06 %     532 B  warm
+@0x2dc8
+fn_8c0a77bc                              #  0.06 %   20420 B  warm
+@0x3d8c
+game_matrix                              #  0.06 %     160 B  warm
+@0x3e2c
+libc.a:libc_a-memcmp.o                   #  0.06 %     128 B  warm
+@0x3eac
+scale_argb                               #  0.05 %     344 B  warm
+@0x4
+sdk_8c63a9b8                             #  0.05 %     400 B  warm
+@0x170
+select_texture                           #  0.05 %     632 B  warm
+@0x3e8
+fn_8c0405a4                              #  0.05 %     248 B  warm
+@0x4e0
+fn_8c099538                              #  0.05 %     176 B  warm
+@0x590
+put_marker                               #  0.05 %     204 B  warm
+@0x65c
+sdk_8c60edf0                             #  0.05 %     212 B  warm
+@0x730
+shinobi_time_us                          #  0.05 %     320 B  warm
+@0x870
+tmu_tcnt1.part.0                         #  0.05 %     356 B  warm
+@0x9d4
+write_header                             #  0.05 %     580 B  warm
+@0xc18
+libm.a:libm_a-ef_atan2.o                 #  0.05 %     532 B  warm
+@0xe2c
+fn_8c040000                              #  0.05 %     208 B  warm
+@0xefc
+fn_8c0522c0                              #  0.05 %     304 B  warm
+@0x102c
+libc.a:libc_a-memmove.o                  #  0.05 %     316 B  warm
+@0x1168
+sdk_8c601e2a                             #  0.05 %     436 B  warm
+@0x131c
+sdk_8c640128                             #  0.05 %     400 B  warm
+@0x14ac
+halve                                    #  0.04 %    2220 B  warm
+@0x1d58
+kamui_draw_end                           #  0.04 %     408 B  warm
+@0x1ef0
+sdk_8c605628                             #  0.04 %     408 B  warm
+@0x2088
+sdk_8c610cf8                             #  0.04 %     208 B  warm
+@0x2158
+sdk_8c63a94c                             #  0.04 %     316 B  warm
+@0x2294
+sdk_8c63a970                             #  0.04 %     400 B  warm
+@0x2400
+shade                                    #  0.04 %     552 B  warm
+@0x2628
+libm.a:libm_a-ef_asin.o                  #  0.04 %     856 B  warm
+@0x2980
+libm.a:libm_a-sf_fabs.o                  #  0.04 %      24 B  warm
+@0x2998
+fn_8c10d008                              #  0.04 %     292 B  warm
+@0x2abc
+native_land_model_ok                     #  0.04 %      32 B  warm
+@0x2adc
+on_frame                                 #  0.04 %    2184 B  warm
+@0x3378
+sdk_8c644500                             #  0.04 %     288 B  warm
+@0x3498
+snd_host_frame                           #  0.04 %     720 B  warm
+@0x3768
+texture_from_tcw                         #  0.04 %      40 B  warm
+@0x3790
+feed_stream                              #  0.03 %     756 B  warm
+@0x3a84
+fn_8c02cfc0                              #  0.03 %     456 B  warm
+@0x3c4c
+fn_8c10d0a8                              #  0.03 %     292 B  warm
+@0x3d70
+kamui_mark2d_end                         #  0.03 %     228 B  warm
+@0x3e54
+poly_emit                                #  0.03 %     432 B  warm
+@0x4
+premultiply                              #  0.03 %     416 B  warm
+@0x1a4
+sdk_8c63a1cc                             #  0.03 %     192 B  warm
+@0x264
+shinobi_run_vblank                       #  0.03 %     328 B  warm
+@0x3ac
+ovl_adv00_8c908820                       #  0.03 %     408 B  warm
+@0x544
+ovl_adv00_8c908990                       #  0.03 %     808 B  warm
+@0x86c
+sdk_8c606a08                             #  0.03 %     292 B  warm
+@0x990
+sdk_8c63ff84                             #  0.03 %     732 B  warm
+@0xc6c
+xform                                    #  0.03 %     244 B  warm
+@0xd60
+libc.a:libc_a-freer.o                    #  0.02 %     792 B  warm
+@0x11a4
+angles                                   #  0.02 %     652 B  warm
+@0x1430
+kamui_draw_begin                         #  0.02 %     328 B  warm
+@0x1578
+kamui_draw_header                        #  0.02 %     300 B  warm
+@0x16a4
+out_thread                               #  0.02 %     628 B  warm
+@0x1918
+ovl_adv00_8c904324                       #  0.02 %    1008 B  warm
+@0x1d08
+ovl_adv00_8c90a292                       #  0.02 %     708 B  warm
+@0x1fcc
+pass_of                                  #  0.02 %     180 B  warm
+@0x2080
+sa1_mmio_rd                              #  0.02 %     264 B  warm
+@0x2188
+libpspgu.a:sceGuClear.o                  #  0.02 %     764 B  warm
+@0x2484
+sdk_8c63eeb4                             #  0.02 %     208 B  warm
+@0x2554
+shinobi_run_vblank_callbacks             #  0.02 %     368 B  warm
+@0x26c4
+buffers_reset                            #  0.02 %     176 B  warm
+@0x2774
+guest_acosf                              #  0.02 %     192 B  warm
+@0x2834
+hw_rd                                    #  0.02 %     180 B  warm
+@0x28e8
+kamui_draw_save                          #  0.02 %     136 B  warm
+@0x2970
+kamui_put_vertex                         #  0.02 %      60 B  warm
+@0x29ac
+ovl_adv00_002.c:sa1_off                  #  0.02 %      36 B  warm
+@0x29d0
+libpspgu.a:sceGuScissor.o                #  0.02 %     176 B  warm
+@0x2a80
+sdk_8c63ae90                             #  0.02 %     660 B  warm
+@0x2d14
+sdk_8c640080                             #  0.02 %     592 B  warm
+@0x2f64
+sdk_8c64041c                             #  0.02 %     676 B  warm
+@0x31ec
+sdk_8c64048c                             #  0.02 %     528 B  warm
+@0x33e0
+xform_n                                  #  0.02 %     168 B  warm
+@0x3488
+__wrap_sceGuGetMemory                    #  0.01 %      76 B  warm
+@0x34d4
+begin_material                           #  0.01 %     292 B  warm
+@0x35f8
+emit_strip.constprop.0                   #  0.01 %     404 B  warm
+@0x378c
+fn_8c10be78                              #  0.01 %     316 B  warm
+@0x38c8
+hle_frame_skip_decide                    #  0.01 %     412 B  warm
+@0x39dc
+ovl_adv00_8c906a36                       #  0.01 %    1936 B  warm
+@0x16c
+ovl_adv00_8c90894c                       #  0.01 %     464 B  warm
+@0x33c
+sa1_seam_hit                             #  0.01 %     316 B  warm
+@0x478
+libpspgu.a:sceGuDepthMask.o              #  0.01 %      40 B  warm
+@0x4a0
+sdk_8c60260e                             #  0.01 %     316 B  warm
+@0x5dc
+sdk_8c610d3e                             #  0.01 %     208 B  warm
+@0x6ac
+sdk_8c63997c                             #  0.01 %     244 B  warm
+@0x7a0
+sdk_8c63fb18                             #  0.01 %     272 B  warm
+@0x8b0
+sdk_8c6404c8                             #  0.01 %     288 B  warm
+@0x9d0
+sdk_8c64065c                             #  0.01 %     252 B  warm
+@0xacc
+sdk_8c641f00                             #  0.01 %     372 B  warm
+@0xc40
+sdk_8c6446e2                             #  0.01 %     252 B  warm
+@0xd3c
+libm.a:libm_a-wf_sqrt.o                  #  0.01 %     108 B  warm
+@0xda8
+unswizzle                                #  0.01 %     120 B  warm
+
+# The game and overlay objects, whole, after the libraries, in link order: each pinned
+# at its start, so a lever that changes one chunk moves none after it (--pin).
+@0xe20                                    # the code after the list
+=game_000.c @0x1c84
+=game_001.c @0x13c
+=game_002.c @0x1dc0
+=game_003.c @0x1304
+=game_004.c @0x2f3c
+=game_005.c @0x1fbc
+=game_006.c @0x35c4
+=game_007.c @0x28b8
+=game_008.c @0x3668
+=game_009.c @0x39a4
+=game_010.c @0x3c8
+=game_011.c @0x14f8
+=game_012.c @0x15e4
+=game_013.c @0x2bc
+=game_014.c @0x8
+=game_015.c @0x243c
+=game_016.c @0x2818
+=game_017.c @0x3ff8
+=game_018.c @0x2b60
+=game_019.c @0x26a8
+=game_020.c @0xfec
+=game_021.c @0x32bc
+=game_022.c @0x1a10
+=game_023.c @0x3040
+=game_024.c @0x2e28
+=game_025.c @0x2d80
+=game_026.c @0x9bc
+=game_027.c @0x3484
+=game_028.c @0x1ffc
+=game_029.c @0x2ed0
+=game_030.c @0x1e4c
+=game_031.c @0x185c
+=game_table.c @0x2b88
+=ovl_adv00_000.c @0x2b88
+=ovl_adv00_001.c @0x2104
+=ovl_adv00_002.c @0x310
+=ovl_adv00_003.c @0x2878
+=ovl_adv00_table.c @0x3ef4
+=ovl_adv0100_000.c @0x3ef4
+=ovl_adv0100_001.c @0x268c
+=ovl_adv0100_002.c @0x3d38
+=ovl_adv0100_003.c @0x24c0
+=ovl_adv0100_table.c @0x6a4
+=ovl_adv0130_000.c @0x6a4
+=ovl_adv0130_001.c @0x196c
+=ovl_adv0130_002.c @0x2198
+=ovl_adv0130_003.c @0x256c
+=ovl_adv0130_table.c @0x20d0
+=ovl_adv01obj_000.c @0x20d0
+=ovl_adv01obj_001.c @0x3888
+=ovl_adv01obj_002.c @0xbb8
+=ovl_adv01obj_003.c @0x2060
+=ovl_adv01obj_table.c @0x27ec
+=ovl_adv02_000.c @0x27ec
+=ovl_adv02_001.c @0x2c58
+=ovl_adv02_002.c @0x385c
+=ovl_adv02_003.c @0x418
+=ovl_adv02_table.c @0x858
+=ovl_adv03_000.c @0x858
+=ovl_adv03_001.c @0x1394
+=ovl_adv03_002.c @0x1fa8
+=ovl_adv03_003.c @0x2a38
+=ovl_adv03_table.c @0x28d8
+=ovl_advertise_000.c @0x28d8
+=ovl_advertise_001.c @0xc04
+=ovl_advertise_002.c @0x2448
+=ovl_advertise_003.c @0x3fb0
+=ovl_advertise_table.c @0x333c
+=ovl_b_chaos0_000.c @0x333c
+=ovl_b_chaos0_001.c @0x38a8
+=ovl_b_chaos0_002.c @0xac8
+=ovl_b_chaos0_003.c @0x1dec
+=ovl_b_chaos0_table.c @0x2ec4
+=ovl_b_chaos4_000.c @0x2ec4
+=ovl_b_chaos4_001.c @0x9dc
+=ovl_b_chaos4_002.c @0x33d4
+=ovl_b_chaos4_003.c @0x17cc
+=ovl_b_chaos4_table.c @0x2d74
+=ovl_b_chaos6_000.c @0x2d74
+=ovl_b_chaos6_001.c @0x1520
+=ovl_b_chaos6_002.c @0x3198
+=ovl_b_chaos6_003.c @0x2110
+=ovl_b_chaos6_table.c @0x3c10
+=ovl_b_egm1_000.c @0x3c10
+=ovl_b_egm1_001.c @0x3c78
+=ovl_b_egm1_002.c @0x350
+=ovl_b_egm1_003.c @0xaf4
+=ovl_b_egm1_table.c @0x974
+=ovl_b_egm3_000.c @0x974
+=ovl_b_egm3_001.c @0x378c
+=ovl_b_egm3_002.c @0xd2c
+=ovl_b_egm3_003.c @0x26a0
+=ovl_b_egm3_table.c @0x2e60
+=ovl_ev0001_000.c @0x2e60
+=ovl_ev0001_001.c @0x1fb0
+=ovl_ev0001_002.c @0x3354
+=ovl_ev0001_table.c @0x171c
+=ovl_ev0002_000.c @0x171c
+=ovl_ev0002_001.c @0x3ae8
+=ovl_ev0002_002.c @0x2080
+=ovl_ev0002_003.c @0x8f4
+=ovl_ev0002_table.c @0xc0
+=ovl_ev0003_000.c @0xc0
+=ovl_ev0003_001.c @0x301c
+=ovl_ev0003_table.c @0x930
+=ovl_ev0006_000.c @0x930
+=ovl_ev0006_001.c @0x3c28
+=ovl_ev0006_table.c @0x1638
+=ovl_ev0007_000.c @0x1638
+=ovl_ev0007_001.c @0x15bc
+=ovl_ev0007_002.c @0x718
+=ovl_ev0007_003.c @0xa54
+=ovl_ev0007_table.c @0x2a8
+=ovl_ev0008_000.c @0x2a8
+=ovl_ev0008_001.c @0x1f64
+=ovl_ev0008_002.c @0x2cf8
+=ovl_ev0008_003.c @0xb50
+=ovl_ev0008_table.c @0x3ce0
+=ovl_ev0009_000.c @0x3ce0
+=ovl_ev0009_001.c @0x23bc
+=ovl_ev0009_002.c @0x3714
+=ovl_ev0009_003.c @0x8c8
+=ovl_ev0009_table.c @0x1438
+=ovl_ev000b_000.c @0x1438
+=ovl_ev000b_001.c @0x3bfc
+=ovl_ev000b_002.c @0x38c8
+=ovl_ev000b_003.c @0x1690
+=ovl_ev000b_table.c @0x24ec
+=ovl_ev000c_000.c @0x24ec
+=ovl_ev000c_001.c @0xc48
+=ovl_ev000c_002.c @0x1e0c
+=ovl_ev000c_003.c @0x2d64
+=ovl_ev000c_table.c @0x2d78
+=ovl_ev000d_000.c @0x2d78
+=ovl_ev000d_001.c @0xa60
+=ovl_ev000d_002.c @0x38d0
+=ovl_ev000d_003.c @0x26a0
+=ovl_ev000d_table.c @0x2ed0
+=ovl_ev0011_000.c @0x2ed0
+=ovl_ev0011_001.c @0x890
+=ovl_ev0011_table.c @0x2158
+=ovl_ev0012_000.c @0x2158
+=ovl_ev0012_001.c @0x13c8
+=ovl_ev0012_002.c @0x1f04
+=ovl_ev0012_table.c @0x2784
+=ovl_ev0013_000.c @0x2784
+=ovl_ev0013_001.c @0x1430
+=ovl_ev0013_002.c @0x2008
+=ovl_ev0013_table.c @0x174
+=ovl_ev0014_000.c @0x174
+=ovl_ev0014_table.c @0xec8
+=ovl_ev0015_000.c @0xec8
+=ovl_ev0015_001.c @0x21d0
+=ovl_ev0015_002.c @0x544
+=ovl_ev0015_003.c @0x2ba0
+=ovl_ev0015_table.c @0x36ac
+=ovl_ev0016_000.c @0x36ac
+=ovl_ev0016_001.c @0x1d2c
+=ovl_ev0016_002.c @0x18bc
+=ovl_ev0016_003.c @0x15a8
+=ovl_ev0016_table.c @0x24cc
+=ovl_ev0017_000.c @0x24cc
+=ovl_ev0017_001.c @0x5ec
+=ovl_ev0017_002.c @0x388c
+=ovl_ev0017_003.c @0x2970
+=ovl_ev0017_table.c @0x34d4
+=ovl_ev001a_000.c @0x34d4
+=ovl_ev001a_001.c @0x12c
+=ovl_ev001a_002.c @0x3a48
+=ovl_ev001a_003.c @0x314c
+=ovl_ev001a_table.c @0x62c
+=ovl_ev001b_000.c @0x62c
+=ovl_ev001b_001.c @0x278c
+=ovl_ev001b_table.c @0x3d50
+=ovl_ev001c_000.c @0x3d50
+=ovl_ev001c_001.c @0x23f0
+=ovl_ev001c_002.c @0x2828
+=ovl_ev001c_003.c @0x27b4
+=ovl_ev001c_table.c @0x1360
+=ovl_ev001d_000.c @0x1360
+=ovl_ev001d_001.c @0x34e4
+=ovl_ev001d_002.c @0x3824
+=ovl_ev001d_003.c @0x2e20
+=ovl_ev001d_table.c @0xdc
+=ovl_ev001e_000.c @0xdc
+=ovl_ev001e_001.c @0x6f0
+=ovl_ev001e_002.c @0x255c
+=ovl_ev001e_003.c @0x3db8
+=ovl_ev001e_table.c @0x18a0
+=ovl_ev0020_000.c @0x18a0
+=ovl_ev0020_001.c @0x2da0
+=ovl_ev0020_002.c @0x1b7c
+=ovl_ev0020_003.c @0xac0
+=ovl_ev0020_table.c @0x2828
+=ovl_ev0021_000.c @0x2828
+=ovl_ev0021_001.c @0x33fc
+=ovl_ev0021_002.c @0x2f0
+=ovl_ev0021_table.c @0xd7c
+=ovl_ev0022_000.c @0xd7c
+=ovl_ev0022_001.c @0x2a84
+=ovl_ev0022_002.c @0x984
+=ovl_ev0022_table.c @0xd54
+=ovl_ev0023_000.c @0xd54
+=ovl_ev0023_001.c @0x2954
+=ovl_ev0023_002.c @0x28a4
+=ovl_ev0023_003.c @0x23bc
+=ovl_ev0023_table.c @0x19dc
+=ovl_ev0024_000.c @0x19dc
+=ovl_ev0024_001.c @0x1644
+=ovl_ev0024_table.c @0xd08
+=ovl_ev0026_000.c @0xd08
+=ovl_ev0026_001.c @0x1730
+=ovl_ev0026_002.c @0x31e0
+=ovl_ev0026_003.c @0x644
+=ovl_ev0026_table.c @0x9a0
+=ovl_ev0028_000.c @0x9a0
+=ovl_ev0028_001.c @0x2e34
+=ovl_ev0028_002.c @0x1afc
+=ovl_ev0028_table.c @0x3870
+=ovl_ev0029_000.c @0x3870
+=ovl_ev0029_001.c @0x3724
+=ovl_ev0029_002.c @0x9fc
+=ovl_ev0029_003.c @0x14a0
+=ovl_ev0029_table.c @0x13b4
+=ovl_ev002a_000.c @0x13b4
+=ovl_ev002a_001.c @0x2b4c
+=ovl_ev002a_table.c @0x31e4
+=ovl_ev002b_000.c @0x31e4
+=ovl_ev002b_001.c @0x1808
+=ovl_ev002b_002.c @0x888
+=ovl_ev002b_003.c @0x1460
+=ovl_ev002b_table.c @0x1f58
+=ovl_shooting_000.c @0x1f58
+=ovl_shooting_001.c @0x1010
+=ovl_shooting_002.c @0xeb0
+=ovl_shooting_003.c @0x1650
+=ovl_shooting_table.c @0xc40
+=ovl_stg01_000.c @0xc40
+=ovl_stg01_001.c @0x1c4c
+=ovl_stg01_002.c @0x6cc
+=ovl_stg01_003.c @0x22a8
+=ovl_stg01_table.c @0x2564
+=ovl_stg02_000.c @0x2564
+=ovl_stg02_001.c @0x1c64
+=ovl_stg02_002.c @0x16d8
+=ovl_stg02_003.c @0x1144
+=ovl_stg02_table.c @0x3f0
+=ovl_stg03_000.c @0x3f0
+=ovl_stg03_001.c @0x17ec
+=ovl_stg03_002.c @0x1abc
+=ovl_stg03_003.c @0x3ea0
+=ovl_stg03_table.c @0x37fc
+=ovl_stg04_000.c @0x37fc
+=ovl_stg04_001.c @0x438
+=ovl_stg04_002.c @0x14f8
+=ovl_stg04_003.c @0x980
+=ovl_stg04_table.c @0x124c
+=ovl_stg05_000.c @0x124c
+=ovl_stg05_001.c @0x31e8
+=ovl_stg05_002.c @0x3ddc
+=ovl_stg05_003.c @0x2170
+=ovl_stg05_table.c @0x30d8
+=ovl_stg06_000.c @0x30d8
+=ovl_stg06_001.c @0x20e4
+=ovl_stg06_002.c @0x8a0
+=ovl_stg06_003.c @0x2f3c
+=ovl_stg06_table.c @0x2b1c
+=ovl_stg07_000.c @0x2b1c
+=ovl_stg07_001.c @0x126c
+=ovl_stg07_002.c @0x3f8c
+=ovl_stg07_003.c @0x2688
+=ovl_stg07_table.c @0xb60
+=ovl_stg08_000.c @0xb60
+=ovl_stg08_001.c @0x21d4
+=ovl_stg08_002.c @0x26f8
+=ovl_stg08_003.c @0xf94
+=ovl_stg08_table.c @0xda4
+=ovl_stg09_000.c @0xda4
+=ovl_stg09_001.c @0x3d3c
+=ovl_stg09_002.c @0x37d4
+=ovl_stg09_003.c @0xce4
+=ovl_stg09_table.c @0x1a54
+=ovl_stg10_000.c @0x1a54
+=ovl_stg10_001.c @0x58
+=ovl_stg10_002.c @0x394c
+=ovl_stg10_003.c @0x3fb4
+=ovl_stg10_table.c @0x30bc
+=ovl_stg12_000.c @0x30bc
+=ovl_stg12_001.c @0xfe8
+=ovl_stg12_002.c @0x1b1c
+=ovl_stg12_003.c @0x3a60
+=ovl_stg12_table.c @0x6a0
+=ovl_summary_000.c @0x6a0
+=ovl_summary_001.c @0x36f8
+=ovl_summary_002.c @0x2748
+=ovl_summary_003.c @0x1a60
+=ovl_summary_table.c @0x444
+=@0x3428                                  # the code after the game objects
