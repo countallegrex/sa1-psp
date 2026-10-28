@@ -50,8 +50,10 @@ typedef struct texpool_stats {
 
 void texpool_init(const texpool_ops *ops, int is_virtual, uint32_t max_chunks);
 /* Allocates size bytes (16-aligned) for owner; returns the block id (>= 0)
- * and its address, or -1.  cache: an evictable copy.  may_reclaim: steps 2-4
- * are allowed (no display list refers to texture memory). */
+ * and its address, or -1.  cache: an evictable copy, which may take room
+ * from other copies (steps 2-3) but never a level of a game texture (4).
+ * may_reclaim: steps 2-4 are allowed (no display list refers to texture
+ * memory). */
 int texpool_alloc(uint32_t size, int owner, int cache, int may_reclaim, uint8_t **addr);
 void texpool_free(int blk);
 /* Reclaims until size bytes fit (between frames), then frees them again:

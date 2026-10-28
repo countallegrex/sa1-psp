@@ -134,6 +134,17 @@ int texpool_alloc(uint32_t size, int owner, int cache, int may_reclaim, uint8_t 
         uint32_t idle = now > TEXPOOL_IDLE ? now - TEXPOOL_IDLE : 0;
         int v = pick(1, idle);
         if (v >= 0) { ops.evict(blk[v].owner); st.evictions++; continue; }
+        /* A cache copy never costs a game texture a level: the copy draws
+         * as a plain repeat until room comes, a dropped level is gone until
+         * the texture is loaded again.  9f87388's make_room for every
+         * failed mirror variant, once a second, dropped 935 levels in one
+         * play-test (blurry text and shadows, and with the lists bound to
+         * the old levels, wrong land textures). */
+        if (cache) {
+            v = pick(1, now);
+            if (v >= 0) { ops.evict(blk[v].owner); st.evictions++; continue; }
+            break;
+        }
         v = pick(0, idle);
         if (v < 0) v = pick(1, 0xFFFFFFFFu);
         if (v >= 0 && blk[v].cache) { ops.evict(blk[v].owner); st.evictions++; continue; }
@@ -159,7 +170,7 @@ int texpool_alloc(uint32_t size, int owner, int cache, int may_reclaim, uint8_t 
 
 int texpool_make_room(uint32_t size) {
     uint8_t *a;
-    int b = texpool_alloc(size, -1, 0, 1, &a);
+    int b = texpool_alloc(size, -1, 1, 1, &a);      /* as a cache copy asks: no level dropped for it */
     if (b < 0) return 0;
     texpool_free(b);
     return 1;
