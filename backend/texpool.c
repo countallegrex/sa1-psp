@@ -140,11 +140,7 @@ int texpool_alloc(uint32_t size, int owner, int cache, int may_reclaim, uint8_t 
          * failed mirror variant, once a second, dropped 935 levels in one
          * play-test (blurry text and shadows, and with the lists bound to
          * the old levels, wrong land textures). */
-        if (cache) {
-            v = pick(1, now);
-            if (v >= 0) { ops.evict(blk[v].owner); st.evictions++; continue; }
-            break;
-        }
+        if (cache) break;           /* idle copies were tried above; copies in use stay (else they take turns, 876 evictions in a chain) */
         v = pick(0, idle);
         if (v < 0) v = pick(1, 0xFFFFFFFFu);
         if (v >= 0 && blk[v].cache) { ops.evict(blk[v].owner); st.evictions++; continue; }
