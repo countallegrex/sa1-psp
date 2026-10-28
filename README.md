@@ -177,7 +177,7 @@ MIT (`LICENSE`). GPL tools (Dream-Recomp, Flycast, pspdev) are only run as
 separate processes. Sonic Adventure is © SEGA; this project is not affiliated
 with or endorsed by SEGA.
 
-## Maintainer wanted
+## Taking it over
 
-The project is paused and looking for someone to take it over.
-Open an issue if you are interested.
+The project is paused. It's MIT licensed, so fork it and take it wherever you
+want. If a fork becomes the active one, this README will point to it.
