@@ -79,7 +79,7 @@ endif()
 # The PSP half of the platform interface, the sceGu renderer, and the tape
 # code shared with the desktop (plain stdio).
 add_library(sa1_backend_psp OBJECT
-  platform_psp.c coro_psp.c draw_gu.c crash_psp.c main_psp.c savestate_psp.c vmu_store_psp.c audio_psp.c
+  platform_psp.c coro_psp.c draw_gu.c crash_psp.c main_psp.c savestate_psp.c vmu_store_psp.c audio_psp.c me_psp.c
   ${CMAKE_SOURCE_DIR}/backend/desktop/input_tape.c
   ${CMAKE_SOURCE_DIR}/backend/desktop/sha256.c
   ${CMAKE_SOURCE_DIR}/backend/texpool.c)

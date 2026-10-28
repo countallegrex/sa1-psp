@@ -205,6 +205,12 @@ static int ra_finish(ra_slot *s, int wait) {
     return 0;
 }
 
+/* Waits for every read-ahead fetch in flight (the save files' synchronous
+ * Memory Stick calls go after them: vmu_store_psp.c). */
+void plat_io_quiesce(void) {
+    for (int i = 0; i < RA_SLOTS; i++) if (ra[i] && ra[i]->path[0]) ra_finish(ra[i], 1);
+}
+
 static void ra_close(ra_slot *s) {
     ra_finish(s, 1);
     sceIoClose(s->fd);

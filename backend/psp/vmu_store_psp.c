@@ -6,6 +6,8 @@
  *
  * Part of sa1-psp (MIT). */
 #include "../../hle/shinobi/vmu_store.h"
+#include "hle.h"
+#include "platform_psp.h"
 #include <pspiofilemgr.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +15,14 @@
 #include <ctype.h>
 
 static char vmu_dir[300];
+/* --vmu-quiesce: finish the sound streams' async reads before any call
+ * here; --vmu-trace: a flushed log line around every Memory Stick call
+ * (the 2026-10-27 play-test froze with the stick's light on at the first
+ * save-select screen; main_psp.c). */
+int vmu_psp_quiesce, vmu_psp_trace;
+static unsigned trace_n;
+#define VT(...) do { if (vmu_psp_trace && trace_n < 400) { trace_n++; sa1_log(__VA_ARGS__); plat_log_flush(); } } while (0)
+static void enter(void) { if (vmu_psp_quiesce) plat_io_quiesce(); }
 
 static int path_of(char *out, size_t n, const char *name) {
     size_t len = strlen(name);
@@ -26,23 +36,32 @@ static int path_of(char *out, size_t n, const char *name) {
 static int32_t st_read(const char *name, void *buf, uint32_t max) {
     char p[340];
     if (path_of(p, sizeof p, name)) return -1;
+    enter();
+    VT("vmu: read %s: open", p);
     SceUID fd = sceIoOpen(p, PSP_O_RDONLY, 0);
     if (fd < 0) {   /* a write that died between its two copies (st_write) */
         char t[350];
         snprintf(t, sizeof t, "%s.tmp", p);
         fd = sceIoOpen(t, PSP_O_RDONLY, 0);
     }
+    VT("vmu: read: open -> 0x%08x", (unsigned)fd);
     if (fd < 0) return -1;
     int r = sceIoRead(fd, buf, max);
     sceIoClose(fd);
+    VT("vmu: read: %d bytes", r);
     return r < 0 ? -1 : r;
 }
 
 static int write_file(const char *path, const void *buf, uint32_t n) {
+    VT("vmu: write %s (%u bytes): open", path, (unsigned)n);
     SceUID fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+    VT("vmu: write: open -> 0x%08x", (unsigned)fd);
     if (fd < 0) return -1;
-    int ok = sceIoWrite(fd, buf, n) == (int)n;
+    int w = sceIoWrite(fd, buf, n);
+    VT("vmu: write: write -> %d", w);
+    int ok = w == (int)n;
     ok &= sceIoClose(fd) >= 0;
+    VT("vmu: write: closed, %s", ok ? "ok" : "FAILED");
     return ok ? 0 : -1;
 }
 
@@ -52,6 +71,7 @@ static int write_file(const char *path, const void *buf, uint32_t n) {
 static int st_write(const char *name, const void *buf, uint32_t n) {
     char p[340], t[350];
     if (path_of(p, sizeof p, name)) return -1;
+    enter();
     snprintf(t, sizeof t, "%s.tmp", p);
     if (write_file(t, buf, n)) { sceIoRemove(t); return -1; }
     if (write_file(p, buf, n)) return -1;
@@ -62,6 +82,8 @@ static int st_write(const char *name, const void *buf, uint32_t n) {
 static int st_remove(const char *name) {
     char p[340];
     if (path_of(p, sizeof p, name)) return -1;
+    enter();
+    VT("vmu: remove %s", p);
     return sceIoRemove(p) >= 0 ? 0 : -1;
 }
 
@@ -71,7 +93,10 @@ static int cmp_entry(const void *a, const void *b) { return strcmp(((const entry
 static int st_list(int index, char name[13], uint32_t *size) {
     static entry e[200];   /* a VMU holds at most 200 one-block files */
     int n = 0;
+    enter();
+    VT("vmu: list %d: dopen %s", index, vmu_dir);
     SceUID d = sceIoDopen(vmu_dir);
+    VT("vmu: list: dopen -> 0x%08x", (unsigned)d);
     if (d < 0) return -1;
     SceIoDirent de;
     memset(&de, 0, sizeof de);
@@ -91,6 +116,7 @@ static int st_list(int index, char name[13], uint32_t *size) {
         memset(&de, 0, sizeof de);
     }
     sceIoDclose(d);
+    VT("vmu: list: %d files, closed", n);
     qsort(e, (size_t)n, sizeof *e, cmp_entry);
     if (index < 0 || index >= n) return -1;
     memcpy(name, e[index].name, 13);

@@ -66,7 +66,8 @@
  *                   tools/psp_prof.py --pcs names the samples
  *   --prof-us N     the sampling period (default 1000 us)
  *   --me-test MODE  the Media Engine loader proof (me/sa1me.c): logs and
- *                   exits; 0 stubs, 1 + reset vector write, 2 + ME run
+ *                   exits; 0 stubs, 1 + reset vector write, 2 + ME run,
+ *                   3 the ME runs a probe of this image (me_psp.c)
  *
  * Without args.txt the EBOOT plays: the pad drives the game, frames are
  * paced to the vblank.  HOME exits.
@@ -94,6 +95,7 @@ int hle_parse_land_cull(const char *v), hle_parse_land_decide(const char *v);
 #include <pspsysmem.h>
 #include <psppower.h>
 #include <kubridge.h>
+#include "me_psp.h"
 
 #include <malloc.h>
 #include <stdio.h>
@@ -132,6 +134,7 @@ void draw_gu_set_max_mip(int n);
 void draw_gu_set_tex_pool(int on, int reserve_kb);
 void vmu_store_psp_init(const char *dir);   /* vmu_store_psp.c */
 const char *vmu_store_psp_dir(void);
+extern int vmu_psp_quiesce, vmu_psp_trace;  /* vmu_store_psp.c */
 static int vmu_mode;                        /* -1 --no-vmu, 1 --vmu-dir, 0 default */
 static const char *vmu_dir_arg;
 static const char *dump_trig_path;   /* --dump-trig FILE: libm sinf/cosf of every 16-bit angle, then exit */
@@ -374,6 +377,7 @@ struct me_test {                /* me/sa1me.c's */
     volatile uint32_t stub[3][2];
     volatile int32_t r_reset, r_clock, r_release, r_hold;
     volatile uint32_t readback_ok, count1, count2, ack, us1, us2;
+    volatile uint32_t kc[3][16];
 };
 static void me_test(int mode) {
     char path[300];
@@ -392,6 +396,11 @@ static void me_test(int mode) {
             (unsigned)t.readback_ok, (unsigned)t.r_reset, (unsigned)t.r_clock, (unsigned)t.r_release, (unsigned)t.r_hold);
     sa1_log("me-test: counter %u at %u us, %u at %u us; ack %u", (unsigned)t.count1, (unsigned)t.us1,
             (unsigned)t.count2, (unsigned)t.us2, (unsigned)t.ack);
+    for (int k = 0; k < 3; k++) {
+        char line[200]; int o = 0;
+        for (int i = 0; i < 16; i++) o += snprintf(line + o, sizeof line - o, " %08x", (unsigned)t.kc[k][i]);
+        sa1_log("me-test: kernel %s:%s", k == 0 ? "DcacheWBInvAll" : k == 1 ? "DcacheInvAll" : "IcacheInvAll", line);
+    }
     if (m >= 0) {
         int sr = sceKernelStopModule(m, 0, NULL, &st, NULL);
         int ur = sceKernelUnloadModule(m);
@@ -659,6 +668,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--gu-max-mip") && i + 1 < args_c) draw_gu_set_max_mip(atoi(av[++i]));
         else if (!strcmp(av[i], "--dump-trig") && i + 1 < args_c) dump_trig_path = av[++i];
         else if (!strcmp(av[i], "--no-vmu")) vmu_mode = -1;
+        else if (!strcmp(av[i], "--vmu-quiesce") && i + 1 < args_c) vmu_psp_quiesce = !strcmp(av[++i], "on");
+        else if (!strcmp(av[i], "--vmu-trace")) vmu_psp_trace = 1;
         else if (!strcmp(av[i], "--vmu-dir") && i + 1 < args_c) { vmu_dir_arg = av[++i]; vmu_mode = 1; }
         else if (!strcmp(av[i], "--tex-pool") && i + 1 < args_c) draw_gu_set_tex_pool(strcmp(av[++i], "off") != 0, -1);   /* draw_gu.c: texture chunks */
         else if (!strcmp(av[i], "--tex-reserve") && i + 1 < args_c) draw_gu_set_tex_pool(1, atoi(av[++i]));       /* KB of heap the pool leaves free */
@@ -737,7 +748,8 @@ int main(int argc, char **argv) {
     }
     if (prof_path) prof_start();
     if (me_test_mode >= 0) {
-        me_test(me_test_mode);
+        if (me_test_mode == 3) me_psp_probe(abs_path(path, sizeof path, "sa1me.prx"));
+        else me_test(me_test_mode);
         sa1_log("exit: me-test %d, code 0", me_test_mode);
         plat_log_close();
         sceKernelExitGame();
