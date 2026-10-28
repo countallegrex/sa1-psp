@@ -407,10 +407,34 @@ static int eg_advance(voice *v, int32_t n) {
     return (v->eg >> 16) < ATT_MAX;
 }
 
+/* A tone's bytes in sound RAM when every sample the voice can reach
+ * (index < LEA) lies inside it, so the mixer reads them without a bounds
+ * check per sample; NULL for a tone that runs off the end (read through
+ * tone_sample, where the missing bytes read as 0). */
+static const uint8_t *tone_direct(const snd_core *k, const voice *v) {
+    uint64_t bytes = v->fmt == FMT_PCM16 ? 2ull * v->lea : v->fmt == FMT_PCM8 ? v->lea : (v->lea + 1ull) / 2;
+    return (uint64_t)v->addr + bytes <= SND_RAM_SIZE ? k->sh->sound_ram + v->addr : NULL;
+}
+
+/* tone_sample for the mixer, which keeps a voice's ADPCM decoder in locals:
+ * the state goes in and comes back by value, so no local's address escapes
+ * the mixing loop (out of line: the rare path). */
+typedef struct ad_sync { int32_t x, s, q; uint32_t n; } ad_sync;
+static __attribute__((noinline)) ad_sync tone_sample_sync(snd_core *k, voice *v, uint32_t i, int32_t s, int32_t q, uint32_t n) {
+    v->ad_s = s; v->ad_q = q; v->ad_next = n;
+    ad_sync r;
+    r.x = tone_sample(k, v, i);
+    r.s = v->ad_s; r.q = v->ad_q; r.n = v->ad_next;
+    return r;
+}
+
 /* Mixes voice v into acc (n stereo pairs).  The envelope and the gains
  * step once per EG_CHUNK samples (0.36 ms; the AICA's envelope also moves
  * slower than its sample rate), the sample position every sample.  Every
- * product fits in 32 bits (the PSP has no cheap 64-bit multiply). */
+ * product fits in 32 bits (the PSP has no cheap 64-bit multiply).  The
+ * voice's position, samples and LFO counters live in locals for the call:
+ * the stores into acc may alias the voice's int32 fields, which would
+ * reload them every sample. */
 static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
     chan *ch = &k->ch[v->port][v->ch];
     int32_t att = v->att_static + tone_att(k, v, ch);
@@ -433,36 +457,106 @@ static void voice_render(snd_core *k, voice *v, int32_t *acc, uint32_t n) {
         uint32_t d = v->delay < n ? v->delay : n;
         v->delay -= d; i = d;
     }
+    const uint8_t *d = tone_direct(k, v);
+    const int fmt = v->fmt, loop = v->loop;
+    const uint32_t lsa = v->lsa, lea = v->lea;
+    int32_t cur = v->cur, nxt = v->nxt;
+    uint32_t frac = v->frac, pos = v->pos;
+    uint16_t lc = v->lfo_count;
+    uint8_t ls = v->lfo_state;
+    int32_t as = v->ad_s, aq = v->ad_q;     /* ADPCM decoder, written back around tone_sample */
+    uint32_t an = v->ad_next;
+    int on = 1;
+    /* One source sample on: the new position, then the index of the sample
+     * after it (tone_next twice), into nn.  Used as the body of
+     * while (frac >= 0x10000u); at the end of a one-shot tone: out. */
+#define VR_NEXT_INDEX() \
+        frac -= 0x10000u; \
+        uint32_t np = pos + 1; \
+        if (np >= lea) { if (!loop) { on = 0; goto out; } np = lsa; } \
+        pos = np; \
+        cur = nxt; \
+        uint32_t nn = pos + 1; \
+        if (nn >= lea) { if (!loop) { nxt = 0; continue; } nn = lsa; }
+    /* tone_sample's sequential ADPCM step, inline; tone_sample itself at a
+     * loop start (it saves or restores the decoder there) or out of step */
+#define VR_FETCH_ADPCM() \
+        if (nn == an && !(nn == lsa && loop && !v->ad_saved)) { \
+            uint32_t b = d[nn / 2]; \
+            adpcm_step((nn & 1) ? b >> 4 : b & 15, &as, &aq); \
+            an = nn + 1; \
+            nxt = as; \
+        } else VR_FETCH_SLOW()
+#define VR_FETCH_SLOW() { \
+            ad_sync r = tone_sample_sync(k, v, nn, as, aq, an); \
+            nxt = r.x; as = r.s; aq = r.q; an = r.n; \
+        }
     while (i < n) {
         uint32_t m = n - i < EG_CHUNK ? n - i : EG_CHUNK;
-        if (!eg_advance(v, (int32_t)m)) { v->on = 0; return; }
+        if (!eg_advance(v, (int32_t)m)) { on = 0; break; }
         int32_t e = v->eg >> 16;
         int32_t gl = gain_q15[clamp_att(att_l + e + alfo)], gr = gain_q15[clamp_att(att_r + e + alfo)];
+        if (!lfo_n) {
+            /* no LFO: gains and step fixed for the chunk */
+            int32_t *p = acc + 2 * i, *pe = p + 2 * m;
+            i += m;
+            if (d && fmt == FMT_ADPCM) {
+                for (; p < pe; p += 2) {
+                    int32_t s = cur + (((nxt - cur) * (int32_t)(frac >> 1)) >> 15);
+                    int32_t xl = (s * gl) >> 15, xr = (s * gr) >> 15;
+                    p[0] += xl;
+                    p[1] += xr;
+                    frac += vstep;
+                    while (frac >= 0x10000u) { VR_NEXT_INDEX() VR_FETCH_ADPCM() }
+                }
+                continue;
+            }
+            for (; p < pe; p += 2) {
+                int32_t s = cur + (((nxt - cur) * (int32_t)(frac >> 1)) >> 15);
+                int32_t xl = (s * gl) >> 15, xr = (s * gr) >> 15;
+                p[0] += xl;
+                p[1] += xr;
+                frac += vstep;
+                while (frac >= 0x10000u) {
+                    VR_NEXT_INDEX()
+                    if (d && fmt == FMT_PCM16) nxt = (int16_t)(d[2 * nn] | d[2 * nn + 1] << 8);
+                    else if (d && fmt == FMT_PCM8) nxt = (int8_t)d[nn] << 8;
+                    else VR_FETCH_SLOW()
+                }
+            }
+            continue;
+        }
         for (uint32_t j = 0; j < m; j++, i++) {
-            int32_t s = v->cur + (((v->nxt - v->cur) * (int32_t)(v->frac >> 1)) >> 15);
+            int32_t s = cur + (((nxt - cur) * (int32_t)(frac >> 1)) >> 15);
             acc[2 * i] += (s * gl) >> 15;
             acc[2 * i + 1] += (s * gr) >> 15;
-            v->frac += vstep;
-            if (lfo_n && --v->lfo_count == 0) {
-                v->lfo_count = (uint16_t)lfo_n;
-                v->lfo_state++;
+            frac += vstep;
+            if (--lc == 0) {
+                lc = (uint16_t)lfo_n;
+                ls++;
                 if (ad) {
-                    alfo = (int32_t)(lfo_wave(aw, v->lfo_state) >> (8 - ad)) * 4;
+                    alfo = (int32_t)(lfo_wave(aw, ls) >> (8 - ad)) * 4;
                     gl = gain_q15[clamp_att(att_l + e + alfo)]; gr = gain_q15[clamp_att(att_r + e + alfo)];
                 }
-                if (pd) vstep = (uint32_t)(((uint64_t)step * plfo_q10[pd][lfo_wave(pw, v->lfo_state)]) >> 10);
+                if (pd) vstep = (uint32_t)(((uint64_t)step * plfo_q10[pd][lfo_wave(pw, ls)]) >> 10);
             }
-            while (v->frac >= 0x10000u) {
-                v->frac -= 0x10000u;
-                int64_t nx = tone_next(v, v->pos);
-                if (nx < 0) { v->on = 0; return; }
-                v->pos = (uint32_t)nx;
-                v->cur = v->nxt;
-                int64_t nn = tone_next(v, v->pos);
-                v->nxt = nn < 0 ? 0 : tone_sample(k, v, (uint32_t)nn);
+            while (frac >= 0x10000u) {
+                VR_NEXT_INDEX()
+                if (d && fmt == FMT_PCM16) nxt = (int16_t)(d[2 * nn] | d[2 * nn + 1] << 8);
+                else if (d && fmt == FMT_PCM8) nxt = (int8_t)d[nn] << 8;
+                else if (d) { VR_FETCH_ADPCM() }
+                else VR_FETCH_SLOW()
             }
         }
     }
+#undef VR_NEXT_INDEX
+#undef VR_FETCH_ADPCM
+#undef VR_FETCH_SLOW
+out:
+    v->cur = cur; v->nxt = nxt; v->frac = frac; v->pos = pos;
+    v->lfo_count = lc; v->lfo_state = ls;
+    v->ad_s = as; v->ad_q = aq; v->ad_next = an;
+    if (!on) v->on = 0;
 }
 
 /* ---- streams ---------------------------------------------------------------- */
