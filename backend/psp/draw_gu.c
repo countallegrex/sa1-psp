@@ -397,10 +397,15 @@ static int tex_pool_on = 1, tex_flush_pending;
 static uint32_t mirror_need, mirror_epoch, mirror_room_frame;
 static int mirror_room_ok;
 static uint32_t tex_reserve = 2u << 20, tex_frame, tex_log_frame = 0xFFFFFFFFu;
+/* --tex-chunks N: at most N chunks (0: as many as the heap gives).  The card
+ * EBOOT gets 6 where the PSPLink PRX gets 9: a test under PSPLink caps
+ * itself to see what the card sees. */
+static uint32_t tex_max_chunks;
 void draw_gu_set_tex_pool(int on, int reserve_kb) {
     tex_pool_on = on;
     if (reserve_kb >= 0) tex_reserve = (uint32_t)reserve_kb * 1024u;
 }
+void draw_gu_set_tex_chunks(int n) { tex_max_chunks = n > 0 ? (uint32_t)n : 0u; }
 
 /* Inside replay() the list being built and run holds texture addresses:
  * no reclaiming there (mirror variants).  Everywhere else nothing the GE
@@ -839,7 +844,7 @@ static void list_start(void) {
 
 int draw_init(int scale, int want_headless) {
     (void)scale;
-    texpool_init(&pool_ops, 0, 0);
+    texpool_init(&pool_ops, 0, tex_max_chunks);
     gs.zmin_frame = gs.zmin_win = 1e30f; gs.zmin_last = 1.0f; zmin_wmax = 0.0f;
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);

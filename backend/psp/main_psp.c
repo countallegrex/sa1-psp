@@ -130,6 +130,7 @@ void draw_gu_set_replay_v2(int bits);
 void draw_gu_set_lod_bias(float b);
 void draw_gu_set_max_mip(int n);
 void draw_gu_set_tex_pool(int on, int reserve_kb);
+void draw_gu_set_tex_chunks(int n);
 void vmu_store_psp_init(const char *dir);   /* vmu_store_psp.c */
 const char *vmu_store_psp_dir(void);
 static int vmu_mode;                        /* -1 --no-vmu, 1 --vmu-dir, 0 default */
@@ -662,6 +663,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(av[i], "--vmu-dir") && i + 1 < args_c) { vmu_dir_arg = av[++i]; vmu_mode = 1; }
         else if (!strcmp(av[i], "--tex-pool") && i + 1 < args_c) draw_gu_set_tex_pool(strcmp(av[++i], "off") != 0, -1);   /* draw_gu.c: texture chunks */
         else if (!strcmp(av[i], "--tex-reserve") && i + 1 < args_c) draw_gu_set_tex_pool(1, atoi(av[++i]));       /* KB of heap the pool leaves free */
+        else if (!strcmp(av[i], "--tex-chunks") && i + 1 < args_c) draw_gu_set_tex_chunks(atoi(av[++i]));      /* at most N chunks (the card gets 6) */
         else if (!strcmp(av[i], "--env") && i + 1 < args_c) {   /* NAME=VALUE, e.g. SA1_COLL_REC=1: a same-binary A/B */
             char *eq = strchr(av[++i], '=');
             if (eq) { *eq = 0; setenv(av[i], eq + 1, 1); *eq = '='; }
