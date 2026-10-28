@@ -300,12 +300,15 @@ void sdk_8c6390b0(sh4_ctx *c) { HLE_ENTER(0x8c6390b0u, "njInvertMatrix"); m_inve
 void sdk_8c639ec8(sh4_ctx *c) { HLE_ENTER(0x8c639ec8u, "njRotateX"); m_rot_x(m_wp(c, ARG0), ARG1); }
 void sdk_8c639f5c(sh4_ctx *c) { HLE_ENTER(0x8c639f5cu, "njRotateY"); m_rot_y(m_wp(c, ARG0), ARG1); }
 void sdk_8c63a1cc(sh4_ctx *c) { HLE_ENTER(0x8c63a1ccu, "njRotateZ"); m_rot_z(m_wp(c, ARG0), ARG1); }
-void sdk_8c639cf4(sh4_ctx *c) {         /* njRotateXYZ(m, ax, ay, az): Z, then Y, then X */
+/* njRotateXYZ(m, ax, ay, az): Z, then Y, then X.  As the SDK body (tst rN,rN),
+ * an axis is skipped only when its whole register is 0: 0x10000 still runs the
+ * rotation by fsca(0), which is not a no-op for -0 and NaN entries. */
+void sdk_8c639cf4(sh4_ctx *c) {
     HLE_ENTER(0x8c639cf4u, "njRotateXYZ");
     sa1_f32a *m = m_wp(c, ARG0);
-    if (ARG3 & 0xFFFF) m_rot_z(m, ARG3);
-    if (ARG2 & 0xFFFF) m_rot_y(m, ARG2);
-    if (ARG1 & 0xFFFF) m_rot_x(m, ARG1);
+    if (ARG3) m_rot_z(m, ARG3);
+    if (ARG2) m_rot_y(m, ARG2);
+    if (ARG1) m_rot_x(m, ARG1);
 }
 /* njRotateZXY(m, ax, ay, az), the ZXY_ANG sibling (node flag 0x20): Y, then X,
  * then Z.  Each axis is the same per-axis block as njRotateXYZ in the SDK body,
