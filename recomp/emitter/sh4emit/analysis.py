@@ -338,10 +338,238 @@ class FunctionAnalysis:
                 is_pop = (ins.op == "MOV_L_LI" and ins.m == 15) or (ins.op == "FMOV_LI" and ins.m == 15)
                 if not is_pop:
                     popped_only &= ~(d & regs.CALLEE_SAVED)
-        pres = pushed & popped_only
+        pres = (pushed & popped_only) | self.slot_preserved()
         # a function that calls something which may clobber a register it does
         # not itself save does not preserve it; handled by may_write's union.
         self.preserved = pres
+
+    # ------------------------------------------- push/pop-matched preserved
+    _ST = {"MOV_B_S": 1, "MOV_W_S": 2, "MOV_L_S": 4}
+    _STD = {"MOV_B_S_D": 1, "MOV_W_S_D": 2, "MOV_L_S_D": 4}
+    _LD = {"MOV_B_L": 1, "MOV_W_L": 2, "MOV_L_L": 4}
+    _LDD = {"MOV_B_L_D": 1, "MOV_W_L_D": 2, "MOV_L_L_D": 4}
+    _PUSH = {"MOV_B_SD": 1, "MOV_W_SD": 2, "MOV_L_SD": 4}
+    _POP = {"MOV_B_LI": 1, "MOV_W_LI": 2, "MOV_L_LI": 4}
+
+    def slot_preserved(self):
+        """r8-r14 that the function pushes at entry and restores from the
+        same stack slot before every return, with r15 balanced: the caller
+        sees its own value again even though the body overwrites the
+        register (the SHC idiom; the popped-only rule above misses every
+        function that pushes a register in order to use it).  Required, per
+        register k: (1) r15 moves only by pushes, pops and add #imm, with one
+        offset per block on every path; (2) k is pushed in the entry block
+        before any write to it and its entry value is read by nothing but
+        that push; (3) no r15-relative store or non-pop load touches the
+        slot; (4) at every ret / tail exit k came from the pop of its slot
+        (calls in between must not write k: their may_write) and r15 is back
+        at 0; tail and unknown exits must not write k either.  Stores to the
+        slot through another register (a pointer to the frame) are assumed
+        absent, as the RAMK form already assumes R15 stays in RAM."""
+        cfg = self.cfg
+        K = [k for k in range(8, 15)]
+        R15 = 15
+        # (1) r15 offsets per instruction
+        off_in = {cfg.entry: 0}
+        offs = {}
+        work = list(cfg.rpo)
+        changed = True
+        while changed:
+            changed = False
+            for sb in cfg.rpo:
+                if sb not in off_in:
+                    continue
+                b = cfg.blocks[sb]
+                o = off_in[sb]
+                seq = []
+                for ins, st in zip(b.all_instrs(), self.states[sb]):
+                    seq.append(o)
+                    op = ins.op
+                    if op in self._PUSH and ins.n == R15:
+                        o -= self._PUSH[op]
+                    elif op in self._POP and ins.m == R15:
+                        o += self._POP[op]
+                        if ins.n == R15:
+                            return 0
+                    elif op == "FMOV_SD" and ins.n == R15:
+                        if st[1] == U:
+                            return 0
+                        o -= 8 if st[1] else 4
+                    elif op == "FMOV_LI" and ins.m == R15:
+                        if st[1] == U:
+                            return 0
+                        o += 8 if st[1] else 4
+                    elif op == "ADD_I" and ins.n == R15:
+                        o += ins.simm
+                    elif op in ("STSL_PR", "STSL_MACH", "STSL_MACL", "STSL_FPUL", "STSL_FPSCR",
+                                "STCL_GBR", "STCL_SR", "STCL_VBR") and ins.n == R15:
+                        o -= 4
+                    elif op in ("LDSL_PR", "LDSL_MACH", "LDSL_MACL", "LDSL_FPUL", "LDSL_FPSCR",
+                                "LDCL_GBR", "LDCL_SR", "LDCL_VBR") and ins.m == R15:
+                        o += 4
+                    else:
+                        u, d = self.ud[sb][len(seq) - 1]
+                        if d & bit(R15):
+                            return 0
+                offs[sb] = seq
+                for t in b.succs:
+                    if t not in cfg.blocks:
+                        continue
+                    if t in off_in:
+                        if off_in[t] != o:
+                            return 0
+                    else:
+                        off_in[t] = o
+                        changed = True
+                if b.kind in ("ret", "tail", "ijump") or (b.kind == "switch" and sb in self.calls) \
+                        or (b.kind == "cond" and b.target is not None and b.target not in b.succs):
+                    if o != 0:
+                        return 0
+        if any(sb not in off_in for sb in cfg.blocks):
+            return 0
+        # (2) the pushes in the entry block
+        eb = cfg.blocks[cfg.entry]
+        slot = {}
+        written = 0
+        for i, ins in enumerate(eb.all_instrs()):
+            u, d = self.ud[cfg.entry][i]
+            if ins.op == "MOV_L_SD" and ins.n == R15 and 8 <= ins.m <= 14 and not (written & bit(ins.m)):
+                k = ins.m
+                slot[k] = None if k in slot else offs[cfg.entry][i] - 4
+            written |= d
+        cand = [k for k in K if slot.get(k) is not None]
+        if not cand:
+            return 0
+        # (3) r15-relative accesses that touch a slot
+        def touch(a, n, k):
+            return a < slot[k] + 4 and slot[k] < a + n
+        for sb, b in cfg.blocks.items():
+            for i, ins in enumerate(b.all_instrs()):
+                o = offs[sb][i]
+                op = ins.op
+                acc = None
+                if op in self._ST and ins.n == R15:
+                    acc = (o, self._ST[op], "st")
+                elif op in self._STD and ins.n == R15:
+                    acc = (o + ins.d * self._STD[op], self._STD[op], "st")
+                elif op in ("MOV_B_S_R0", "MOV_W_S_R0", "MOV_L_S_R0", "FMOV_S_R0") and ins.n == R15:
+                    return 0
+                elif op == "FMOV_S" and ins.n == R15:
+                    acc = (o, 8, "st")
+                elif op in self._PUSH and ins.n == R15 and not (sb == cfg.entry and slot.get(ins.m) is not None
+                                                                and o - 4 == slot[ins.m]):
+                    acc = (o - self._PUSH[op], self._PUSH[op], "st")
+                elif op == "FMOV_SD" and ins.n == R15:
+                    acc = (o - 8, 8, "st")
+                elif op.startswith(("STSL_", "STCL_")) and ins.n == R15:
+                    acc = (o - 4, 4, "st")
+                elif op in self._LD and ins.m == R15:
+                    acc = (o, self._LD[op], "ld")
+                elif op in self._LDD and ins.m == R15:
+                    acc = (o + ins.d * self._LDD[op], self._LDD[op], "ld")
+                elif op in ("MOV_B_L_R0", "MOV_W_L_R0", "MOV_L_L_R0", "FMOV_L_R0") and ins.m == R15:
+                    return 0
+                elif op in ("FMOV_L", "FMOV_LI") and ins.m == R15:
+                    acc = (o, 8, "ld")
+                elif op in self._POP and ins.m == R15:
+                    for k in list(cand):
+                        if touch(o, self._POP[op], k) and not (op == "MOV_L_LI" and ins.n == k and o == slot[k]):
+                            cand.remove(k)
+                    continue
+                if acc is not None:
+                    for k in list(cand):
+                        if touch(acc[0], acc[1], k):
+                            cand.remove(k)
+        if not cand:
+            return 0
+        # (2b) the entry value of k is read by nothing but its push: k must not
+        # be live at entry when the push is not counted as a use
+        out = 0
+        for k in cand:
+            kb = bit(k)
+            push_at = None
+            for i, ins in enumerate(eb.all_instrs()):
+                if ins.op == "MOV_L_SD" and ins.n == R15 and ins.m == k:
+                    push_at = i
+                    break
+            lin = {}
+            ch = True
+            ok = True
+            while ch:
+                ch = False
+                for sb in reversed(cfg.rpo):
+                    b = cfg.blocks[sb]
+                    live = False
+                    for t in b.succs:
+                        if t in cfg.blocks:
+                            live = live or lin.get(t, False)
+                    if b.kind in ("ret", "tail", "ijump", "stop") or (b.kind == "cond" and b.target is not None
+                                                                     and b.target not in b.succs):
+                        live = False   # k is restored from its slot before every exit (checked below)
+                    if b.kind == "call" or (b.kind in ("tail", "ijump", "switch") and sb in self.calls):
+                        ci = self.calls[sb]
+                        if b.kind == "call" and ci.may_write & kb:
+                            live = False
+                        if ci.live_in & kb:
+                            live = True
+                    for i in range(len(self.ud[sb]) - 1, -1, -1):
+                        u, d = self.ud[sb][i]
+                        if d & kb:
+                            live = False
+                        if (u & kb) and not (sb == cfg.entry and i == push_at):
+                            live = True
+                    if lin.get(sb, False) != live:
+                        lin[sb] = live
+                        ch = True
+            if lin.get(cfg.entry, False):
+                continue
+            # (4) ORIG at every exit: forward must-analysis
+            orig_in = {cfg.entry: True}
+            orig_out = {}
+            ch = True
+            while ch:
+                ch = False
+                for sb in cfg.rpo:
+                    b = cfg.blocks[sb]
+                    preds = [q for q in b.preds if q in cfg.blocks]
+                    if sb == cfg.entry:
+                        v = True
+                    else:
+                        v = all(orig_out.get(q, True) for q in preds)
+                    orig_in[sb] = v
+                    for i, ins in enumerate(b.all_instrs()):
+                        u, d = self.ud[sb][i]
+                        if ins.op == "MOV_L_LI" and ins.m == R15 and ins.n == k and offs[sb][i] == slot[k]:
+                            v = True
+                        elif d & kb:
+                            v = False
+                    if b.kind == "call" and self.calls[sb].may_write & kb:
+                        v = False
+                    if orig_out.get(sb) != v:
+                        orig_out[sb] = v
+                        ch = True
+            for sb, b in cfg.blocks.items():
+                exit_ = b.kind in ("ret", "tail", "ijump") or (b.kind == "switch" and sb in self.calls) \
+                    or (b.kind == "cond" and b.target is not None and b.target not in b.succs)
+                if not exit_:
+                    continue
+                if b.kind == "cond":
+                    ok = False      # conditional tail call: no summary here
+                    break
+                v = orig_out.get(sb, False)
+                if b.kind == "call":
+                    pass
+                if not v:
+                    ok = False
+                    break
+                if b.kind in ("tail", "ijump", "switch"):
+                    ci = self.calls.get(sb)
+                    if ci is None or ci.may_write & kb or ci.live_in & kb:
+                        ok = False
+                        break
+            if ok:
+                out |= kb
+        return out
 
     # ------------------------------------------------------ dirty + liveness
     def instr_sync(self, b, i):
