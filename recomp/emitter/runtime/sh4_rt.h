@@ -311,20 +311,32 @@ static inline void sa1_depth_probe(void) {
     if (sa1_depth_hook && sa1_host_sp() < sa1_stack_floor) sa1_depth_hook();
 }
 
-/* HLE_ENTER's common case inline: an entry other than the last one counted
+/* HLE_ENTER's common cases inline: an entry other than the last one counted
  * only bumps its counter and restarts the spin check, which is all
  * sa1_seam_hit_at does then besides the stack probe (that one still runs at
- * every repeat and at every indirect call).  A repeat, a watch, or the first
- * call of a site (slot not cached yet) take the full path. */
+ * every repeat and at every indirect call); a repeat runs the probe, bumps
+ * the counter and the repeat count, as sa1_seam_hit_at does (500-1500
+ * repeats a turn in the busy stages: math wrappers called back to back).
+ * Every 65536th repeat (the spin check reads the frame), a watch, or the
+ * first call of a site (slot not cached yet) take the full path. */
 struct sa1_hit { uint32_t addr; uint32_t hits; const char *name; int logged; };
 struct sa1_hit_spin { uint32_t addr, frame, repeat; };
 extern struct sa1_hit_spin sa1_hit_spin;
 static inline void sa1_seam_enter(struct sa1_hit **site, uint32_t addr, const char *name) {
     struct sa1_hit *h = *site;
-    if (__builtin_expect(h != 0 && addr != sa1_hit_spin.addr && !sa1_watch_addr, 1)) {
-        h->hits++;
-        sa1_hit_spin.addr = addr; sa1_hit_spin.frame = UINT32_MAX; sa1_hit_spin.repeat = 0;
-        return;
+    if (__builtin_expect(h != 0 && !sa1_watch_addr, 1)) {
+        struct sa1_hit_spin *s = &sa1_hit_spin;
+        if (addr != s->addr) {
+            h->hits++;
+            s->addr = addr; s->frame = UINT32_MAX; s->repeat = 0;
+            return;
+        }
+        if (((s->repeat + 1) & 0xFFFFu) != 0) {
+            sa1_depth_probe();
+            h->hits++;
+            s->repeat++;
+            return;
+        }
     }
     sa1_seam_hit_at(site, addr, name);
 }

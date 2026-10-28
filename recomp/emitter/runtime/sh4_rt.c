@@ -181,23 +181,36 @@ void (*sa1_depth_hook)(void);
 uintptr_t sa1_stack_floor = UINTPTR_MAX;
 int sa1_probe_slow;
 
-void sa1_call(sh4_ctx *c, uint32_t addr) {
+/* An indirect call or jump: the stack probe, the watches, the lookup, a
+ * trap for an unknown address.  The common case (a cached target, no probe
+ * due, no watch) is checked first and needs no stack frame, so sa1_call
+ * ends in a plain jump to the target (500-1900 indirect calls a turn in
+ * the busy stages); anything else takes dispatch_slow, the full sequence. */
+static __attribute__((noinline)) sa1_fn dispatch_slow(sh4_ctx *c, uint32_t addr, const char *where, const char *what) {
     sa1_depth_probe();
-    if (sa1_watch_addr) sa1_watch_check("indirect call");
+    if (sa1_watch_addr) sa1_watch_check(where);
     sa1_fn fn = sa1_fn_lookup(addr);
-    if (fn == NULL) {
-        sa1_trap(c, addr, "indirect call to an address with no function");
-        return;
-    }
-    fn(c);
+    if (fn == NULL) sa1_trap(c, addr, what);
+    return fn;
+}
+
+static inline sa1_fn dispatch(sh4_ctx *c, uint32_t addr, const char *where, const char *what) {
+    uint32_t key = addr & 0x1FFFFFFFu;
+    uint32_t i = (key >> 1) & (SA1_LOOKUP_CACHE - 1);
+    sa1_fn fn = sa1_lookup_cache[i].fn;
+    if (__builtin_expect(sa1_lookup_cache[i].key == key && fn != NULL && !sa1_watch_addr
+                         && !(sa1_depth_hook && sa1_host_sp() < sa1_stack_floor), 1))
+        return fn;
+    return dispatch_slow(c, addr, where, what);
+}
+
+void sa1_call(sh4_ctx *c, uint32_t addr) {
+    sa1_fn fn = dispatch(c, addr, "indirect call", "indirect call to an address with no function");
+    if (fn) fn(c);
 }
 
 sa1_fn sa1_tail_target(sh4_ctx *c, uint32_t addr) {
-    sa1_depth_probe();
-    if (sa1_watch_addr) sa1_watch_check("indirect jump");
-    sa1_fn fn = sa1_fn_lookup(addr);
-    if (fn == NULL) sa1_trap(c, addr, "indirect jump to an address with no function");
-    return fn;
+    return dispatch(c, addr, "indirect jump", "indirect jump to an address with no function");
 }
 
 void (*sa1_trap_hook)(sh4_ctx *c, uint32_t pc, const char *what);
