@@ -58,3 +58,5 @@ address	hle	what
 8c029400	hle/game/poly_ray.c	nearest polygon along each axis from a point, over the collision hits of one object (native)
 8c091380	hle/game/set_scan.c	SET range-in scan: squared distance of each unloaded SET entry against its radius, task create when in range (native)
 8c040784	hle/game/motion_walk.c	motion model walker: per node push, motion callback chain (keyed translate/rotate/scale), model draw, child recursion, pop (native)
+8c10ca5c	hle/game/sh_div.c	SHC run-time signed 32-bit divide (r1 / r0): host divide on magnitudes, the bit-serial flags in closed form (native)
+8c10cb10	hle/game/sh_div.c	SHC run-time unsigned 32-bit divide (r1 / r0): host divide, the bit-serial flags in closed form (native)

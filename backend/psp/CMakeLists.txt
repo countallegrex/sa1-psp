@@ -51,8 +51,9 @@ if(EXISTS "${SA1_RECOMP_OUT}/emitter/game.h")
   # hle/game/sphere_sweep.c), 0x8C029400 (the poly ray test,
   # hle/game/poly_ray.c) and 0x8C091380 (the SET range-in scan,
   # hle/game/set_scan.c) and 0x8C040784 (the motion walker,
-  # hle/game/motion_walk.c) the same way, each on its own.
-  foreach(_sa1_a 8c028d0a 8c028ec2 8c02d2e0 8c029b00 8c029400 8c091380 8c040784)
+  # hle/game/motion_walk.c) and 0x8C10CA5C / 0x8C10CB10 (the SHC divide
+  # helpers, hle/game/sh_div.c) the same way, each on its own.
+  foreach(_sa1_a 8c028d0a 8c028ec2 8c02d2e0 8c029b00 8c029400 8c091380 8c040784 8c10ca5c 8c10cb10)
     file(STRINGS "${SA1_RECOMP_OUT}/emitter/game.h" _sa1_wrapc REGEX "fn_${_sa1_a}_orig" LIMIT_COUNT 1)
     if(_sa1_wrapc)
       string(TOUPPER ${_sa1_a} _sa1_A)

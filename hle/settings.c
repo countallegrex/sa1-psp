@@ -28,8 +28,10 @@
  *                              (A/B timing of one routine; --math-exact;
  *                              8c639c70 = the Ninja matrix copies on the
  *                              VFPU, hle/ninja/math.c; 8c040784 = the
- *                              motion walker, hle/game/motion_walk.c,
- *                              bit-exact, so native in strict runs too)
+ *                              motion walker, hle/game/motion_walk.c, and
+ *                              8c10ca5c / 8c10cb10 = the divide helpers,
+ *                              hle/game/sh_div.c: bit-exact, so native in
+ *                              strict runs too)
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
@@ -91,7 +93,10 @@ void pr_check_report(void);
 void ss_check_report(void);
 void nj_check_report(void);
 void mw_check_report(void);
-void hle_math_report(void) { sph_check_report(); pr_check_report(); ss_check_report(); nj_check_report(); mw_check_report(); }
+void dv_check_report(void);
+void hle_math_report(void) {
+    sph_check_report(); pr_check_report(); ss_check_report(); nj_check_report(); mw_check_report(); dv_check_report();
+}
 
 int hle_parse_voice(const char *v) {
     if (!strcmp(v, "en") || !strcmp(v, "english") || !strcmp(v, "us")) return 1;
