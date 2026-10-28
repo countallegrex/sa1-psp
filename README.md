@@ -8,10 +8,15 @@ Ninja, KAMUI, the sound driver) is replaced by native PSP code: sceGu for
 graphics, sceAudio for sound, sceIo for files. No PowerVR, AICA or ARM7 is
 emulated.
 
-> **Disclaimer.** This is vibecoded slop: AI coding agents (Claude) wrote
-> practically all of it; the author steered and play-tested. Verbose, uneven,
-> over-engineered in places; nobody vouches for it line by line. It runs,
-> somehow.
+> **Disclaimer.** This is vibecoded: AI coding agents (Claude) wrote
+> practically all of it; the author steered, play-tested on real hardware and
+> made the calls. Expect AI-written code: verbose, uneven, sometimes
+> over-engineered. Judge it on whether it runs, not on whether it's pretty.
+>
+> One thing that isn't slop: the testing. Recorded input tapes replay the game
+> frame-for-frame, and every change had to keep them identical, plus picture
+> comparisons and runs on the real PSP. So whatever the code looks like, the
+> game behaves like the original.
 
 The original design document (plan, hardware gap, architecture, milestones,
 risks) is [`docs/design.md`](docs/design.md). Code and reports cite it as
