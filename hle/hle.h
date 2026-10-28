@@ -142,6 +142,11 @@ int hle_math_mode(void);
  * --math-exact (hex addresses, comma-separated), else hle_math_mode(). */
 void hle_parse_math_exact(const char *v);
 int hle_math_mode_for(uint32_t addr);
+int hle_math_listed(uint32_t addr); /* in math_exact / --math-exact */
+/* For a routine whose native form is bit-exact (the same operations in the
+ * same order as the recompiled body): listed -> exact, else --math, else
+ * native in strict runs too (it cannot change them), else sa1psp.ini math. */
+int hle_math_mode_exact_ok(uint32_t addr);
 void hle_math_report(void);         /* check mode summaries (kamui_report) */
 /* Runs a guest function from native code (callbacks): r4..r7 = a0..a3. */
 void hle_call_guest(sh4_ctx *c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);

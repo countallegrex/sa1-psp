@@ -27,7 +27,9 @@
  *   math_exact = 8c029400,...  these routines stay exact whatever math says
  *                              (A/B timing of one routine; --math-exact;
  *                              8c639c70 = the Ninja matrix copies on the
- *                              VFPU, hle/ninja/math.c)
+ *                              VFPU, hle/ninja/math.c; 8c040784 = the
+ *                              motion walker, hle/game/motion_walk.c,
+ *                              bit-exact, so native in strict runs too)
  *
  * Part of sa1-psp (MIT). */
 #include "hle.h"
@@ -72,14 +74,24 @@ void hle_parse_math_exact(const char *v) {
     sa1_log("settings: math_exact %d routine(s)", math_exact_n);
 }
 int hle_math_mode_for(uint32_t addr) {
-    for (int i = 0; i < math_exact_n; i++) if (math_exact[i] == (addr | 0x80000000u)) return 0;
+    if (hle_math_listed(addr)) return 0;
     return hle_math_mode();
+}
+int hle_math_listed(uint32_t addr) {
+    for (int i = 0; i < math_exact_n; i++) if (math_exact[i] == (addr | 0x80000000u)) return 1;
+    return 0;
+}
+int hle_math_mode_exact_ok(uint32_t addr) {
+    if (hle_math_listed(addr)) return 0;
+    if (hle_math_cli >= 0) return hle_math_cli;
+    return hle_strict ? 1 : hle_math;
 }
 void sph_check_report(void);
 void pr_check_report(void);
 void ss_check_report(void);
 void nj_check_report(void);
-void hle_math_report(void) { sph_check_report(); pr_check_report(); ss_check_report(); nj_check_report(); }
+void mw_check_report(void);
+void hle_math_report(void) { sph_check_report(); pr_check_report(); ss_check_report(); nj_check_report(); mw_check_report(); }
 
 int hle_parse_voice(const char *v) {
     if (!strcmp(v, "en") || !strcmp(v, "english") || !strcmp(v, "us")) return 1;
