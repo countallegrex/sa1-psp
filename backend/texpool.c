@@ -81,13 +81,19 @@ static void compact(void) {
     st.compactions++;
 }
 
-/* The least recently drawn block that may be evicted (cache) or shrunk,
- * drawn before frame `before`; -1 = none. */
+/* A block drawn before frame `before` that may be evicted (cache: the least
+ * recently drawn) or shrunk (a game texture: the largest, least recently
+ * drawn among equals); -1 = none.  Largest first because a drop's `last`
+ * does not change: by age alone one allocation stripped the oldest texture
+ * to 8 x 8 before touching another, and the oldest is the font sheet,
+ * pinned across scenes and idle whenever no text shows (text as squares). */
 static int pick(int cache, uint32_t before) {
     int best = -1;
     for (int b = head; b >= 0; b = blk[b].next) {
         if (blk[b].cache != cache || (!cache && blk[b].nodrop) || blk[b].last >= before) continue;
-        if (best < 0 || blk[b].last < blk[best].last || (blk[b].last == blk[best].last && blk[b].size > blk[best].size)) best = b;
+        if (best < 0) { best = b; continue; }
+        if (cache) { if (blk[b].last < blk[best].last || (blk[b].last == blk[best].last && blk[b].size > blk[best].size)) best = b; }
+        else if (blk[b].size > blk[best].size || (blk[b].size == blk[best].size && blk[b].last < blk[best].last)) best = b;
     }
     return best;
 }
