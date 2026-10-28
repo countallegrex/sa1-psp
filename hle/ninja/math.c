@@ -307,6 +307,20 @@ void sdk_8c639cf4(sh4_ctx *c) {         /* njRotateXYZ(m, ax, ay, az): Z, then Y
     if (ARG2 & 0xFFFF) m_rot_y(m, ARG2);
     if (ARG1 & 0xFFFF) m_rot_x(m, ARG1);
 }
+/* njRotateZXY(m, ax, ay, az), the ZXY_ANG sibling (node flag 0x20): Y, then X,
+ * then Z.  Each axis is the same per-axis block as njRotateXYZ in the SDK body,
+ * in this order, and an axis is skipped only when the whole register is 0
+ * (tst rN,rN).  Until 2026-10-28 this was a seam stub that rotated nothing:
+ * objects drawn with ZXY angles (Mystic Ruins 2, ~13 calls a frame; also
+ * reachable from Egg Mobile 1, Final Egg and the adventure fields) lost their
+ * whole rotation. */
+void sdk_8c639ff8(sh4_ctx *c) {
+    HLE_ENTER(0x8c639ff8u, "njRotateZXY");
+    sa1_f32a *m = m_wp(c, ARG0);
+    if (ARG2) m_rot_y(m, ARG2);
+    if (ARG1) m_rot_x(m, ARG1);
+    if (ARG3) m_rot_z(m, ARG3);
+}
 void sdk_8c63a878(sh4_ctx *c) {         /* njTranslate(m, x, y, z) */
     HLE_ENTER(0x8c63a878u, "njTranslate");
     float v[3] = {FARG(0), FARG(1), FARG(2)}; m_translate(m_wp(c, ARG0), v);
