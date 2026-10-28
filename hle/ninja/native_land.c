@@ -554,7 +554,7 @@ static int view_out_fast(const sh4_ctx *c, const float *b) {
 
 /* The texture an opaque set of the model would bind now, as ta_mesh.c's
  * mesh_638 finds it: the current texture list's entry for the material's
- * texture number, its texture pointer and that texture's first word.  Water
+ * texture number, its texture pointer and that texture's TCW word.  Water
  * and shore textures are animated by changing the list's entries (Emerald
  * Coast: one material's texture cycles every few frames), which a persistent
  * copy's states would freeze. */
@@ -571,7 +571,10 @@ static void tex_now(uint32_t model, uint32_t set, uint32_t *t) {
     const uint32_t e = hle_rd32(tl) + 12u * (hle_rd32(mat + 12u) & 0x3fffffffu) + 8u;
     if (!hle_in_ram(e)) return;
     t[0] = hle_rd32(e);
-    if (hle_in_ram(t[0])) t[1] = hle_rd32(t[0]);
+    /* the entry's TCW (texture.c: format and the backend handle), not its
+     * global index: a texture released and loaded again gets another
+     * handle, and the states kept with the copy would bind the old one */
+    if (hle_in_ram(t[0])) t[1] = hle_rd32(t[0] + 12u);
 }
 
 /* From the transform's wrapper, XMTRX set: 1 = not the TA way (the transform

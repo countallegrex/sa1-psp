@@ -309,7 +309,14 @@ uint32_t texture_from_tcw(uint32_t tcw) {
     return slot_of_handle(h) >= 0 ? h : 0;
 }
 
-void texture_init(void) { memset(slots, 0, sizeof slots); memset(hmap, 0, sizeof hmap); total_bytes = 0; ntex = 0; }
+/* njInitTexture resets the list: whatever it still held is gone for the
+ * game, so the backend textures go too (they stayed and filled the pool). */
+void texture_init(void) {
+    int live = 0;
+    for (uint32_t i = 0; i < MAX_ENTRIES; i++) if (slots[i].used) { draw_texture_destroy(slots[i].handle); live++; }
+    if (live) sa1_log("texture: njInitTexture dropped %d live textures", live);
+    memset(slots, 0, sizeof slots); memset(hmap, 0, sizeof hmap); total_bytes = 0; ntex = 0;
+}
 
 /* ---- texlist helpers --------------------------------------------------------------- */
 #define ATTR_GLOBALINDEX 0x80000000u

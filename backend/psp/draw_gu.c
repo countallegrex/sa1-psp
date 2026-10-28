@@ -239,6 +239,13 @@ typedef struct {
     uint32_t mfail;               /* mirror_epoch + 1 when a variant last found no room */
 } gtex;
 static gtex texs[TEX_MAX];
+/* bind_block's key (--replay-v2 16): the whole description of what the
+ * slot's prebuilt bind block binds.  A slot freed and taken by the next
+ * texture often gets the same memory back (first fit) with the same level
+ * count, and a key of memory, CLUT and levels alone then bound the old size
+ * and format over the new pixels (wrong or vanishing textures after level
+ * changes); texture_release clears it. */
+static struct { const uint8_t *mem; const uint16_t *clut; int levels, w, h, fmt, clut_fmt; } bind_key[TEX_MAX];
 static uint32_t bound_tex;        /* slot whose image is in the GE, 0 = none */
 static uint32_t tex_epoch;        /* bumped whenever a texture's memory changes: the models' lists rebuild */
 static uint32_t free_later[TEX_MAX];
@@ -458,7 +465,11 @@ static uint32_t pool_drop_top(int owner) {
     t->levels--; t->w >>= 1; t->h >>= 1;
     t->total -= o1; t->bytes -= o1; stats.texture_bytes -= o1;
     sceKernelDcacheWritebackRange(t->mem, t->total);
-    bound_tex = 0; tex_flush_pending = 1;
+    /* A model's prebuilt list binds the old level addresses and sizes: the
+     * epoch makes it rebuild (as after a move).  Without it the list read
+     * the shifted levels as the old ones: wrong land textures, more with
+     * every drop (the 9f87388 play-test, 935 drops). */
+    bound_tex = 0; tex_flush_pending = 1; tex_epoch++;
     return t->total;
 }
 static const texpool_ops pool_ops = { pool_chunk_alloc, pool_moved, pool_evict, pool_drop_top };
@@ -623,6 +634,7 @@ static void texture_release(uint32_t h) {
     tex_mem_free(t);
     if (bound_tex == h) bound_tex = 0;
     memset(t, 0, sizeof *t);
+    bind_key[h].mem = NULL;         /* the slot's bind block describes nothing now */
     tex_epoch++;
 }
 
@@ -1318,7 +1330,6 @@ static int depth_func(int code) {
  * Not inside a model's list (no nested CALL). */
 #define BIND_WORDS 32
 static uint32_t *bind_blk[TEX_MAX];
-static struct { const uint8_t *mem; const uint16_t *clut; int levels; } bind_key[TEX_MAX];
 static int in_model_build;
 static int ge_exp(int x);
 static uint32_t *bind_block(uint32_t h, const gtex *t) {
@@ -1330,7 +1341,8 @@ static uint32_t *bind_block(uint32_t h, const gtex *t) {
         bind_blk[h] = b;
         bind_key[h].mem = NULL;
     }
-    if (bind_key[h].mem != t->mem || bind_key[h].clut != t->clut || bind_key[h].levels != t->levels) {
+    if (bind_key[h].mem != t->mem || bind_key[h].clut != t->clut || bind_key[h].levels != t->levels ||
+        bind_key[h].w != t->w || bind_key[h].h != t->h || bind_key[h].fmt != t->fmt || bind_key[h].clut_fmt != t->clut_fmt) {
         uint32_t *c = (uint32_t *)((uintptr_t)b | 0x40000000u);
         if (t->clut) {              /* sceGuClutMode(psm, 0, 0xFF, 0), sceGuClutLoad(blocks, clut) */
             const uint32_t cbp = (uint32_t)(uintptr_t)t->clut;
@@ -1351,6 +1363,7 @@ static uint32_t *bind_block(uint32_t h, const gtex *t) {
         *c++ = 0xCB000000u;         /* TEXFLUSH */
         *c++ = 0x0B000000u;         /* RET */
         bind_key[h].mem = t->mem; bind_key[h].clut = t->clut; bind_key[h].levels = t->levels;
+        bind_key[h].w = t->w; bind_key[h].h = t->h; bind_key[h].fmt = t->fmt; bind_key[h].clut_fmt = t->clut_fmt;
     }
     return b;
 }
